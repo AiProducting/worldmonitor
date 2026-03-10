@@ -57,6 +57,7 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'weather-alerts': { name: 'Weather Alerts', enabled: true, priority: 2 },
   'ais-disruptions': { name: 'Maritime Disruptions', enabled: true, priority: 2 },
   'cable-health': { name: 'Undersea Cable Health', enabled: true, priority: 2 },
+  'gps-jamming': { name: 'GPS/GNSS Interference', enabled: true, priority: 2 },
 };
 
 // Map layers for geopolitical view

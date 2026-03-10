@@ -1728,10 +1728,12 @@ export class DataLoaderManager implements AppModule {
             this.ctx.map?.setGpsJamming(data.hexes);
             this.ctx.map?.setLayerReady('gpsJamming', data.hexes.length > 0);
           }
+          this.callPanel('gps-jamming', 'setData', data);
           this.ctx.statusPanel?.updateFeed('GPS Jam', { status: 'ok', itemCount: data.hexes.length });
           dataFreshness.recordUpdate('gpsjam', data.hexes.length);
         } catch (error) {
           this.ctx.map?.setLayerReady('gpsJamming', false);
+          this.callPanel('gps-jamming', 'showError');
           this.ctx.statusPanel?.updateFeed('GPS Jam', { status: 'error' });
           dataFreshness.recordError('gpsjam', String(error));
         }
