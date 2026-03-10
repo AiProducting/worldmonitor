@@ -11,11 +11,13 @@ import { canQueueAiClassification, AI_CLASSIFY_MAX_PER_FEED } from './ai-classif
 import { mlWorker } from './ml-worker';
 import { isHeadlineMemoryEnabled } from './ai-flow-settings';
 
-const FEED_COOLDOWN_MS = 5 * 60 * 1000;
+// Exponential backoff tiers for persistently failing feeds.
+// Tier 1: 5 min (transient error), Tier 2: 30 min (likely broken), Tier 3+: 2 h (quarantine).
+const FEED_COOLDOWN_TIERS = [5 * 60 * 1000, 30 * 60 * 1000, 2 * 60 * 60 * 1000] as const;
 const MAX_FAILURES = 2;
 const MAX_CACHE_ENTRIES = 100;
 const FEED_SCOPE_SEPARATOR = '::';
-const feedFailures = new Map<string, { count: number; cooldownUntil: number }>();
+const feedFailures = new Map<string, { count: number; tier: number; cooldownUntil: number }>();
 const feedCache = new Map<string, { items: NewsItem[]; timestamp: number }>();
 const CACHE_TTL = 30 * 60 * 1000;
 
@@ -72,9 +74,12 @@ function cleanupCaches(): void {
     }
   }
 
-  for (const [key, state] of feedFailures) {
+  for (const [, state] of feedFailures) {
     if (state.cooldownUntil > 0 && now > state.cooldownUntil) {
-      feedFailures.delete(key);
+      // Keep the tier level so backoff escalates on next failure sequence, but
+      // allow the feed to be retried by clearing the active cooldown window.
+      state.cooldownUntil = 0;
+      state.count = 0;
     }
   }
 
@@ -97,12 +102,19 @@ function isFeedOnCooldown(feedScope: string): boolean {
 }
 
 function recordFeedFailure(feedScope: string): void {
-  const state = feedFailures.get(feedScope) || { count: 0, cooldownUntil: 0 };
+  const state = feedFailures.get(feedScope) || { count: 0, tier: 0, cooldownUntil: 0 };
   state.count++;
   if (state.count >= MAX_FAILURES) {
-    state.cooldownUntil = Date.now() + FEED_COOLDOWN_MS;
+    state.tier = Math.min(state.tier + 1, FEED_COOLDOWN_TIERS.length - 1);
+    const cooldownMs = FEED_COOLDOWN_TIERS[state.tier]!;
+    state.cooldownUntil = Date.now() + cooldownMs;
+    state.count = 0;
     const { feedName, lang } = parseFeedScope(feedScope);
-    console.warn(`[RSS] ${feedName} (${lang}) on cooldown for 5 minutes after ${state.count} failures`);
+    const label = cooldownMs >= 60 * 60 * 1000
+      ? `${cooldownMs / (60 * 60 * 1000)}h`
+      : `${cooldownMs / 60000}m`;
+    const severity = state.tier >= 2 ? 'quarantined' : 'on cooldown';
+    console.warn(`[RSS] ${feedName} (${lang}) ${severity} for ${label} (tier ${state.tier})`);
   }
   feedFailures.set(feedScope, state);
 }
@@ -123,6 +135,21 @@ export function getFeedFailures(): Map<string, { count: number; cooldownUntil: n
   }
 
   return currentLangFailures;
+}
+
+/**
+ * Returns feed names that have reached quarantine tier (≥2 failure sequences).
+ * Useful for diagnostics: these feeds have a 2-hour cooldown window.
+ */
+export function getQuarantinedFeeds(): string[] {
+  const currentLang = getCurrentLanguage();
+  const result: string[] = [];
+  for (const [feedScope, state] of feedFailures) {
+    if (state.tier < 2) continue;
+    const { feedName, lang } = parseFeedScope(feedScope);
+    if (lang === currentLang) result.push(feedName);
+  }
+  return result;
 }
 
 

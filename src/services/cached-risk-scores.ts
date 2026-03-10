@@ -277,3 +277,28 @@ export function toCountryScore(cached: CachedCIIScore): CountryScore {
     lastUpdated: new Date(cached.lastUpdated),
   };
 }
+
+const LEVEL_ORDER: Record<CachedCIIScore['level'], number> = {
+  low: 0,
+  normal: 1,
+  elevated: 2,
+  high: 3,
+  critical: 4,
+};
+
+/**
+ * Returns the top `n` countries from cached CII scores whose risk level is at
+ * or above `minLevel`, sorted by descending score.
+ */
+export function getTopRiskCountries(
+  n = 10,
+  minLevel: CachedCIIScore['level'] = 'elevated',
+): CachedCIIScore[] {
+  const cached = getCachedScores();
+  if (!cached) return [];
+  const minOrder = LEVEL_ORDER[minLevel];
+  return cached.cii
+    .filter(c => LEVEL_ORDER[c.level] >= minOrder)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n);
+}

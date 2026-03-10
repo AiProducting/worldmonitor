@@ -292,6 +292,25 @@ export async function fetchUcdpClassifications(hydrated?: ListUcdpEventsResponse
 export async function fetchHapiSummary(): Promise<Map<string, HapiConflictSummary>> {
   const byCode = new Map<string, HapiConflictSummary>();
 
+  const fetchPerCountryFallback = async (): Promise<Record<string, ProtoHumanSummary>> => {
+    const results = await Promise.allSettled(
+      HAPI_COUNTRY_CODES.map(async (iso2) => {
+        const r = await getHapiBreaker(iso2).execute(async () => {
+          return client.getHumanitarianSummary({ countryCode: iso2 });
+        }, emptyHapiFallback);
+        return { iso2, r };
+      }),
+    );
+
+    const fallbackResults: Record<string, ProtoHumanSummary> = {};
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value.r.summary) {
+        fallbackResults[result.value.iso2] = result.value.r.summary;
+      }
+    }
+    return fallbackResults;
+  };
+
   const resp = await hapiBatchBreaker.execute(async () => {
     try {
       return await client.getHumanitarianSummaryBatch(
@@ -301,27 +320,18 @@ export async function fetchHapiSummary(): Promise<Map<string, HapiConflictSummar
     } catch (err: unknown) {
       // 404 deploy-skew fallback: batch endpoint not yet deployed, use per-item calls
       if (err instanceof ApiError && err.statusCode === 404) {
-        const results = await Promise.allSettled(
-          HAPI_COUNTRY_CODES.map(async (iso2) => {
-            const r = await getHapiBreaker(iso2).execute(async () => {
-              return client.getHumanitarianSummary({ countryCode: iso2 });
-            }, emptyHapiFallback);
-            return { iso2, r };
-          }),
-        );
-        const fallbackResults: Record<string, ProtoHumanSummary> = {};
-        for (const result of results) {
-          if (result.status === 'fulfilled' && result.value.r.summary) {
-            fallbackResults[result.value.iso2] = result.value.r.summary;
-          }
-        }
+        const fallbackResults = await fetchPerCountryFallback();
         return { results: fallbackResults, fetched: Object.keys(fallbackResults).length, requested: HAPI_COUNTRY_CODES.length };
       }
       throw err;
     }
   }, emptyHapiBatchFallback);
 
-  for (const [cc, summary] of Object.entries(resp.results)) {
+  const batchResults = (resp.results && typeof resp.results === 'object' && Object.keys(resp.results).length > 0)
+    ? resp.results
+    : await fetchPerCountryFallback();
+
+  for (const [cc, summary] of Object.entries(batchResults)) {
     byCode.set(cc, toHapiSummary(summary));
   }
 

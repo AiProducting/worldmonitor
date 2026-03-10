@@ -80,20 +80,15 @@ describe('economic/index.ts — per-indicator World Bank circuit breakers', () =
   });
 
   it('mirrors getFredBreaker pattern (consistency check)', () => {
-    // getFredBreaker already uses this pattern correctly — wbBreaker must follow suit
-    assert.match(src, /getFredBreaker\s*\(/, 'getFredBreaker pattern must still exist as reference');
+    // FRED path now uses a batch breaker; WB still must keep per-indicator map isolation.
+    assert.match(src, /fredBatchBreaker\s*=\s*createCircuitBreaker/, 'FRED batch breaker should exist as reference');
     assert.match(src, /getWbBreaker\s*\(/, 'getWbBreaker must mirror getFredBreaker');
 
-    // Both should use a Map
-    const fredBreakerSection = src.slice(
-      src.indexOf('fredBreakers'),
-      src.indexOf('fredBreakers') + 300,
-    );
+    // WB should use Map-based keyed breaker instances.
     const wbBreakerSection = src.slice(
       src.indexOf('wbBreakers'),
       src.indexOf('wbBreakers') + 300,
     );
-    assert.match(fredBreakerSection, /new\s+Map/, 'fredBreakers uses Map');
     assert.match(wbBreakerSection, /new\s+Map/, 'wbBreakers uses Map');
   });
 });

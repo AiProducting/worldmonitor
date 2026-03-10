@@ -44,8 +44,11 @@ export type FreshnessStatus = 'fresh' | 'stale' | 'very_stale' | 'no_data' | 'di
 export interface DataSourceState {
   id: DataSourceId;
   name: string;
+  panelId: string | undefined;
   lastUpdate: Date | null;
   lastError: string | null;
+  /** When the most recent error was recorded (distinct from lastUpdate). */
+  lastErrorAt: Date | null;
   itemCount: number;
   enabled: boolean;
   status: FreshnessStatus;
@@ -117,8 +120,10 @@ class DataFreshnessTracker {
       this.sources.set(id as DataSourceId, {
         id: id as DataSourceId,
         name: meta.name,
+        panelId: meta.panelId,
         lastUpdate: null,
         lastError: null,
+        lastErrorAt: null,
         itemCount: 0,
         enabled: true, // Assume enabled by default
         status: 'no_data',
@@ -148,6 +153,7 @@ class DataFreshnessTracker {
     const source = this.sources.get(sourceId);
     if (source) {
       source.lastError = error;
+      source.lastErrorAt = new Date();
       source.status = 'error';
       this.notifyListeners();
     }
@@ -247,6 +253,29 @@ class DataFreshnessTracker {
   }
 
   /**
+   * Get all source states for a specific UI panel.
+   * Useful for rendering per-panel freshness indicators without filtering in callers.
+   */
+  getPanelSources(panelId: string): DataSourceState[] {
+    return this.getAllSources().filter(s => s.panelId === panelId);
+  }
+
+  /**
+   * Returns the freshness status of the worst-performing source for a given panel.
+   * Panels can use this to render a single indicator badge without knowing all sources.
+   */
+  getPanelStatus(panelId: string): FreshnessStatus {
+    const sources = this.getPanelSources(panelId);
+    if (sources.length === 0) return 'no_data';
+    const order: FreshnessStatus[] = ['error', 'very_stale', 'stale', 'no_data', 'disabled', 'fresh'];
+    let worst: FreshnessStatus = 'fresh';
+    for (const s of sources) {
+      if (order.indexOf(s.status) < order.indexOf(worst)) worst = s.status;
+    }
+    return worst;
+  }
+
+  /**
    * Check if we have any data at all
    */
   hasAnyData(): boolean {
@@ -258,6 +287,22 @@ class DataFreshnessTracker {
    */
   getPanelIdForSource(sourceId: DataSourceId): string | undefined {
     return SOURCE_METADATA[sourceId]?.panelId;
+  }
+
+  /**
+   * Returns the human-readable names of all enabled sources whose last update
+   * is older than `thresholdMs` milliseconds (or have never been updated).
+   */
+  getStaleSourceNames(thresholdMs: number): string[] {
+    const cutoff = Date.now() - thresholdMs;
+    const stale: string[] = [];
+    for (const source of this.sources.values()) {
+      if (!source.enabled) continue;
+      if (!source.lastUpdate || source.lastUpdate.getTime() < cutoff) {
+        stale.push(source.name);
+      }
+    }
+    return stale.sort();
   }
 
   /**

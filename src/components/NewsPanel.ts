@@ -52,12 +52,18 @@ export class NewsPanel extends Panel {
   private lastHeadlineSignature = '';
   private isSummarizing = false;
 
+  // Keyword filter bar
+  private filterKeyword = '';
+  private filterBarEl: HTMLElement | null = null;
+  private filterCountEl: HTMLElement | null = null;
+
   constructor(id: string, title: string) {
     super({ id, title, showCount: true, trackActivity: true });
     this.sortMode = this.loadSortMode();
     this.createDeviationIndicator();
     this.createSortToggle();
     this.createSummarizeButton();
+    this.createFilterBar();
     this.setupActivityTracking();
     this.initWindowedList();
     this.setupContentDelegation();
@@ -195,7 +201,7 @@ export class NewsPanel extends Panel {
     // Create summarize button
     this.summaryBtn = document.createElement('button');
     this.summaryBtn.className = 'panel-summarize-btn';
-    this.summaryBtn.innerHTML = '✨';
+    this.summaryBtn.innerHTML = 'AI';
     this.summaryBtn.title = t('components.newsPanel.summarize');
     this.summaryBtn.addEventListener('click', () => this.handleSummarize());
 
@@ -206,6 +212,47 @@ export class NewsPanel extends Panel {
     } else {
       this.header.appendChild(this.summaryBtn);
     }
+  }
+
+  private createFilterBar(): void {
+    this.filterBarEl = document.createElement('div');
+    this.filterBarEl.className = 'news-filter-bar';
+    this.filterBarEl.innerHTML = `
+      <input class="news-filter-input" type="text" placeholder="Filter headlines..." aria-label="Filter news headlines" autocomplete="off" />
+      <button class="news-filter-clear" title="Clear filter" aria-label="Clear filter" style="display:none">x</button>
+      <span class="news-filter-count"></span>
+    `;
+    this.element.insertBefore(this.filterBarEl, this.content);
+
+    const input  = this.filterBarEl.querySelector<HTMLInputElement>('.news-filter-input')!;
+    const clearBtn = this.filterBarEl.querySelector<HTMLButtonElement>('.news-filter-clear')!;
+    this.filterCountEl = this.filterBarEl.querySelector<HTMLElement>('.news-filter-count');
+
+    input.addEventListener('input', () => {
+      this.filterKeyword = input.value.trim().toLowerCase();
+      clearBtn.style.display = this.filterKeyword ? '' : 'none';
+      this.applyKeywordFilter();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      this.filterKeyword = '';
+      clearBtn.style.display = 'none';
+      this.applyKeywordFilter();
+    });
+  }
+
+  private applyKeywordFilter(): void {
+    if (this.lastRawClusters) {
+      this.renderClusters(this.lastRawClusters);
+    } else if (this.lastRawItems) {
+      this.renderFlat(this.lastRawItems);
+    }
+  }
+
+  private updateFilterCount(shown: number | null, total: number): void {
+    if (!this.filterCountEl) return;
+    this.filterCountEl.textContent = shown != null ? `${shown} / ${total}` : '';
   }
 
   private async handleSummarize(): Promise<void> {
@@ -251,7 +298,7 @@ export class NewsPanel extends Panel {
     } finally {
       this.isSummarizing = false;
       if (this.summaryBtn) {
-        this.summaryBtn.innerHTML = '✨';
+        this.summaryBtn.innerHTML = 'AI';
         this.summaryBtn.disabled = false;
       }
     }
@@ -428,15 +475,22 @@ export class NewsPanel extends Panel {
       sorted = items;
     }
 
-    this.setCount(sorted.length);
-    this.currentHeadlines = sorted
+    // Apply keyword filter
+    const kw = this.filterKeyword;
+    const toRender = kw
+      ? sorted.filter(item => item.title?.toLowerCase().includes(kw))
+      : sorted;
+    this.updateFilterCount(kw ? toRender.length : null, sorted.length);
+
+    this.setCount(toRender.length);
+    this.currentHeadlines = toRender
       .slice(0, 5)
       .map(item => item.title)
       .filter((title): title is string => typeof title === 'string' && title.trim().length > 0);
 
     this.updateHeadlineSignature();
 
-    const html = sorted
+    const html = toRender
       .map(
         (item) => `
       <div class="item ${item.isAlert ? 'alert' : ''}" ${item.monitorColor ? `style="border-inline-start-color: ${escapeHtml(item.monitorColor)}"` : ''}>
@@ -475,16 +529,23 @@ export class NewsPanel extends Panel {
       return b.lastUpdated.getTime() - a.lastUpdated.getTime();
     });
 
-    const totalItems = sorted.reduce((sum, c) => sum + c.sourceCount, 0);
+    // Apply keyword filter
+    const kw = this.filterKeyword;
+    const toRender = kw
+      ? sorted.filter(c => c.primaryTitle?.toLowerCase().includes(kw))
+      : sorted;
+    this.updateFilterCount(kw ? toRender.length : null, sorted.length);
+
+    const totalItems = toRender.reduce((sum, c) => sum + c.sourceCount, 0);
     this.setCount(totalItems);
     this.relatedAssetContext.clear();
 
     // Store headlines for summarization (cap at 5 to reduce entity conflation in small models)
-    this.currentHeadlines = sorted.slice(0, 5).map(c => c.primaryTitle);
+    this.currentHeadlines = toRender.slice(0, 5).map(c => c.primaryTitle);
 
     this.updateHeadlineSignature();
 
-    const clusterIds = sorted.map(c => c.id);
+    const clusterIds = toRender.map(c => c.id);
     let newItemIds: Set<string>;
 
     if (this.isFirstRender) {
@@ -500,7 +561,7 @@ export class NewsPanel extends Panel {
     }
 
     // Prepare all clusters with their rendering data (defer HTML creation)
-    const prepared: PreparedCluster[] = sorted.map(cluster => {
+    const prepared: PreparedCluster[] = toRender.map(cluster => {
       const isNew = newItemIds.has(cluster.id);
       const shouldHighlight = activityTracker.shouldHighlight(this.panelId, cluster.id);
       const showNewTag = activityTracker.isNewItem(this.panelId, cluster.id) && isNew;
@@ -514,10 +575,11 @@ export class NewsPanel extends Panel {
     });
 
     // Use windowed rendering for large lists, direct render for small
-    if (this.useVirtualScroll && sorted.length > VIRTUAL_SCROLL_THRESHOLD && this.windowedList) {
+    // Disable virtual scroll when keyword filter is active (list may be very short)
+    if (!kw && this.useVirtualScroll && toRender.length > VIRTUAL_SCROLL_THRESHOLD && this.windowedList) {
       this.windowedList.setItems(prepared);
     } else {
-      // Direct render for small lists
+      // Direct render for small lists or filtered views
       const html = prepared
         .map(p => this.renderClusterHtmlSafely(p.cluster, p.isNew, p.shouldHighlight, p.showNewTag))
         .join('');

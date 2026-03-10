@@ -673,3 +673,26 @@ export function getGraphStats(): { nodes: number; edges: number; cables: number;
     countries,
   };
 }
+
+export interface HighConnectivityNode {
+  id: string;
+  name: string;
+  type: string;
+  incomingEdgeCount: number;
+}
+
+/**
+ * Returns the top `topN` infrastructure nodes ranked by number of incoming
+ * dependency edges. Highly connected nodes represent critical single points
+ * of failure in the infrastructure dependency graph.
+ */
+export function getHighConnectivityNodes(topN = 10): HighConnectivityNode[] {
+  const graph = buildDependencyGraph();
+  const results: HighConnectivityNode[] = [];
+  for (const [id, edges] of graph.incoming) {
+    const node = graph.nodes.get(id);
+    if (!node) continue;
+    results.push({ id, name: node.name, type: node.type, incomingEdgeCount: edges.length });
+  }
+  return results.sort((a, b) => b.incomingEdgeCount - a.incomingEdgeCount).slice(0, topN);
+}

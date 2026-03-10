@@ -47,7 +47,7 @@ export function calculateVelocity(cluster: ClusteredEvent): VelocityMetrics {
 
   if (items.length <= 1) {
     const { sentiment, score } = analyzeSentiment(cluster.primaryTitle);
-    return { sourcesPerHour: 0, level: 'normal', trend: 'stable', sentiment, sentimentScore: score };
+    return { sourcesPerHour: 0, level: 'normal', trend: 'stable', acceleration: 'steady', sentiment, sentimentScore: score };
   }
 
   const timeSpanMs = cluster.lastUpdated.getTime() - cluster.firstSeen.getTime();
@@ -65,6 +65,22 @@ export function calculateVelocity(cluster: ClusteredEvent): VelocityMetrics {
     trend = 'falling';
   }
 
+  // Acceleration: compare item density in the first third vs last third of the
+  // time window to detect whether the rate of coverage is itself increasing or
+  // decreasing (second derivative). Requires at least 1 extra count difference
+  // to avoid noise in very small clusters.
+  const thirdMs = timeSpanMs / 3;
+  const start = cluster.firstSeen.getTime();
+  const firstThirdItems = items.filter(i => i.pubDate.getTime() < start + thirdMs);
+  const lastThirdItems = items.filter(i => i.pubDate.getTime() >= start + 2 * thirdMs);
+
+  let acceleration: 'accelerating' | 'decelerating' | 'steady' = 'steady';
+  if (lastThirdItems.length > firstThirdItems.length * 1.5 + 1) {
+    acceleration = 'accelerating';
+  } else if (firstThirdItems.length > lastThirdItems.length * 1.5 + 1) {
+    acceleration = 'decelerating';
+  }
+
   const allText = items.map(i => i.title).join(' ');
   const { sentiment, score } = analyzeSentiment(allText);
 
@@ -72,6 +88,7 @@ export function calculateVelocity(cluster: ClusteredEvent): VelocityMetrics {
     sourcesPerHour: Math.round(sourcesPerHour * 10) / 10,
     level: calculateVelocityLevel(sourcesPerHour),
     trend,
+    acceleration,
     sentiment,
     sentimentScore: score,
   };

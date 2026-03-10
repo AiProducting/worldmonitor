@@ -43,6 +43,8 @@ export interface CountrySignalCluster {
   signalTypes: Set<SignalType>;
   totalCount: number;
   highSeverityCount: number;
+  /** High-severity signals from the last 6 hours (freshness indicator) */
+  recentHighSeverityCount: number;
   convergenceScore: number;
 }
 
@@ -439,7 +441,19 @@ class SignalAggregator {
       const typeBonus = signalTypes.size * 20;
       const countBonus = Math.min(30, signals.length * 5);
       const severityBonus = highCount * 10;
-      const convergenceScore = Math.min(100, typeBonus + countBonus + severityBonus);
+
+      // Recency bonus: signals from the last 2 h are more operationally relevant
+      // than signals spread across the full 24-hour window. Adds up to +20 to the
+      // convergence score for countries with entirely fresh signal activity.
+      const recentCutMs = Date.now() - 2 * 60 * 60 * 1000;
+      const recentCount = signals.filter(s => s.timestamp.getTime() > recentCutMs).length;
+      const recencyRatio = signals.length > 0 ? recentCount / signals.length : 0;
+      const recencyBonus = Math.round(recencyRatio * 20);
+
+      const freshCutMs = Date.now() - 6 * 60 * 60 * 1000;
+      const recentHighSeverityCount = signals.filter(s => s.severity === 'high' && s.timestamp.getTime() > freshCutMs).length;
+
+      const convergenceScore = Math.min(100, typeBonus + countBonus + severityBonus + recencyBonus);
 
       clusters.push({
         country,
@@ -448,6 +462,7 @@ class SignalAggregator {
         signalTypes,
         totalCount: signals.length,
         highSeverityCount: highCount,
+        recentHighSeverityCount,
         convergenceScore,
       });
     }

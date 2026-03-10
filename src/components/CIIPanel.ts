@@ -40,14 +40,9 @@ export class CIIPanel extends Panel {
     }
   }
 
-  private getLevelEmoji(level: CountryScore['level']): string {
-    switch (level) {
-      case 'critical': return '🔴';
-      case 'high': return '🟠';
-      case 'elevated': return '🟡';
-      case 'normal': return '🟢';
-      case 'low': return '⚪';
-    }
+  private getLevelEmoji(level: CountryScore['level']): HTMLElement {
+    const cls = { critical: 'dot-critical', high: 'dot-high', elevated: 'dot-elevated', normal: 'dot-normal', low: 'dot-low' }[level];
+    return h('span', { className: `level-dot ${cls}` });
   }
 
   private static readonly SHARE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 002 2h12a2 2 0 002-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';

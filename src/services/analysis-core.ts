@@ -92,6 +92,8 @@ export interface ClusteredEventCore {
   lat?: number;
   lon?: number;
   lang?: string;
+  /** 0–100 score: how many distinct sources and tiers contributed. */
+  sourceDiversityScore?: number;
 }
 
 export interface PredictionMarketCore {
@@ -130,6 +132,11 @@ export interface CorrelationSignalCore {
   title: string;
   description: string;
   confidence: number;
+  /**
+   * Quality score (0–1): confidence weighted by source richness.
+   * sourceCount ≥ 5 → full weight; 1 source → 0.6× confidence.
+   */
+  qualityScore?: number;
   timestamp: Date;
   data: {
     newsVelocity?: number;
@@ -263,6 +270,19 @@ export function clusterNewsCore(
 
     const threat = aggregateThreats(cluster);
 
+    // Source diversity score: distinct named sources × 10, capped at 50, plus
+    // tier diversity bonus (unique tier levels × 10, capped at 30), and a
+    // low-tier bonus of +20 if at least one tier-1/2 source is present.
+    // Max theoretical score = 100.
+    const uniqueSourceNames = new Set(cluster.map(i => i.source)).size;
+    const uniqueTiers = new Set(cluster.map(i => i.tier ?? 3)).size;
+    const hasPremiumSource = cluster.some(i => (i.tier ?? 3) <= 2);
+    const sourceDiversityScore = Math.min(100,
+      Math.min(50, uniqueSourceNames * 10) +
+      Math.min(30, uniqueTiers * 10) +
+      (hasPremiumSource ? 20 : 0)
+    );
+
     // Pick most common geo location across items
     const locItems = cluster.filter((i): i is NewsItemWithTier & { lat: number; lon: number } => i.lat != null && i.lon != null);
     let clusterLat: number | undefined;
@@ -293,6 +313,7 @@ export function clusterNewsCore(
       isAlert: cluster.some(i => i.isAlert),
       monitorColor: cluster.find(i => i.monitorColor)?.monitorColor,
       threat,
+      sourceDiversityScore,
       ...(clusterLat != null && { lat: clusterLat, lon: clusterLon }),
       lang: primary.lang,
     };
@@ -682,9 +703,15 @@ export function analyzeCorrelationsCore(
     signals.findIndex(s => s.type === sig.type) === idx
   );
 
-  // Only return high-confidence signals
+  // Only return high-confidence signals; attach qualityScore
+  const qualified = uniqueSignals.filter(s => s.confidence >= 0.6).map(s => {
+    const sourceCount = s.data.sourceCount ?? 1;
+    const sourceFactor = Math.min(1.0, 0.6 + sourceCount * 0.08);
+    return { ...s, qualityScore: Math.round(s.confidence * sourceFactor * 100) / 100 };
+  });
+
   return {
-    signals: uniqueSignals.filter(s => s.confidence >= 0.6),
+    signals: qualified,
     snapshot: currentSnapshot,
   };
 }

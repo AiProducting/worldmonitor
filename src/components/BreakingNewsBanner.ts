@@ -190,7 +190,7 @@ export class BreakingNewsBanner {
     el.setAttribute('data-target-panel', this.resolveTargetPanel(alert));
     el.style.cursor = 'pointer';
 
-    const icon = alert.threatLevel === 'critical' ? '🚨' : '⚠️';
+    const icon = alert.threatLevel === 'critical' ? '!!' : '!';
     const levelText = alert.threatLevel === 'critical'
       ? t('components.breakingNews.critical')
       : t('components.breakingNews.high');

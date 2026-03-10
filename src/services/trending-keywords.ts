@@ -39,6 +39,8 @@ interface TermRecord {
   timestamps: number[];
   baseline7d: number;
   lastSpikeAlertMs: number;
+  /** How many consecutive spike windows this term has fired in. Resets when quiet. */
+  consecutiveSpikeCount: number;
   displayTerm: string;
   headlines: StoredHeadline[];
 }
@@ -67,6 +69,10 @@ const ROLLING_WINDOW_MS = 2 * HOUR_MS;
 const BASELINE_WINDOW_MS = 7 * DAY_MS;
 const BASELINE_REFRESH_MS = HOUR_MS;
 const SPIKE_COOLDOWN_MS = 30 * 60 * 1000;
+// After 3 consecutive spike windows a term becomes a "sustained story".
+// Suppress re-alerts for 2 hours to prevent alert fatigue on long-running events.
+const SPIKE_SUSTAINED_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const SPIKE_SUSTAINED_THRESHOLD = 3;
 const MAX_TRACKED_TERMS = 10000;
 const MAX_AUTO_SUMMARIES_PER_HOUR = 5;
 const MIN_TOKEN_LENGTH = 3;
@@ -313,6 +319,13 @@ function maybeRefreshBaselines(now: number): void {
   for (const record of termFrequency.values()) {
     const weekCount = record.timestamps.filter(ts => now - ts <= BASELINE_WINDOW_MS).length;
     record.baseline7d = weekCount / 7;
+
+    // Reset consecutive spike count when a term has been quiet for a full spike
+    // cooldown window — the story has cooled and future spikes are newsworthy again.
+    const timeSinceLastSpike = now - record.lastSpikeAlertMs;
+    if (record.consecutiveSpikeCount > 0 && timeSinceLastSpike > SPIKE_SUSTAINED_COOLDOWN_MS) {
+      record.consecutiveSpikeCount = 0;
+    }
   }
   lastBaselineRefreshMs = now;
 }
@@ -374,6 +387,7 @@ function recordTermCandidates(
         timestamps: [],
         baseline7d: 0,
         lastSpikeAlertMs: 0,
+        consecutiveSpikeCount: 0,
         displayTerm: asDisplayTerm(meta.display),
         headlines: [],
       };
@@ -412,7 +426,13 @@ function checkForSpikes(now: number, config: TrendingConfig, blockedTerms: Set<s
       : recentCount >= config.minSpikeCount;
 
     if (!isSpike) continue;
-    if (now - record.lastSpikeAlertMs < SPIKE_COOLDOWN_MS) continue;
+
+    // Progressive cooldown: sustained stories (term has fired N+ consecutive
+    // windows) get a longer suppression window to reduce alert fatigue.
+    const activeCooldown = record.consecutiveSpikeCount >= SPIKE_SUSTAINED_THRESHOLD
+      ? SPIKE_SUSTAINED_COOLDOWN_MS
+      : SPIKE_COOLDOWN_MS;
+    if (now - record.lastSpikeAlertMs < activeCooldown) continue;
 
     const recentHeadlines = dedupeHeadlines(
       record.headlines.filter(headline => now - headline.ingestedAt <= ROLLING_WINDOW_MS)
@@ -421,6 +441,7 @@ function checkForSpikes(now: number, config: TrendingConfig, blockedTerms: Set<s
     if (uniqueSources < MIN_SPIKE_SOURCE_COUNT) continue;
 
     record.lastSpikeAlertMs = now;
+    record.consecutiveSpikeCount++;
     spikes.push({
       term: record.displayTerm,
       count: recentCount,
@@ -678,4 +699,27 @@ export function unsuppressTrendingTerm(term: string): TrendingConfig {
 
 export function getTrackedTermCount(): number {
   return termFrequency.size;
+}
+
+export interface TermFrequencyEntry {
+  term: string;
+  /** Count of occurrences within the last 24 hours */
+  count24h: number;
+  consecutiveSpikeCount: number;
+}
+
+/**
+ * Returns the top `n` tracked terms ranked by occurrence count in the last
+ * 24 hours. Useful for building a real-time trending dashboard.
+ */
+export function getTopTermsByFrequency(n = 10): TermFrequencyEntry[] {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const entries: TermFrequencyEntry[] = [];
+  for (const [, record] of termFrequency) {
+    const count24h = record.timestamps.filter(t => t >= cutoff).length;
+    if (count24h > 0) {
+      entries.push({ term: record.displayTerm, count24h, consecutiveSpikeCount: record.consecutiveSpikeCount });
+    }
+  }
+  return entries.sort((a, b) => b.count24h - a.count24h).slice(0, n);
 }

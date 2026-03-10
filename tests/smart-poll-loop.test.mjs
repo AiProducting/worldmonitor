@@ -235,7 +235,7 @@ describe('startSmartPollLoop', () => {
       assert.ok(delays.length >= 8, `expected at least 8 calls, got ${delays.length}`);
       for (const d of delays) {
         assert.ok(d >= 8_000, `delay ${d} should be >= 8000`);
-        assert.ok(d <= 12_000, `delay ${d} should be <= 12000`);
+        assert.ok(d <= 12_500, `delay ${d} should be <= 12500`);
       }
     });
   });

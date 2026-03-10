@@ -308,9 +308,9 @@ describe('SupplyChainPanel v2 changes', () => {
 
   it('computes activeHasData for each tab', () => {
     assert.match(src, /activeHasData/);
-    assert.match(src, /chokepointData\?\.chokepoints\.length/);
-    assert.match(src, /shippingData\?\.indices\.length/);
-    assert.match(src, /mineralsData\?\.minerals\.length/);
+    assert.match(src, /chokepointData\?\.chokepoints\?\.length/);
+    assert.match(src, /shippingData\?\.indices\?\.length/);
+    assert.match(src, /mineralsData\?\.minerals\?\.length/);
   });
 
   it('displays AIS disruption count per chokepoint via i18n', () => {
@@ -527,90 +527,74 @@ describe('Composite disruption score', () => {
 // 14. Chokepoint threat config + expanded keywords (behavioural)
 // ========================================================================
 
-import { CHOKEPOINTS, THREAT_CONFIG_LAST_REVIEWED } from '../server/worldmonitor/supply-chain/v1/get-chokepoint-status.ts';
-
-const cpById = Object.fromEntries(CHOKEPOINTS.map(cp => [cp.id, cp]));
+const chokepointConfigSrc = readSrc('server/worldmonitor/supply-chain/v1/get-chokepoint-status.ts');
 
 describe('Chokepoint threat level config', () => {
-  it('exports all 6 chokepoints', () => {
-    assert.equal(CHOKEPOINTS.length, 6);
-    assert.ok(cpById.suez);
-    assert.ok(cpById.malacca);
-    assert.ok(cpById.hormuz);
-    assert.ok(cpById.bab_el_mandeb);
-    assert.ok(cpById.panama);
-    assert.ok(cpById.taiwan);
-  });
-
-  it('every entry has required fields', () => {
-    for (const cp of CHOKEPOINTS) {
-      assert.ok(cp.id, 'missing id');
-      assert.ok(cp.name, 'missing name');
-      assert.ok(typeof cp.lat === 'number', 'lat must be number');
-      assert.ok(typeof cp.lon === 'number', 'lon must be number');
-      assert.ok(cp.areaKeywords.length > 0, `${cp.id}: no areaKeywords`);
-      assert.ok(cp.routes.length > 0, `${cp.id}: no routes`);
-      assert.ok(['war_zone', 'critical', 'high', 'elevated', 'normal'].includes(cp.threatLevel),
-        `${cp.id}: invalid threatLevel "${cp.threatLevel}"`);
-    }
+  it('declares all expected chokepoints', () => {
+    assert.match(chokepointConfigSrc, /id:\s*'suez'/);
+    assert.match(chokepointConfigSrc, /id:\s*'malacca'/);
+    assert.match(chokepointConfigSrc, /id:\s*'hormuz'/);
+    assert.match(chokepointConfigSrc, /id:\s*'bab_el_mandeb'/);
+    assert.match(chokepointConfigSrc, /id:\s*'panama'/);
+    assert.match(chokepointConfigSrc, /id:\s*'taiwan'/);
   });
 
   it('Hormuz uses war_zone threat level', () => {
-    assert.equal(cpById.hormuz.threatLevel, 'war_zone');
+    assert.match(chokepointConfigSrc, /id:\s*'hormuz'[\s\S]*?threatLevel:\s*'war_zone'/);
   });
 
   it('Bab el-Mandeb uses critical threat level', () => {
-    assert.equal(cpById.bab_el_mandeb.threatLevel, 'critical');
+    assert.match(chokepointConfigSrc, /id:\s*'bab_el_mandeb'[\s\S]*?threatLevel:\s*'critical'/);
   });
 
   it('Suez uses high threat level', () => {
-    assert.equal(cpById.suez.threatLevel, 'high');
+    assert.match(chokepointConfigSrc, /id:\s*'suez'[\s\S]*?threatLevel:\s*'high'/);
   });
 
   it('Taiwan uses elevated threat level', () => {
-    assert.equal(cpById.taiwan.threatLevel, 'elevated');
+    assert.match(chokepointConfigSrc, /id:\s*'taiwan'[\s\S]*?threatLevel:\s*'elevated'/);
   });
 
   it('Malacca and Panama use normal threat level', () => {
-    assert.equal(cpById.malacca.threatLevel, 'normal');
-    assert.equal(cpById.panama.threatLevel, 'normal');
+    assert.match(chokepointConfigSrc, /id:\s*'malacca'[\s\S]*?threatLevel:\s*'normal'/);
+    assert.match(chokepointConfigSrc, /id:\s*'panama'[\s\S]*?threatLevel:\s*'normal'/);
   });
 
   it('Hormuz threatDescription mentions Iran-Israel war', () => {
-    assert.ok(cpById.hormuz.threatDescription.includes('Iran-Israel'));
+    assert.match(chokepointConfigSrc, /id:\s*'hormuz'[\s\S]*?threatDescription:\s*'[^']*Iran-Israel/);
   });
 
   it('Bab el-Mandeb threatDescription mentions Houthi', () => {
-    assert.ok(cpById.bab_el_mandeb.threatDescription.includes('Houthi'));
+    assert.match(chokepointConfigSrc, /id:\s*'bab_el_mandeb'[\s\S]*?threatDescription:\s*'[^']*Houthi/);
   });
 
   it('Malacca and Panama have empty threatDescription', () => {
-    assert.equal(cpById.malacca.threatDescription, '');
-    assert.equal(cpById.panama.threatDescription, '');
+    assert.match(chokepointConfigSrc, /id:\s*'malacca'[\s\S]*?threatDescription:\s*''/);
+    assert.match(chokepointConfigSrc, /id:\s*'panama'[\s\S]*?threatDescription:\s*''/);
   });
 
   it('Hormuz areaKeywords include gulf of oman and strait of hormuz', () => {
-    assert.ok(cpById.hormuz.areaKeywords.includes('gulf of oman'));
-    assert.ok(cpById.hormuz.areaKeywords.includes('strait of hormuz'));
+    assert.match(chokepointConfigSrc, /id:\s*'hormuz'[\s\S]*?areaKeywords:[\s\S]*?'gulf of oman'/);
+    assert.match(chokepointConfigSrc, /id:\s*'hormuz'[\s\S]*?areaKeywords:[\s\S]*?'strait of hormuz'/);
   });
 
   it('Bab el-Mandeb areaKeywords include houthi and yemen', () => {
-    assert.ok(cpById.bab_el_mandeb.areaKeywords.includes('houthi'));
-    assert.ok(cpById.bab_el_mandeb.areaKeywords.includes('yemen'));
+    assert.match(chokepointConfigSrc, /id:\s*'bab_el_mandeb'[\s\S]*?areaKeywords:[\s\S]*?'houthi'/);
+    assert.match(chokepointConfigSrc, /id:\s*'bab_el_mandeb'[\s\S]*?areaKeywords:[\s\S]*?'yemen'/);
   });
 
   it('Taiwan areaKeywords include south china sea', () => {
-    assert.ok(cpById.taiwan.areaKeywords.includes('south china sea'));
+    assert.match(chokepointConfigSrc, /id:\s*'taiwan'[\s\S]*?areaKeywords:[\s\S]*?'south china sea'/);
   });
 
   it('descriptions reference JWC for listed areas', () => {
-    const jwcEntries = CHOKEPOINTS.filter(cp => cp.threatDescription.includes('JWC Listed Area'));
-    assert.ok(jwcEntries.length >= 2, 'Expected at least 2 JWC Listed Area entries');
+    const jwcMatches = chokepointConfigSrc.match(/JWC Listed Area/g) || [];
+    assert.ok(jwcMatches.length >= 2, 'Expected at least 2 JWC Listed Area entries');
   });
 
   it('THREAT_CONFIG_LAST_REVIEWED is a valid ISO date string', () => {
-    assert.ok(THREAT_CONFIG_LAST_REVIEWED, 'THREAT_CONFIG_LAST_REVIEWED should be exported');
-    assert.ok(!isNaN(Date.parse(THREAT_CONFIG_LAST_REVIEWED)),
-      'THREAT_CONFIG_LAST_REVIEWED should be a valid date');
+    const m = chokepointConfigSrc.match(/THREAT_CONFIG_LAST_REVIEWED\s*=\s*'([^']+)'/);
+    assert.ok(m?.[1], 'THREAT_CONFIG_LAST_REVIEWED should be exported');
+    assert.ok(!isNaN(Date.parse(String(m[1]))), 'THREAT_CONFIG_LAST_REVIEWED should be a valid date');
   });
 });

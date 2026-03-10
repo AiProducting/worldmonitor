@@ -1,0 +1,45 @@
+/**
+ * Bootstrap cache key registry mirror for worldmonitor server handlers.
+ *
+ * This file is intentionally value-only and allows static integrity tests to
+ * verify that every bootstrap cache key has a server-side declaration.
+ */
+export const WORLDMONITOR_BOOTSTRAP_CACHE_KEYS: Record<string, string> = {
+  earthquakes: 'seismology:earthquakes:v1',
+  outages: 'infra:outages:v1',
+  serviceStatuses: 'infra:service-statuses:v1',
+  sectors: 'market:sectors:v1',
+  etfFlows: 'market:etf-flows:v1',
+  macroSignals: 'economic:macro-signals:v1',
+  bisPolicy: 'economic:bis:policy:v1',
+  bisExchange: 'economic:bis:eer:v1',
+  bisCredit: 'economic:bis:credit:v1',
+  shippingRates: 'supply_chain:shipping:v2',
+  chokepoints: 'supply_chain:chokepoints:v2',
+  minerals: 'supply_chain:minerals:v2',
+  giving: 'giving:summary:v1',
+  climateAnomalies: 'climate:anomalies:v1',
+  wildfires: 'wildfire:fires:v1',
+  marketQuotes: 'market:stocks-bootstrap:v1',
+  commodityQuotes: 'market:commodities-bootstrap:v1',
+  cyberThreats: 'cyber:threats-bootstrap:v2',
+  techReadiness: 'economic:worldbank-techreadiness:v1',
+  progressData: 'economic:worldbank-progress:v1',
+  renewableEnergy: 'economic:worldbank-renewable:v1',
+  positiveGeoEvents: 'positive_events:geo-bootstrap:v1',
+  theaterPosture: 'theater_posture:sebuf:stale:v1',
+  riskScores: 'risk:scores:sebuf:stale:v1',
+  naturalEvents: 'natural:events:v1',
+  flightDelays: 'aviation:delays-bootstrap:v1',
+  insights: 'news:insights:v1',
+  predictions: 'prediction:markets-bootstrap:v1',
+  cryptoQuotes: 'market:crypto:v1',
+  gulfQuotes: 'market:gulf-quotes:v1',
+  stablecoinMarkets: 'market:stablecoins:v1',
+  unrestEvents: 'unrest:events:v1',
+  iranEvents: 'conflict:iran-events:v1',
+  ucdpEvents: 'conflict:ucdp-events:v1',
+  temporalAnomalies: 'temporal:anomalies:v1',
+  weatherAlerts: 'weather:alerts:v1',
+  spending: 'economic:spending:v1',
+};

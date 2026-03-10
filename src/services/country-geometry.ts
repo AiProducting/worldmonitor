@@ -13,6 +13,7 @@ interface CountryHit {
 }
 
 const COUNTRY_GEOJSON_URL = 'https://maps.worldmonitor.app/countries.geojson';
+const COUNTRY_GEOJSON_FALLBACK_URL = '/data/countries.geojson';
 
 /** Optional higher-resolution boundary overrides sourced from Natural Earth (served from R2 CDN). */
 const COUNTRY_OVERRIDES_URL = 'https://maps.worldmonitor.app/country-boundary-overrides.geojson';
@@ -252,12 +253,24 @@ async function ensureLoaded(): Promise<void> {
     if (typeof fetch !== 'function') return;
 
     try {
-      const response = await fetch(COUNTRY_GEOJSON_URL);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      let data: FeatureCollection<Geometry> | null = null;
+
+      for (const url of [COUNTRY_GEOJSON_URL, COUNTRY_GEOJSON_FALLBACK_URL]) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) continue;
+          const parsed = await response.json() as FeatureCollection<Geometry>;
+          if (parsed?.type === 'FeatureCollection' && Array.isArray(parsed.features)) {
+            data = parsed;
+            break;
+          }
+        } catch {
+          // Try next source.
+        }
       }
 
-      const data = await response.json() as FeatureCollection<Geometry>;
+      if (!data) return;
+
       if (!data || data.type !== 'FeatureCollection' || !Array.isArray(data.features)) {
         return;
       }

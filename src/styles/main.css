@@ -1550,6 +1550,56 @@ body.panel-resize-active iframe {
   color: var(--accent-red);
 }
 
+/* ──────────────────────────────────────────────
+   News Panel — Keyword Filter Bar
+   ────────────────────────────────────────────── */
+.news-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.news-filter-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.news-filter-input:focus { border-color: var(--accent); }
+.news-filter-input::placeholder { color: var(--text-dim); }
+
+.news-filter-clear {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.news-filter-clear:hover { background: var(--surface-2); color: var(--text); }
+
+.news-filter-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 40px;
+  text-align: right;
+}
+
+
+
 .panel-info-wrapper {
   position: relative;
   display: inline-flex;
@@ -10961,7 +11011,22 @@ a.prediction-link:hover {
 
 .cii-emoji {
   font-size: 12px;
+  display: flex;
+  align-items: center;
 }
+
+.level-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-critical  { background: var(--semantic-critical, #ef4444); }
+.dot-high      { background: var(--semantic-high, #f97316); }
+.dot-elevated  { background: var(--semantic-elevated, #eab308); }
+.dot-normal    { background: var(--semantic-normal, #22c55e); }
+.dot-low       { background: var(--semantic-low, #9ca3af); }
 
 .cii-name {
   flex: 1;
@@ -14580,6 +14645,26 @@ a.prediction-link:hover {
 .insight-badge.alert {
   background: rgba(239, 68, 68, 0.15);
   color: var(--red);
+}
+
+.insight-badge.importance {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+}
+.insight-badge.importance.importance-high {
+  background: rgba(245, 158, 11, 0.22);
+  color: #f59e0b;
+  font-weight: 800;
+}
+
+.insight-badge.diversity {
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+}
+.insight-badge.diversity.diversity-high {
+  background: rgba(99, 102, 241, 0.22);
+  color: #818cf8;
+  font-weight: 800;
 }
 
 /* Sentiment Dots */

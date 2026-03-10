@@ -184,6 +184,8 @@ export interface GeoHubMatch {
   hub: GeoHubLocation;
   confidence: number;
   matchedKeyword: string;
+  /** Tier-weighted match quality: confidence × tier multiplier (critical=1.5, major=1.2, notable=1.0) */
+  matchScore: number;
 }
 
 export function inferGeoHubsFromTitle(title: string): GeoHubMatch[] {
@@ -218,7 +220,9 @@ export function inferGeoHubsFromTitle(title: string): GeoHubMatch[] {
           confidence = Math.min(1, confidence + 0.1);
         }
 
-        matches.push({ hubId, hub, confidence, matchedKeyword: keyword });
+        matches.push({ hubId, hub, confidence, matchedKeyword: keyword,
+          matchScore: Math.round(confidence * (hub.tier === 'critical' ? 1.5 : hub.tier === 'major' ? 1.2 : 1.0) * 100) / 100,
+        });
       }
     }
   }
@@ -235,4 +239,39 @@ export function getGeoHubById(hubId: string): GeoHubLocation | undefined {
 export function getAllGeoHubs(): GeoHubLocation[] {
   const index = buildGeoHubIndex();
   return Array.from(index.hubs.values());
+}
+
+export function getGeoHubsByRegion(region: string): GeoHubLocation[] {
+  const index = buildGeoHubIndex();
+  const lower = region.toLowerCase();
+  return Array.from(index.hubs.values()).filter(h => h.region.toLowerCase() === lower);
+}
+
+/**
+ * Filter hubs by tier alone.
+ */
+export function getGeoHubsByTier(tier: GeoHubLocation['tier']): GeoHubLocation[] {
+  const index = buildGeoHubIndex();
+  return Array.from(index.hubs.values()).filter(h => h.tier === tier);
+}
+
+/**
+ * Filter hubs by both region AND tier — useful for focused geopolitical context panels.
+ */
+export function getGeoHubsByRegionAndTier(
+  region: string,
+  tier: GeoHubLocation['tier']
+): GeoHubLocation[] {
+  const lower = region.toLowerCase();
+  return getGeoHubsByTier(tier).filter(h => h.region.toLowerCase() === lower);
+}
+
+/**
+ * Return all distinct region labels present in the hub index.
+ */
+export function getGeoHubRegions(): string[] {
+  const index = buildGeoHubIndex();
+  const regions = new Set<string>();
+  for (const hub of index.hubs.values()) regions.add(hub.region);
+  return Array.from(regions).sort();
 }

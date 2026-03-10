@@ -756,6 +756,8 @@ export class GlobeMap {
     // Add overlay UI (zoom controls + layer panel)
     this.createControls();
     this.createLayerToggles();
+    this.layers.dayNight = false;
+    this.hideLayerToggle('dayNight');
 
     // Load static datasets
     this.setHotspots(INTEL_HOTSPOTS);
@@ -765,7 +767,7 @@ export class GlobeMap {
     // Navigate to initial view
     this.setView(this.currentView);
 
-    // dayNight toggle excluded by catalog (renderers: ['flat'])
+    // dayNight is a flat-map-only effect and is always disabled on globe.
 
     // Flush any data that arrived before init completed
     this.flushMarkers();
@@ -1815,7 +1817,7 @@ export class GlobeMap {
 
   public setLayers(layers: MapLayers): void {
     const prev = this.layers;
-    this.layers = { ...layers };
+    this.layers = { ...layers, dayNight: false };
     let needMarkers = false, needArcs = false, needPaths = false, needPolygons = false;
     for (const k of Object.keys(layers) as (keyof MapLayers)[]) {
       if (prev[k] === layers[k]) continue;
@@ -1836,6 +1838,7 @@ export class GlobeMap {
   }
 
   public enableLayer(layer: keyof MapLayers): void {
+    if (layer === 'dayNight') return;
     if (this.layers[layer]) return;
     (this.layers as any)[layer] = true;
     const toggle = this.layerTogglesEl?.querySelector(`.layer-toggle[data-layer="${layer}"] input`) as HTMLInputElement | null;

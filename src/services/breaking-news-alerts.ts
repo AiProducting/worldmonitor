@@ -24,6 +24,9 @@ const DEDUPE_KEY = 'wm-breaking-alerts-dedupe';
 const RECENCY_GATE_MS = 15 * 60 * 1000;
 const PER_EVENT_COOLDOWN_MS = 30 * 60 * 1000;
 const GLOBAL_COOLDOWN_MS = 60 * 1000;
+// Suppress repeat alerts from the same geographic area within 20 minutes.
+// Critical alerts always bypass this gate so high-priority events are never lost.
+const AREA_FATIGUE_MS = 20 * 60 * 1000;
 // Suppress RSS-based alerts during initial feed fetch after app load.
 // OREF siren alerts bypass this — real-time sirens must never be delayed.
 const STARTUP_GRACE_MS = 10 * 1000;
@@ -36,6 +39,7 @@ const DEFAULT_SETTINGS: AlertSettings = {
 };
 
 const dedupeMap = new Map<string, number>();
+const areaFatigueMap = new Map<string, number>();
 let lastGlobalAlertMs = 0;
 let lastGlobalAlertLevel: 'critical' | 'high' | null = null;
 let storageListener: ((e: StorageEvent) => void) | null = null;
@@ -53,6 +57,23 @@ function simpleHash(str: string): string {
 
 function normalizeTitle(title: string): string {
   return title.toLowerCase().replace(/[^\w\s]/g, '').trim().slice(0, 80);
+}
+
+/** Normalize a location name to a stable area key for fatigue tracking. */
+function normalizeAreaKey(locationName: string): string {
+  return locationName.toLowerCase().replace(/[^\w]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+}
+
+/** Returns true if the area recently had an alert fired (fatigue gate). */
+function isAreaFatigued(areaKey: string): boolean {
+  const last = areaFatigueMap.get(areaKey);
+  return last !== undefined && (Date.now() - last) < AREA_FATIGUE_MS;
+}
+
+/** Returns the number of distinct areas currently under fatigue suppression. */
+export function getAreaFatiguedCount(): number {
+  const now = Date.now();
+  return [...areaFatigueMap.values()].filter(ts => (now - ts) < AREA_FATIGUE_MS).length;
 }
 
 function extractHostname(url: string): string {
@@ -146,11 +167,12 @@ function isGlobalCooldown(candidateLevel: 'critical' | 'high'): boolean {
   return true;
 }
 
-function dispatchAlert(alert: BreakingAlert): void {
+function dispatchAlert(alert: BreakingAlert, areaKey?: string): void {
   pruneDedupeMap();
   dedupeMap.set(alert.id, Date.now());
   lastGlobalAlertMs = Date.now();
   lastGlobalAlertLevel = alert.threatLevel;
+  if (areaKey) areaFatigueMap.set(areaKey, Date.now());
   saveDedupeMap();
   document.dispatchEvent(new CustomEvent('wm:breaking-news', { detail: alert }));
 }
@@ -166,6 +188,7 @@ export function checkBatchForBreakingAlerts(items: NewsItem[]): void {
   if (isInStartupGrace()) return;
 
   let best: BreakingAlert | null = null;
+  let bestAreaKey: string | undefined = undefined;
 
   for (const item of items) {
     if (!item.isAlert) continue;
@@ -176,6 +199,11 @@ export function checkBatchForBreakingAlerts(items: NewsItem[]): void {
     if (level !== 'critical' && level !== 'high') continue;
     if (settings.sensitivity === 'critical-only' && level !== 'critical') continue;
 
+    // Minimum headline quality: very short or fragment titles produce noisy alerts
+    if (item.title.trim().length < 20) continue;
+    // Low-confidence keyword matches are too noisy for alert-worthy claims
+    if (item.threat.source === 'keyword' && item.threat.confidence < 0.4) continue;
+
     // Tier 3+ sources (think tanks, specialty) need LLM confirmation to fire alerts.
     // Keyword-only "war" matches on analysis articles are too noisy.
     const tier = getSourceTier(item.source);
@@ -183,6 +211,12 @@ export function checkBatchForBreakingAlerts(items: NewsItem[]): void {
 
     const key = makeAlertKey(item.title, item.source, item.link);
     if (isDuplicate(key)) continue;
+
+    // Area fatigue: high-priority alerts from the same location are suppressed
+    // for 20 minutes after an alert already fired for that area. Critical alerts
+    // always bypass so genuine emergencies are never delayed.
+    const areaKey = item.locationName ? normalizeAreaKey(item.locationName) : undefined;
+    if (areaKey && level !== 'critical' && isAreaFatigued(areaKey)) continue;
 
     const isBetter = !best
       || (level === 'critical' && best.threatLevel !== 'critical')
@@ -198,10 +232,11 @@ export function checkBatchForBreakingAlerts(items: NewsItem[]): void {
         timestamp: item.pubDate,
         origin: 'rss_alert',
       };
+      bestAreaKey = areaKey;
     }
   }
 
-  if (best && !isGlobalCooldown(best.threatLevel)) dispatchAlert(best);
+  if (best && !isGlobalCooldown(best.threatLevel)) dispatchAlert(best, bestAreaKey);
 }
 
 export function dispatchOrefBreakingAlert(alerts: OrefAlert[]): void {
@@ -249,6 +284,7 @@ export function destroyBreakingNewsAlerts(): void {
     storageListener = null;
   }
   dedupeMap.clear();
+  areaFatigueMap.clear();
   cachedSettings = null;
   lastGlobalAlertMs = 0;
   lastGlobalAlertLevel = null;

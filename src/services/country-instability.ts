@@ -60,6 +60,7 @@ interface CountryData {
   cyberThreatMediumCount: number;
   temporalAnomalyCount: number;
   temporalAnomalyCriticalCount: number;
+  temporalAnomalyRisingCount: number;
 }
 
 export { TIER1_COUNTRIES } from '@/config/countries';
@@ -204,6 +205,7 @@ function initCountryData(): CountryData {
     cyberThreatMediumCount: 0,
     temporalAnomalyCount: 0,
     temporalAnomalyCriticalCount: 0,
+    temporalAnomalyRisingCount: 0,
   };
 }
 
@@ -596,8 +598,8 @@ function getSupplementalSignalBoost(data: CountryData): number {
     data.cyberThreatCriticalCount * 3 + data.cyberThreatHighCount * 1.8 + data.cyberThreatMediumCount * 0.9,
   );
   const temporalBoost = Math.min(
-    6,
-    data.temporalAnomalyCriticalCount * 2 + data.temporalAnomalyCount * 0.75,
+    10,
+    data.temporalAnomalyCriticalCount * 2 + data.temporalAnomalyCount * 0.75 + data.temporalAnomalyRisingCount * 1,
   );
   return aisBoost + fireBoost + cyberBoost + temporalBoost;
 }
@@ -707,6 +709,7 @@ export function ingestTemporalAnomaliesForCII(anomalies: TemporalAnomaly[]): voi
   for (const [, data] of countryDataMap) {
     data.temporalAnomalyCount = 0;
     data.temporalAnomalyCriticalCount = 0;
+    data.temporalAnomalyRisingCount = 0;
   }
 
   for (const anomaly of anomalies) {
@@ -720,6 +723,7 @@ export function ingestTemporalAnomaliesForCII(anomalies: TemporalAnomaly[]): voi
     const data = countryDataMap.get(code)!;
     data.temporalAnomalyCount++;
     if (anomaly.severity === 'critical') data.temporalAnomalyCriticalCount++;
+    if (anomaly.zScoreTrend === 'rising') data.temporalAnomalyRisingCount++;
   }
 }
 
@@ -885,7 +889,10 @@ function calcInformationScore(data: CountryData, countryCode: string): number {
 
   const alertBoost = data.newsEvents.some(e => e.isAlert) ? 20 * multiplier : 0;
 
-  return Math.min(100, baseScore + velocityBoost + alertBoost);
+  const avgDiversityScore = data.newsEvents.reduce((s, e) => s + (e.sourceDiversityScore ?? 0), 0) / count;
+  const diversityBonus = Math.round((avgDiversityScore / 100) * 20);
+
+  return Math.min(100, baseScore + velocityBoost + alertBoost + diversityBonus);
 }
 
 function getLevel(score: number): CountryScore['level'] {

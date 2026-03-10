@@ -12,6 +12,42 @@ export interface ThreatClassification {
   source: 'keyword' | 'ml' | 'llm';
 }
 
+export interface ThreatStats {
+  total: number;
+  levelCounts: Record<ThreatLevel, number>;
+  categoryBreakdown: Partial<Record<EventCategory, number>>;
+  topLevel: ThreatLevel;
+  topCategory: EventCategory;
+}
+
+export function getThreatStats(
+  items: Array<{ threat?: ThreatClassification }>
+): ThreatStats {
+  const levelCounts: Record<ThreatLevel, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  const catCounts: Partial<Record<EventCategory, number>> = {};
+  let total = 0;
+
+  for (const item of items) {
+    if (!item.threat) continue;
+    total++;
+    levelCounts[item.threat.level]++;
+    catCounts[item.threat.category] = (catCounts[item.threat.category] ?? 0) + 1;
+  }
+
+  let topLevel: ThreatLevel = 'info';
+  for (const level of ['critical', 'high', 'medium', 'low', 'info'] as ThreatLevel[]) {
+    if (levelCounts[level] > 0) { topLevel = level; break; }
+  }
+
+  let topCategory: EventCategory = 'general';
+  let topCount = 0;
+  for (const [cat, count] of Object.entries(catCounts) as [EventCategory, number][]) {
+    if (count > topCount) { topCount = count; topCategory = cat; }
+  }
+
+  return { total, levelCounts, categoryBreakdown: catCounts, topLevel, topCategory };
+}
+
 import { getCSSColor } from '@/utils';
 
 /** @deprecated Use getThreatColor() instead for runtime CSS variable reads */

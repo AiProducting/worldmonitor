@@ -17,6 +17,8 @@ export interface TemporalAnomaly {
   zScore: number;
   message: string;
   severity: 'medium' | 'high' | 'critical';
+  /** Direction of z-score over recent readings (requires ≥4 data points) */
+  zScoreTrend?: 'rising' | 'stable' | 'falling';
 }
 
 const client = new InfrastructureServiceClient('', { fetch: (...args) => globalThis.fetch(...args) });
@@ -50,6 +52,28 @@ function formatAnomalyMessage(
   return `${TYPE_LABELS[type]} ${mult} normal for ${weekday} (${month}) — ${count} vs baseline ${Math.round(mean)}`;
 }
 
+const ZSCORE_HISTORY_MAX = 5;
+const zScoreHistory = new Map<string, number[]>();
+
+function recordZScore(type: TemporalEventType, region: string, zScore: number): void {
+  const key = `${type}:${region}`;
+  const history = zScoreHistory.get(key) ?? [];
+  history.push(zScore);
+  if (history.length > ZSCORE_HISTORY_MAX) history.shift();
+  zScoreHistory.set(key, history);
+}
+
+function getZScoreTrend(type: TemporalEventType, region: string): 'rising' | 'stable' | 'falling' | undefined {
+  const history = zScoreHistory.get(`${type}:${region}`);
+  if (!history || history.length < 4) return undefined;
+  const mid = Math.floor(history.length / 2);
+  const early = history.slice(0, mid).reduce((s, v) => s + v, 0) / mid;
+  const recent = history.slice(mid).reduce((s, v) => s + v, 0) / (history.length - mid);
+  if (recent > early * 1.2) return 'rising';
+  if (early > recent * 1.2) return 'falling';
+  return 'stable';
+}
+
 function getSeverity(zScore: number): 'medium' | 'high' | 'critical' {
   if (zScore >= 3.0) return 'critical';
   if (zScore >= 2.0) return 'high';
@@ -57,14 +81,17 @@ function getSeverity(zScore: number): 'medium' | 'high' | 'critical' {
 }
 
 function mapServerAnomaly(a: TemporalAnomalyProto): TemporalAnomaly {
+  const type = a.type as TemporalEventType;
+  recordZScore(type, a.region, a.zScore);
   return {
-    type: a.type as TemporalEventType,
+    type,
     region: a.region,
     currentCount: a.currentCount,
     expectedCount: a.expectedCount,
     zScore: a.zScore,
     severity: getSeverity(a.zScore),
     message: a.message,
+    zScoreTrend: getZScoreTrend(type, a.region),
   };
 }
 
@@ -115,6 +142,7 @@ async function checkAnomaly(
     const data = await client.getTemporalBaseline({ type, region, count });
     if (!data.anomaly) return null;
 
+    recordZScore(type, region, data.anomaly.zScore);
     return {
       type,
       region,
@@ -123,6 +151,7 @@ async function checkAnomaly(
       zScore: data.anomaly.zScore,
       severity: getSeverity(data.anomaly.zScore),
       message: formatAnomalyMessage(type, region, count, data.baseline?.mean ?? 0, data.anomaly.multiplier),
+      zScoreTrend: getZScoreTrend(type, region),
     };
   } catch (e) {
     console.warn('[TemporalBaseline] Check failed:', e);

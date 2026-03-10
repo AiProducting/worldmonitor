@@ -46,9 +46,11 @@ function isRecentDuplicate(key: string): boolean {
 function markSignalSeen(key: string): void {
   recentSignalKeys.set(key, Date.now());
   if (recentSignalKeys.size > 500) {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const now = Date.now();
     for (const [k, t] of recentSignalKeys) {
-      if (t < cutoff) recentSignalKeys.delete(k);
+      const type = getDedupeType(k);
+      const ttl = DEDUPE_TTLS[type] ?? DEFAULT_DEDUPE_TTL;
+      if (now - t > ttl) recentSignalKeys.delete(k);
     }
   }
 }
@@ -87,4 +89,29 @@ export function addToSignalHistory(signals: CorrelationSignal[]): void {
   if (signals.length > 0) {
     document.dispatchEvent(new CustomEvent('wm:intelligence-updated'));
   }
+}
+
+export interface SignalStats {
+  total: number;
+  avgConfidence: number;
+  avgQualityScore: number;
+  byType: Partial<Record<SignalType, number>>;
+}
+
+export function getSignalStats(signals: CorrelationSignal[]): SignalStats {
+  if (signals.length === 0) {
+    return { total: 0, avgConfidence: 0, avgQualityScore: 0, byType: {} };
+  }
+  const totalConf = signals.reduce((s, x) => s + x.confidence, 0);
+  const totalQuality = signals.reduce((s, x) => s + (x.qualityScore ?? x.confidence), 0);
+  const byType: Partial<Record<SignalType, number>> = {};
+  for (const sig of signals) {
+    byType[sig.type] = (byType[sig.type] ?? 0) + 1;
+  }
+  return {
+    total: signals.length,
+    avgConfidence: Math.round((totalConf / signals.length) * 100) / 100,
+    avgQualityScore: Math.round((totalQuality / signals.length) * 100) / 100,
+    byType,
+  };
 }

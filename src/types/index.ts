@@ -45,6 +45,8 @@ export interface VelocityMetrics {
   sourcesPerHour: number;
   level: VelocityLevel;
   trend: 'rising' | 'stable' | 'falling';
+  /** Second-derivative of coverage rate: is the story gaining or losing momentum? */
+  acceleration: 'accelerating' | 'decelerating' | 'steady';
   sentiment: SentimentType;
   sentimentScore: number;
 }
@@ -66,6 +68,11 @@ export interface ClusteredEvent {
   lat?: number;
   lon?: number;
   lang?: string;
+  /**
+   * 0–100 score reflecting how many distinct sources and tiers contributed.
+   * Higher = more diverse coverage (e.g. BBC + Reuters + local vs 5× same site).
+   */
+  sourceDiversityScore?: number;
 }
 
 export type AssetType = 'pipeline' | 'cable' | 'datacenter' | 'base' | 'nuclear';
@@ -1191,6 +1198,8 @@ export interface EntityMention {
   avgConfidence: number;
   clusterIds: string[];
   topHeadlines: HeadlineWithUrl[];
+  /** Average sourceDiversityScore (0–100) of backing news clusters */
+  avgSourceDiversityScore?: number;
 }
 
 export interface FocalPoint {

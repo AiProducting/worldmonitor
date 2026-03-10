@@ -154,3 +154,13 @@ export function getGeoHubActivity(hubId: string, clusters: ClusteredEvent[]): Ge
   const activities = aggregateGeoActivity(clusters);
   return activities.find(a => a.hubId === hubId);
 }
+
+/**
+ * Returns hubs whose trend is 'rising', sorted by score descending.
+ * @param limit - Maximum number of hubs to return (default: 10)
+ */
+export function getRisingGeoHubs(clusters: ClusteredEvent[], limit = 10): GeoHubActivity[] {
+  return aggregateGeoActivity(clusters)
+    .filter(a => a.trend === 'rising')
+    .slice(0, limit);
+}

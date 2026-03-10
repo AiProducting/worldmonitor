@@ -325,11 +325,20 @@ export class DataLoaderManager implements AppModule {
   }
 
   async loadAllData(): Promise<void> {
+    // Per-task wall-clock timeout: prevents a single hung upstream from
+    // blocking the entire batch slot for loadAllData startup.
+    const TASK_TIMEOUT_MS = 45_000; // 45s max per top-level task
+
     const runGuarded = async (name: string, fn: () => Promise<void>): Promise<void> => {
       if (this.ctx.isDestroyed || this.ctx.inFlight.has(name)) return;
       this.ctx.inFlight.add(name);
       try {
-        await fn();
+        await Promise.race([
+          fn(),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error(`${name} timed out after ${TASK_TIMEOUT_MS}ms`)), TASK_TIMEOUT_MS)
+          ),
+        ]);
       } catch (e) {
         if (!this.ctx.isDestroyed) console.error(`[App] ${name} failed:`, e);
       } finally {
@@ -337,28 +346,28 @@ export class DataLoaderManager implements AppModule {
       }
     };
 
-    const tasks: Array<{ name: string; task: Promise<void> }> = [
-      { name: 'news', task: runGuarded('news', () => this.loadNews()) },
+    const tasks: Array<{ name: string; task: () => Promise<void> }> = [
+      { name: 'news', task: () => runGuarded('news', () => this.loadNews()) },
     ];
 
     // Happy variant only loads news data -- skip all geopolitical/financial/military data
     if (SITE_VARIANT !== 'happy') {
-      tasks.push({ name: 'markets', task: runGuarded('markets', () => this.loadMarkets()) });
+      tasks.push({ name: 'markets', task: () => runGuarded('markets', () => this.loadMarkets()) });
       if (SITE_VARIANT === 'finance' && getSecretState('WORLDMONITOR_API_KEY').present) {
-        tasks.push({ name: 'stockAnalysis', task: runGuarded('stockAnalysis', () => this.loadStockAnalysis()) });
-        tasks.push({ name: 'stockBacktest', task: runGuarded('stockBacktest', () => this.loadStockBacktest()) });
+        tasks.push({ name: 'stockAnalysis', task: () => runGuarded('stockAnalysis', () => this.loadStockAnalysis()) });
+        tasks.push({ name: 'stockBacktest', task: () => runGuarded('stockBacktest', () => this.loadStockBacktest()) });
       }
-      tasks.push({ name: 'predictions', task: runGuarded('predictions', () => this.loadPredictions()) });
-      tasks.push({ name: 'pizzint', task: runGuarded('pizzint', () => this.loadPizzInt()) });
-      tasks.push({ name: 'fred', task: runGuarded('fred', () => this.loadFredData()) });
-      tasks.push({ name: 'oil', task: runGuarded('oil', () => this.loadOilAnalytics()) });
-      tasks.push({ name: 'spending', task: runGuarded('spending', () => this.loadGovernmentSpending()) });
-      tasks.push({ name: 'bis', task: runGuarded('bis', () => this.loadBisData()) });
+      tasks.push({ name: 'predictions', task: () => runGuarded('predictions', () => this.loadPredictions()) });
+      tasks.push({ name: 'pizzint', task: () => runGuarded('pizzint', () => this.loadPizzInt()) });
+      tasks.push({ name: 'fred', task: () => runGuarded('fred', () => this.loadFredData()) });
+      tasks.push({ name: 'oil', task: () => runGuarded('oil', () => this.loadOilAnalytics()) });
+      tasks.push({ name: 'spending', task: () => runGuarded('spending', () => this.loadGovernmentSpending()) });
+      tasks.push({ name: 'bis', task: () => runGuarded('bis', () => this.loadBisData()) });
 
       // Trade policy data (FULL and FINANCE only)
       if (SITE_VARIANT === 'full' || SITE_VARIANT === 'finance' || SITE_VARIANT === 'commodity') {
-        tasks.push({ name: 'tradePolicy', task: runGuarded('tradePolicy', () => this.loadTradePolicy()) });
-        tasks.push({ name: 'supplyChain', task: runGuarded('supplyChain', () => this.loadSupplyChain()) });
+        tasks.push({ name: 'tradePolicy', task: () => runGuarded('tradePolicy', () => this.loadTradePolicy()) });
+        tasks.push({ name: 'supplyChain', task: () => runGuarded('supplyChain', () => this.loadSupplyChain()) });
       }
     }
 
@@ -366,26 +375,26 @@ export class DataLoaderManager implements AppModule {
     if (SITE_VARIANT === 'happy') {
       tasks.push({
         name: 'progress',
-        task: runGuarded('progress', () => this.loadProgressData()),
+        task: () => runGuarded('progress', () => this.loadProgressData()),
       });
       tasks.push({
         name: 'species',
-        task: runGuarded('species', () => this.loadSpeciesData()),
+        task: () => runGuarded('species', () => this.loadSpeciesData()),
       });
       tasks.push({
         name: 'renewable',
-        task: runGuarded('renewable', () => this.loadRenewableData()),
+        task: () => runGuarded('renewable', () => this.loadRenewableData()),
       });
       tasks.push({
         name: 'happinessMap',
-        task: runGuarded('happinessMap', async () => {
+        task: () => runGuarded('happinessMap', async () => {
           const data = await fetchHappinessScores();
           this.ctx.map?.setHappinessScores(data);
         }),
       });
       tasks.push({
         name: 'renewableMap',
-        task: runGuarded('renewableMap', async () => {
+        task: () => runGuarded('renewableMap', async () => {
           const installations = await fetchRenewableInstallations();
           this.ctx.map?.setRenewableInstallations(installations);
         }),
@@ -395,7 +404,7 @@ export class DataLoaderManager implements AppModule {
     if (Object.prototype.hasOwnProperty.call(DEFAULT_PANELS, 'giving')) {
       tasks.push({
         name: 'giving',
-        task: runGuarded('giving', async () => {
+        task: () => runGuarded('giving', async () => {
           const givingResult = await fetchGivingSummary();
           if (!givingResult.ok) {
             dataFreshness.recordError('giving', 'Giving data unavailable (retaining prior state)');
@@ -417,31 +426,42 @@ export class DataLoaderManager implements AppModule {
           this.ctx.map?.setLayerReady('ciiChoropleth', true);
         }
       } catch { /* non-fatal */ }
-      tasks.push({ name: 'intelligence', task: runGuarded('intelligence', () => this.loadIntelligenceSignals()) });
+      tasks.push({ name: 'intelligence', task: () => runGuarded('intelligence', () => this.loadIntelligenceSignals()) });
     }
 
-    if (SITE_VARIANT === 'full') tasks.push({ name: 'firms', task: runGuarded('firms', () => this.loadFirmsData()) });
-    if (this.ctx.mapLayers.natural) tasks.push({ name: 'natural', task: runGuarded('natural', () => this.loadNatural()) });
-    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.weather) tasks.push({ name: 'weather', task: runGuarded('weather', () => this.loadWeatherAlerts()) });
-    if (SITE_VARIANT !== 'happy' && !isDesktopRuntime() && this.ctx.mapLayers.ais) tasks.push({ name: 'ais', task: runGuarded('ais', () => this.loadAisSignals()) });
-    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cables', task: runGuarded('cables', () => this.loadCableActivity()) });
-    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cableHealth', task: runGuarded('cableHealth', () => this.loadCableHealth()) });
-    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.flights) tasks.push({ name: 'flights', task: runGuarded('flights', () => this.loadFlightDelays()) });
-    if (SITE_VARIANT !== 'happy' && CYBER_LAYER_ENABLED && this.ctx.mapLayers.cyberThreats) tasks.push({ name: 'cyberThreats', task: runGuarded('cyberThreats', () => this.loadCyberThreats()) });
-    if (SITE_VARIANT !== 'happy' && !isDesktopRuntime()) tasks.push({ name: 'iranAttacks', task: runGuarded('iranAttacks', () => this.loadIranEvents()) });
-    if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.techEvents || SITE_VARIANT === 'tech')) tasks.push({ name: 'techEvents', task: runGuarded('techEvents', () => this.loadTechEvents()) });
-    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.satellites && this.ctx.map?.isGlobeMode?.()) tasks.push({ name: 'satellites', task: runGuarded('satellites', () => this.loadSatellites()) });
+    if (SITE_VARIANT === 'full') tasks.push({ name: 'firms', task: () => runGuarded('firms', () => this.loadFirmsData()) });
+    if (this.ctx.mapLayers.natural) tasks.push({ name: 'natural', task: () => runGuarded('natural', () => this.loadNatural()) });
+    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.weather) tasks.push({ name: 'weather', task: () => runGuarded('weather', () => this.loadWeatherAlerts()) });
+    if (SITE_VARIANT !== 'happy' && !isDesktopRuntime() && this.ctx.mapLayers.ais) tasks.push({ name: 'ais', task: () => runGuarded('ais', () => this.loadAisSignals()) });
+    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cables', task: () => runGuarded('cables', () => this.loadCableActivity()) });
+    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cableHealth', task: () => runGuarded('cableHealth', () => this.loadCableHealth()) });
+    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.flights) tasks.push({ name: 'flights', task: () => runGuarded('flights', () => this.loadFlightDelays()) });
+    if (SITE_VARIANT !== 'happy' && CYBER_LAYER_ENABLED && this.ctx.mapLayers.cyberThreats) tasks.push({ name: 'cyberThreats', task: () => runGuarded('cyberThreats', () => this.loadCyberThreats()) });
+    if (SITE_VARIANT !== 'happy' && !isDesktopRuntime()) tasks.push({ name: 'iranAttacks', task: () => runGuarded('iranAttacks', () => this.loadIranEvents()) });
+    if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.techEvents || SITE_VARIANT === 'tech')) tasks.push({ name: 'techEvents', task: () => runGuarded('techEvents', () => this.loadTechEvents()) });
+    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.satellites && this.ctx.map?.isGlobeMode?.()) tasks.push({ name: 'satellites', task: () => runGuarded('satellites', () => this.loadSatellites()) });
 
     if (SITE_VARIANT !== 'happy') {
-      tasks.push({ name: 'techReadiness', task: runGuarded('techReadiness', () => (this.ctx.panels['tech-readiness'] as TechReadinessPanel)?.refresh()) });
+      tasks.push({ name: 'techReadiness', task: () => runGuarded('techReadiness', () => (this.ctx.panels['tech-readiness'] as TechReadinessPanel)?.refresh()) });
     }
+
+    // Tiered priority load: critical data first, supplementary data last.
+    // Tier 1 — user-visible immediately (news, signals, live tracking)
+    // Tier 2 — important context (markets, seismic, outages, trade)
+    // Tier 3 — supplementary/heavy (firms, satellites, species, techEvents)
+    const TIER1 = new Set(['news', 'intelligence', 'ais', 'flights', 'iranAttacks', 'cyberThreats', 'weather']);
+    const TIER3 = new Set(['firms', 'satellites', 'techEvents', 'species', 'progress', 'renewable', 'happinessMap', 'renewableMap', 'bis', 'giving']);
+    tasks.sort((a, b) => {
+      const tierOf = (n: string) => TIER1.has(n) ? 1 : TIER3.has(n) ? 3 : 2;
+      return tierOf(a.name) - tierOf(b.name);
+    });
 
     // Stagger startup: run tasks in small batches to avoid hammering upstreams
     const BATCH_SIZE = 4;
     const BATCH_DELAY_MS = 300;
     for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
       const batch = tasks.slice(i, i + BATCH_SIZE);
-      const results = await Promise.allSettled(batch.map(t => t.task));
+      const results = await Promise.allSettled(batch.map(t => t.task()));
       results.forEach((result, idx) => {
         if (result.status === 'rejected') {
           console.error(`[App] ${batch[idx]?.name} load failed:`, result.reason);

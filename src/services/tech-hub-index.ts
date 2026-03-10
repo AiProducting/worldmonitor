@@ -266,3 +266,47 @@ export function getHubsByTier(tier: 'mega' | 'major' | 'emerging'): TechHubLocat
   const index = buildTechHubIndex();
   return Array.from(index.hubs.values()).filter(h => h.tier === tier);
 }
+
+/**
+ * Compute activity scores for each tech hub based on how often its keywords
+ * appear in the primary titles of a set of clustered news events.
+ * Returns a map of hubId → mention count (≥ 1).
+ */
+export function getTechHubActivityScores(
+  titles: string[]
+): Map<string, number> {
+  const scores = new Map<string, number>();
+  for (const title of titles) {
+    const matches = inferHubsFromTitle(title);
+    for (const m of matches) {
+      scores.set(m.hubId, (scores.get(m.hubId) ?? 0) + 1);
+    }
+  }
+  return scores;
+}
+
+const TIER_WEIGHT: Record<TechHubLocation['tier'], number> = {
+  mega: 3,
+  major: 2,
+  emerging: 1,
+};
+
+/**
+ * Compute weighted activity scores for each tech hub.
+ * Score = sum(mentionWeight × tierWeight) where mentionWeight uses
+ * the match confidence and tierWeight amplifies high-tier hubs.
+ * Returns a map of hubId → weighted score (float).
+ */
+export function getWeightedTechHubActivityScores(
+  titles: string[]
+): Map<string, number> {
+  const scores = new Map<string, number>();
+  for (const title of titles) {
+    const matches = inferHubsFromTitle(title);
+    for (const m of matches) {
+      const weight = m.confidence * TIER_WEIGHT[m.hub.tier];
+      scores.set(m.hubId, (scores.get(m.hubId) ?? 0) + weight);
+    }
+  }
+  return scores;
+}

@@ -105,6 +105,37 @@ class ActivityTracker {
   }
 
   /**
+   * Get the arrival rate of new items for a panel (items per minute over the
+   * last 5 minutes, based on firstSeenTime timestamps).
+   */
+  getArrivalRate(panelId: string, windowMs = 5 * 60 * 1000): number {
+    const state = this.panels.get(panelId);
+    if (!state || state.firstSeenTime.size === 0) return 0;
+    const cutoff = Date.now() - windowMs;
+    let count = 0;
+    for (const t of state.firstSeenTime.values()) {
+      if (t >= cutoff) count++;
+    }
+    return count / (windowMs / 60000);
+  }
+
+  /**
+   * Returns the highest per-minute arrival rate ever observed for a panel,
+   * computed by bucketing all firstSeenTime values into 1-minute bins and
+   * returning the count of the busiest bin.
+   */
+  getPeakArrivalRate(panelId: string): number {
+    const state = this.panels.get(panelId);
+    if (!state || state.firstSeenTime.size === 0) return 0;
+    const buckets = new Map<number, number>();
+    for (const t of state.firstSeenTime.values()) {
+      const bucket = Math.floor(t / 60000);
+      buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+    }
+    return Math.max(...buckets.values());
+  }
+
+  /**
    * Get new item count for a panel
    */
   getNewCount(panelId: string): number {

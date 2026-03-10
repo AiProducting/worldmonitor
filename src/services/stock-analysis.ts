@@ -44,7 +44,16 @@ export function getStockAnalysisTargets(limit = DEFAULT_LIMIT): StockAnalysisTar
   return targets;
 }
 
-export async function fetchStockAnalysesForTargets(targets: StockAnalysisTarget[]): Promise<StockAnalysisResult[]> {
+export async function fetchStockAnalysesForTargets(targets: StockAnalysisTarget[], parallel = false): Promise<StockAnalysisResult[]> {
+  if (parallel) {
+    const settled = await Promise.allSettled(
+      targets.map(t => client.analyzeStock({ symbol: t.symbol, name: t.name, includeNews: true }))
+    );
+    return settled
+      .filter((r): r is PromiseFulfilledResult<StockAnalysisResult> => r.status === 'fulfilled' && r.value.available)
+      .map(r => r.value);
+  }
+
   const results: StockAnalysisResult[] = [];
   for (let i = 0; i < targets.length; i++) {
     if (i > 0) await new Promise((resolve) => setTimeout(resolve, 200));
@@ -64,4 +73,10 @@ export async function fetchStockAnalysesForTargets(targets: StockAnalysisTarget[
 
 export async function fetchStockAnalyses(limit = DEFAULT_LIMIT): Promise<StockAnalysisResult[]> {
   return fetchStockAnalysesForTargets(getStockAnalysisTargets(limit));
+}
+
+/** Returns target count and symbols without triggering an API call */
+export function getStockAnalysisInfo(limit = DEFAULT_LIMIT): { count: number; symbols: string[] } {
+  const targets = getStockAnalysisTargets(limit);
+  return { count: targets.length, symbols: targets.map(t => t.symbol) };
 }

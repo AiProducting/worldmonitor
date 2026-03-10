@@ -318,3 +318,25 @@ export function clearEscalationData(): void {
   scores.clear();
   lastSignalTime.clear();
 }
+
+export interface TopEscalatingHotspot {
+  hotspotId: string;
+  change: number;
+  /** Current (end) score */
+  currentScore: number;
+}
+
+/**
+ * Returns the top `n` hotspots sorted by descending 24-hour score change.
+ * Only includes hotspots with a positive change and sufficient history.
+ */
+export function getTopEscalatingHotspots(n = 5): TopEscalatingHotspot[] {
+  const results: TopEscalatingHotspot[] = [];
+  for (const score of scores.values()) {
+    const change24h = getEscalationChange24h(score.hotspotId);
+    if (change24h && change24h.change > 0) {
+      results.push({ hotspotId: score.hotspotId, change: change24h.change, currentScore: change24h.end });
+    }
+  }
+  return results.sort((a, b) => b.change - a.change).slice(0, n);
+}

@@ -110,9 +110,20 @@ export function detectGeoConvergence(seenAlerts: Set<string>): GeoConvergenceAle
       const totalEvents = Array.from(cell.events.values())
         .reduce((sum, d) => sum + d.count, 0);
 
-      const typeScore = cell.events.size * 25;
+      // Type severity weights: military activity is highest-priority signal,
+      // followed by earthquakes (geophysical), then protests (civil).
+      const TYPE_SEVERITY_WEIGHT: Record<GeoEventType, number> = {
+        military_flight: 3,
+        military_vessel: 3,
+        earthquake: 2,
+        protest: 1,
+      };
+      const severityWeight = types.reduce((sum, t) => sum + (TYPE_SEVERITY_WEIGHT[t] ?? 1), 0);
+
+      const typeScore = cell.events.size * 20;
+      const severityBonus = Math.min(20, severityWeight * 4);
       const countBoost = Math.min(25, totalEvents * 2);
-      const score = Math.min(100, typeScore + countBoost);
+      const score = Math.min(100, typeScore + severityBonus + countBoost);
 
       alerts.push({ cellId, lat: cell.lat, lon: cell.lon, types, totalEvents, score });
       seenAlerts.add(cellId);

@@ -457,6 +457,32 @@ export function isStateAffiliatedSource(sourceName: string): boolean {
   return !!profile?.stateAffiliated;
 }
 
+/**
+ * Canonical display alias map.
+ * Maps variant feed names (with section suffixes like "World", "Business") to a
+ * shorter canonical display label used in UI and deduplication contexts.
+ */
+export const SOURCE_DISPLAY_ALIASES: Record<string, string> = {
+  'Reuters World':     'Reuters',
+  'Reuters US':        'Reuters',
+  'Reuters Business':  'Reuters',
+  'BBC World':         'BBC',
+  'BBC Mundo':         'BBC',
+  'CNN World':         'CNN',
+  'AP News':           'AP',
+  'Guardian World':    'The Guardian',
+  'DW News':           'Deutsche Welle',
+  'NPR News':          'NPR',
+};
+
+/**
+ * Returns the canonical display name for a source, collapsing section-qualified
+ * variants (e.g. "Reuters World" → "Reuters") for cleaner UI labels.
+ */
+export function normalizeSourceName(sourceName: string): string {
+  return SOURCE_DISPLAY_ALIASES[sourceName] ?? sourceName;
+}
+
 let _sourcePanelMap: Map<string, string> | null = null;
 export function getSourcePanelId(sourceName: string): string {
   if (!_sourcePanelMap) {
@@ -526,12 +552,12 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     { name: 'BBC Mundo', url: rss('https://www.bbc.com/mundo/index.xml'), lang: 'es' },
     // German (DE)
     { name: 'Tagesschau', url: rss('https://www.tagesschau.de/xml/rss2/'), lang: 'de' },
-    { name: 'Bild', url: rss('https://www.bild.de/feed/alles.xml'), lang: 'de' },
+    { name: 'Bild', url: rss('https://news.google.com/rss/search?q=site:bild.de+when:2d&hl=de&gl=DE&ceid=DE:de'), lang: 'de' },
     { name: 'Der Spiegel', url: rss('https://www.spiegel.de/schlagzeilen/tops/index.rss'), lang: 'de' },
     { name: 'Die Zeit', url: rss('https://newsfeed.zeit.de/index'), lang: 'de' },
     // Italian (IT)
     { name: 'ANSA', url: rss('https://www.ansa.it/sito/notizie/topnews/topnews_rss.xml'), lang: 'it' },
-    { name: 'Corriere della Sera', url: rss('https://www.corriere.it/rss/homepage.xml'), lang: 'it' },
+    { name: 'Corriere della Sera', url: rss('https://news.google.com/rss/search?q=site:corriere.it+when:2d&hl=it&gl=IT&ceid=IT:it'), lang: 'it' },
     { name: 'Repubblica', url: rss('https://www.repubblica.it/rss/homepage/rss2.0.xml'), lang: 'it' },
     // Dutch (NL)
     { name: 'NOS Nieuws', url: rss('https://feeds.nos.nl/nosnieuwsalgemeen'), lang: 'nl' },
@@ -546,8 +572,8 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     { name: 'DW Turkish', url: rss('https://rss.dw.com/xml/rss-tur-all'), lang: 'tr' },
     { name: 'Hurriyet', url: rss('https://www.hurriyet.com.tr/rss/anasayfa'), lang: 'tr' },
     // Polish (PL)
-    { name: 'TVN24', url: rss('https://tvn24.pl/swiat.xml'), lang: 'pl' },
-    { name: 'Polsat News', url: rss('https://www.polsatnews.pl/rss/wszystkie.xml'), lang: 'pl' },
+    { name: 'TVN24', url: rss('https://news.google.com/rss/search?q=site:tvn24.pl+when:2d&hl=pl&gl=PL&ceid=PL:pl'), lang: 'pl' },
+    { name: 'Polsat News', url: rss('https://news.google.com/rss/search?q=site:polsatnews.pl+when:2d&hl=pl&gl=PL&ceid=PL:pl'), lang: 'pl' },
     { name: 'Rzeczpospolita', url: rss('https://www.rp.pl/rss_main'), lang: 'pl' },
     // Greek (EL)
     { name: 'Kathimerini', url: rss('https://news.google.com/rss/search?q=site:kathimerini.gr+when:2d&hl=el&gl=GR&ceid=GR:el'), lang: 'el' },
@@ -569,7 +595,7 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     { name: 'BBC Middle East', url: rss('https://feeds.bbci.co.uk/news/world/middle_east/rss.xml') },
     { name: 'Al Jazeera', url: { en: rss('https://www.aljazeera.com/xml/rss/all.xml'), ar: rss('https://www.aljazeera.net/aljazeerarss/a7c186be-1adb-4b11-a982-4783e765316e/4e17ecdc-8fb9-40de-a5d6-d00f72384a51') } },
     // AlArabiya EN blocks cloud IPs — Google News fallback; AR RSS is direct
-    { name: 'Al Arabiya', url: { en: rss('https://news.google.com/rss/search?q=site:english.alarabiya.net+when:2d&hl=en-US&gl=US&ceid=US:en'), ar: rss('https://www.alarabiya.net/tools/mrss/?cat=main') } },
+    { name: 'Al Arabiya', url: { en: rss('https://news.google.com/rss/search?q=site:english.alarabiya.net+when:2d&hl=en-US&gl=US&ceid=US:en'), ar: rss('https://news.google.com/rss/search?q=site:alarabiya.net+when:2d&hl=ar&gl=SA&ceid=SA:ar') } },
     // Arab News and Times of Israel removed — 403 from cloud IPs
     { name: 'Guardian ME', url: rss('https://www.theguardian.com/world/middleeast/rss') },
     { name: 'BBC Persian', url: rss('http://feeds.bbci.co.uk/persian/tv-and-radio-37434376/rss.xml') },
@@ -579,7 +605,7 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     { name: 'Arab News', url: rss('https://news.google.com/rss/search?q=site:arabnews.com+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'The National', url: rss('https://news.google.com/rss/search?q=site:thenationalnews.com+when:2d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Oman Observer', url: rss('https://www.omanobserver.om/rssFeed/1') },
-    { name: 'Asharq Business', url: rss('https://asharqbusiness.com/rss.xml') },
+    { name: 'Asharq Business', url: rss('https://news.google.com/rss/search?q=site:asharqbusiness.com+when:3d&hl=ar&gl=SA&ceid=SA:ar') },
     { name: 'Asharq News', url: rss('https://asharq.com/snapchat/rss.xml'), lang: 'ar' },
     { name: 'Rudaw', url: rss('https://news.google.com/rss/search?q=site:rudaw.net+when:7d&hl=en&gl=US&ceid=US:en') },
   ],
@@ -591,7 +617,7 @@ const FULL_FEEDS: Record<string, Feed[]> = {
   ],
   ai: [
     { name: 'AI News', url: rss('https://news.google.com/rss/search?q=(OpenAI+OR+Anthropic+OR+Google+AI+OR+"large+language+model"+OR+ChatGPT)+when:2d&hl=en-US&gl=US&ceid=US:en') },
-    { name: 'VentureBeat AI', url: rss('https://venturebeat.com/category/ai/feed/') },
+    { name: 'VentureBeat AI', url: rss('https://news.google.com/rss/search?q=site:venturebeat.com+AI+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'The Verge AI', url: rss('https://www.theverge.com/rss/ai-artificial-intelligence/index.xml') },
     { name: 'MIT Tech Review', url: rss('https://www.technologyreview.com/topic/artificial-intelligence/feed') },
     { name: 'ArXiv AI', url: rss('https://export.arxiv.org/rss/cs.AI') },
@@ -634,7 +660,7 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     // War on the Rocks - Defense and national security analysis
     { name: 'War on the Rocks', url: rss('https://warontherocks.com/feed') },
     // AEI - American Enterprise Institute (US conservative think tank)
-    { name: 'AEI', url: rss('https://www.aei.org/feed/') },
+    { name: 'AEI', url: rss('https://news.google.com/rss/search?q=site:aei.org+when:7d&hl=en-US&gl=US&ceid=US:en') },
     // Responsible Statecraft - Foreign policy analysis (Quincy Institute)
     { name: 'Responsible Statecraft', url: rss('https://responsiblestatecraft.org/feed/') },
     // RUSI - Royal United Services Institute (UK defense & security)
@@ -645,8 +671,8 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     { name: 'Jamestown', url: rss('https://jamestown.org/feed/') },
   ],
   crisis: [
-    { name: 'CrisisWatch', url: rss('https://www.crisisgroup.org/rss') },
-    { name: 'IAEA', url: rss('https://www.iaea.org/feeds/topnews') },
+    { name: 'CrisisWatch', url: rss('https://news.google.com/rss/search?q=site:crisisgroup.org+when:7d&hl=en-US&gl=US&ceid=US:en') },
+    { name: 'IAEA', url: rss('https://news.google.com/rss/search?q=site:iaea.org+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'WHO', url: rss('https://www.who.int/rss-feeds/news-english.xml') },
     { name: 'UNHCR', url: rss('https://news.google.com/rss/search?q=site:unhcr.org+OR+UNHCR+refugees+when:3d&hl=en-US&gl=US&ceid=US:en') },
   ],
@@ -674,11 +700,11 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     { name: 'Clarín', url: rss('https://www.clarin.com/rss/lo-ultimo/'), lang: 'es' },
     { name: 'O Globo', url: rss('https://news.google.com/rss/search?q=site:oglobo.globo.com+when:1d&hl=pt-BR&gl=BR&ceid=BR:pt-419'), lang: 'pt' },
     { name: 'Folha de S.Paulo', url: rss('https://feeds.folha.uol.com.br/emcimadahora/rss091.xml'), lang: 'pt' },
-    { name: 'Brasil Paralelo', url: rss('https://www.brasilparalelo.com.br/noticias/rss.xml'), lang: 'pt' },
+    { name: 'Brasil Paralelo', url: rss('https://news.google.com/rss/search?q=site:brasilparalelo.com.br+when:7d&hl=pt-BR&gl=BR&ceid=BR:pt-419'), lang: 'pt' },
     { name: 'El Tiempo', url: rss('https://www.eltiempo.com/rss/mundo_latinoamerica.xml'), lang: 'es' },
     { name: 'La Silla Vacía', url: rss('https://www.lasillavacia.com/rss') },
-    { name: 'Primicias', url: rss('https://www.primicias.ec/feed/'), lang: 'es' },
-    { name: 'Infobae Americas', url: rss('https://www.infobae.com/feeds/rss/'), lang: 'es' },
+    { name: 'Primicias', url: rss('https://news.google.com/rss/search?q=site:primicias.ec+when:3d&hl=es-419&gl=EC&ceid=EC:es-419'), lang: 'es' },
+    { name: 'Infobae Americas', url: rss('https://news.google.com/rss/search?q=site:infobae.com+when:2d&hl=es-419&gl=AR&ceid=AR:es-419'), lang: 'es' },
     { name: 'El Universo', url: rss('https://www.eluniverso.com/arc/outboundfeeds/rss/category/noticias/?outputType=xml'), lang: 'es' },
     // Mexico
     { name: 'Mexico News Daily', url: rss('https://mexiconewsdaily.com/feed/') },
@@ -695,11 +721,11 @@ const FULL_FEEDS: Record<string, Feed[]> = {
     { name: 'South China Morning Post', url: railwayRss('https://www.scmp.com/rss/91/feed/') },
     { name: 'Reuters Asia', url: rss('https://news.google.com/rss/search?q=site:reuters.com+(China+OR+Japan+OR+Taiwan+OR+Korea)+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Xinhua', url: rss('https://news.google.com/rss/search?q=site:xinhuanet.com+OR+Xinhua+when:1d&hl=en-US&gl=US&ceid=US:en') },
-    { name: 'Japan Today', url: rss('https://japantoday.com/feed/atom') },
+    { name: 'Japan Today', url: rss('https://news.google.com/rss/search?q=site:japantoday.com+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Nikkei Asia', url: rss('https://news.google.com/rss/search?q=site:asia.nikkei.com+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Asahi Shimbun', url: rss('https://www.asahi.com/rss/asahi/newsheadlines.rdf'), lang: 'ja' },
     { name: 'The Hindu', url: rss('https://www.thehindu.com/news/national/feeder/default.rss'), lang: 'en' },
-    { name: 'Indian Express', url: rss('https://indianexpress.com/section/india/feed/') },
+    { name: 'Indian Express', url: rss('https://news.google.com/rss/search?q=site:indianexpress.com+when:2d&hl=en-IN&gl=IN&ceid=IN:en') },
     { name: 'NDTV', url: rss('https://feeds.feedburner.com/ndtvnews-top-stories') },
     { name: 'India News Network', url: rss('https://news.google.com/rss/search?q=India+diplomacy+foreign+policy+news&hl=en&gl=US&ceid=US:en') },
     { name: 'CNA', url: rss('https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml') },
@@ -743,7 +769,7 @@ const TECH_FEEDS: Record<string, Feed[]> = {
   ],
   ai: [
     { name: 'AI News', url: rss('https://news.google.com/rss/search?q=(OpenAI+OR+Anthropic+OR+Google+AI+OR+"large+language+model"+OR+ChatGPT+OR+Claude+OR+"AI+model")+when:2d&hl=en-US&gl=US&ceid=US:en') },
-    { name: 'VentureBeat AI', url: rss('https://venturebeat.com/category/ai/feed/') },
+    { name: 'VentureBeat AI', url: rss('https://news.google.com/rss/search?q=site:venturebeat.com+AI+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'The Verge AI', url: rss('https://www.theverge.com/rss/ai-artificial-intelligence/index.xml') },
     { name: 'MIT Tech Review AI', url: rss('https://www.technologyreview.com/topic/artificial-intelligence/feed') },
     { name: 'MIT Research', url: rss('https://news.mit.edu/rss/research') },
@@ -763,10 +789,10 @@ const TECH_FEEDS: Record<string, Feed[]> = {
     { name: 'The Information', url: rss('https://news.google.com/rss/search?q=site:theinformation.com+startup+OR+funding+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Fortune Term Sheet', url: rss('https://news.google.com/rss/search?q="Term+Sheet"+venture+capital+OR+startup+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'PitchBook News', url: rss('https://news.google.com/rss/search?q=site:pitchbook.com+when:7d&hl=en-US&gl=US&ceid=US:en') },
-    { name: 'CB Insights', url: rss('https://www.cbinsights.com/research/feed/') },
+    { name: 'CB Insights', url: rss('https://news.google.com/rss/search?q=site:cbinsights.com+when:7d&hl=en-US&gl=US&ceid=US:en') },
   ],
   vcblogs: [
-    { name: 'Y Combinator Blog', url: rss('https://www.ycombinator.com/blog/rss/') },
+    { name: 'Y Combinator Blog', url: rss('https://news.google.com/rss/search?q=site:ycombinator.com+blog+when:14d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'a16z Blog', url: rss('https://news.google.com/rss/search?q=site:a16z.com+OR+"Andreessen+Horowitz"+blog+when:14d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Sequoia Blog', url: rss('https://news.google.com/rss/search?q=site:sequoiacap.com+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Paul Graham Essays', url: rss('https://news.google.com/rss/search?q="Paul+Graham"+essay+OR+blog+when:30d&hl=en-US&gl=US&ceid=US:en') },
@@ -809,7 +835,7 @@ const TECH_FEEDS: Record<string, Feed[]> = {
     // Taiwan
     { name: 'Taiwan Tech', url: rss('https://news.google.com/rss/search?q=(Taiwan+startup+OR+TSMC+OR+MediaTek+OR+Foxconn)+when:7d&hl=en-US&gl=US&ceid=US:en') },
     // Latin America
-    { name: 'LAVCA (LATAM)', url: rss('https://news.google.com/rss/search?q=site:lavca.org+when:7d&hl=en-US&gl=US&ceid=US:en') },
+    { name: 'LAVCA (LATAM)', url: rss('https://news.google.com/rss/search?q=(Latin+America+venture+capital+OR+LATAM+private+equity)+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'LATAM Startups', url: rss('https://news.google.com/rss/search?q=("Latin+America"+startup+OR+LATAM+funding)+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Startups LATAM', url: rss('https://news.google.com/rss/search?q=(startup+Brazil+OR+startup+Mexico+OR+startup+Argentina+OR+startup+Colombia+OR+startup+Chile)+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Brazil Tech', url: rss('https://news.google.com/rss/search?q=(Nubank+OR+iFood+OR+Mercado+Libre+OR+Rappi+OR+VTEX)+when:7d&hl=en-US&gl=US&ceid=US:en') },
@@ -824,7 +850,7 @@ const TECH_FEEDS: Record<string, Feed[]> = {
   ],
   github: [
     { name: 'GitHub Blog', url: rss('https://github.blog/feed/') },
-    { name: 'GitHub Trending', url: rss('https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml') },
+    { name: 'GitHub Trending', url: rss('https://news.google.com/rss/search?q=GitHub+trending+repositories+when:2d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Show HN', url: rss('https://hnrss.org/show') },
     { name: 'YC Launches', url: rss('https://news.google.com/rss/search?q=("Y+Combinator"+OR+"YC+launch"+OR+"YC+W25"+OR+"YC+S25")+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Dev Events', url: rss('https://news.google.com/rss/search?q=("developer+conference"+OR+"tech+summit"+OR+"devcon"+OR+"developer+event")+when:7d&hl=en-US&gl=US&ceid=US:en') },
@@ -849,7 +875,7 @@ const TECH_FEEDS: Record<string, Feed[]> = {
     { name: 'Cloud Outages', url: rss('https://news.google.com/rss/search?q=(Azure+OR+GCP+OR+Cloudflare+OR+Slack+OR+GitHub)+outage+OR+down+when:1d&hl=en-US&gl=US&ceid=US:en') },
   ],
   security: [
-    { name: 'Krebs Security', url: rss('https://krebsonsecurity.com/feed/') },
+    { name: 'Krebs Security', url: rss('https://news.google.com/rss/search?q=site:krebsonsecurity.com+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'The Hacker News', url: rss('https://feeds.feedburner.com/TheHackersNews') },
     { name: 'Dark Reading', url: rss('https://www.darkreading.com/rss.xml') },
     { name: 'Schneier', url: rss('https://www.schneier.com/feed/') },
@@ -918,7 +944,7 @@ const TECH_FEEDS: Record<string, Feed[]> = {
   ],
   unicorns: [
     { name: 'Unicorn News', url: rss('https://news.google.com/rss/search?q=("unicorn+startup"+OR+"unicorn+valuation"+OR+"$1+billion+valuation")+when:7d&hl=en-US&gl=US&ceid=US:en') },
-    { name: 'CB Insights Unicorn', url: rss('https://news.google.com/rss/search?q=site:cbinsights.com+unicorn+when:14d&hl=en-US&gl=US&ceid=US:en') },
+    { name: 'CB Insights Unicorn', url: rss('https://news.google.com/rss/search?q=(CB+Insights+unicorn+OR+unicorn+valuation)+when:30d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Decacorn News', url: rss('https://news.google.com/rss/search?q=("decacorn"+OR+"$10+billion+valuation"+OR+"$10B+valuation")+startup+when:14d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'New Unicorns', url: rss('https://news.google.com/rss/search?q=("becomes+unicorn"+OR+"joins+unicorn"+OR+"reaches+unicorn"+OR+"achieved+unicorn")+when:14d&hl=en-US&gl=US&ceid=US:en') },
   ],
@@ -930,7 +956,7 @@ const TECH_FEEDS: Record<string, Feed[]> = {
   ],
   podcasts: [
     // Tech Podcast Episodes (via Google News - podcast hosts block RSS proxies)
-    { name: 'Acquired Episodes', url: rss('https://news.google.com/rss/search?q="Acquired+podcast"+episode+when:14d&hl=en-US&gl=US&ceid=US:en') },
+    { name: 'Acquired Episodes', url: rss('https://news.google.com/rss/search?q=Acquired+podcast+episode+when:30d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'All-In Podcast', url: rss('https://news.google.com/rss/search?q="All-In+podcast"+(Chamath+OR+Sacks+OR+Friedberg)+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'a16z Insights', url: rss('https://news.google.com/rss/search?q=("a16z"+OR+"Andreessen+Horowitz")+podcast+OR+interview+when:14d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'TWIST Episodes', url: rss('https://news.google.com/rss/search?q="This+Week+in+Startups"+Jason+Calacanis+when:14d&hl=en-US&gl=US&ceid=US:en') },
@@ -1043,7 +1069,7 @@ const HAPPY_FEEDS: Record<string, Feed[]> = {
   positive: [
     { name: 'Good News Network', url: rss('https://www.goodnewsnetwork.org/feed/') },
     { name: 'Positive.News', url: rss('https://www.positive.news/feed/') },
-    { name: 'Reasons to be Cheerful', url: rss('https://reasonstobecheerful.world/feed/') },
+    { name: 'Reasons to be Cheerful', url: rss('https://news.google.com/rss/search?q=site:reasonstobecheerful.world+when:30d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Optimist Daily', url: rss('https://www.optimistdaily.com/feed/') },
     { name: 'Upworthy', url: rss('https://www.upworthy.com/feed/') },
     { name: 'DailyGood', url: rss('https://www.dailygood.org/feed') },
@@ -1051,7 +1077,7 @@ const HAPPY_FEEDS: Record<string, Feed[]> = {
     { name: 'GOOD Magazine', url: rss('https://www.good.is/feed/') },
     { name: 'Sunny Skyz', url: rss('https://www.sunnyskyz.com/rss_tebow.php') },
     { name: 'The Better India', url: rss('https://thebetterindia.com/feed/') },
-    { name: 'My Modern Met', url: rss('https://mymodernmet.com/feed/') },
+    { name: 'My Modern Met', url: rss('https://news.google.com/rss/search?q=site:mymodernmet.com+when:7d&hl=en-US&gl=US&ceid=US:en') },
   ],
   science: [
     { name: 'GNN Science', url: rss('https://www.goodnewsnetwork.org/category/news/science/feed/') },
@@ -1061,7 +1087,7 @@ const HAPPY_FEEDS: Record<string, Feed[]> = {
     { name: 'New Scientist', url: rss('https://www.newscientist.com/feed/home/') },
     { name: 'Singularity Hub', url: rss('https://singularityhub.com/feed/') },
     { name: 'Human Progress', url: rss('https://humanprogress.org/feed/') },
-    { name: 'Greater Good (Berkeley)', url: rss('https://greatergood.berkeley.edu/site/rss/articles') },
+    { name: 'Greater Good (Berkeley)', url: rss('https://news.google.com/rss/search?q=site:greatergood.berkeley.edu+when:14d&hl=en-US&gl=US&ceid=US:en') },
   ],
   nature: [
     { name: 'GNN Animals', url: rss('https://www.goodnewsnetwork.org/category/news/animals/feed/') },
@@ -1085,36 +1111,36 @@ const HAPPY_FEEDS: Record<string, Feed[]> = {
 // Commodity variant feeds (from commodity.ts)
 const COMMODITY_FEEDS: Record<string, Feed[]> = {
   'commodity-news': [
-    { name: 'Kitco News', url: rss('https://www.kitco.com/rss/KitcoNews.xml') },
+    { name: 'Kitco News', url: rss('https://news.google.com/rss/search?q=site:kitco.com+gold+silver+when:2d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Mining.com', url: rss('https://www.mining.com/feed/') },
     { name: 'Bloomberg Commodities', url: rss('https://news.google.com/rss/search?q=site:bloomberg.com+commodities+OR+metals+OR+mining+when:1d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Reuters Commodities', url: rss('https://news.google.com/rss/search?q=site:reuters.com+commodities+OR+metals+OR+mining+when:1d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'S&P Global Commodity', url: rss('https://news.google.com/rss/search?q=site:spglobal.com+commodities+metals+when:3d&hl=en-US&gl=US&ceid=US:en') },
-    { name: 'Commodity Trade Mantra', url: rss('https://www.commoditytrademantra.com/feed/') },
+    { name: 'Commodity Trade Mantra', url: rss('https://news.google.com/rss/search?q=(commodity+trading+OR+futures+market)+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'CNBC Commodities', url: rss('https://news.google.com/rss/search?q=site:cnbc.com+(commodities+OR+metals+OR+gold+OR+copper)+when:1d&hl=en-US&gl=US&ceid=US:en') },
   ],
   'gold-silver': [
-    { name: 'Kitco Gold', url: rss('https://www.kitco.com/rss/KitcoGold.xml') },
+    { name: 'Kitco Gold', url: rss('https://news.google.com/rss/search?q=site:kitco.com+gold+price+when:2d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Gold Price News', url: rss('https://news.google.com/rss/search?q=(gold+price+OR+"gold+market"+OR+bullion+OR+LBMA)+when:1d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Silver Price News', url: rss('https://news.google.com/rss/search?q=(silver+price+OR+"silver+market"+OR+"silver+futures")+when:2d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Precious Metals', url: rss('https://news.google.com/rss/search?q=("precious+metals"+OR+platinum+OR+palladium+OR+"gold+ETF"+OR+GLD+OR+SLV)+when:2d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'World Gold Council', url: rss('https://news.google.com/rss/search?q="World+Gold+Council"+OR+"central+bank+gold"+OR+"gold+reserves"+when:7d&hl=en-US&gl=US&ceid=US:en') },
-    { name: 'GoldSeek', url: rss('https://news.goldseek.com/GoldSeek/rss.xml') },
-    { name: 'SilverSeek', url: rss('https://news.silverseek.com/SilverSeek/rss.xml') },
+    { name: 'GoldSeek', url: rss('https://news.google.com/rss/search?q=gold+market+analysis+when:3d&hl=en-US&gl=US&ceid=US:en') },
+    { name: 'SilverSeek', url: rss('https://news.google.com/rss/search?q=silver+market+analysis+when:3d&hl=en-US&gl=US&ceid=US:en') },
   ],
   energy: [
     { name: 'OilPrice.com', url: rss('https://oilprice.com/rss/main') },
     { name: 'Rigzone', url: rss('https://www.rigzone.com/news/rss/rigzone_latest.aspx') },
-    { name: 'EIA Reports', url: rss('https://www.eia.gov/rss/press_room.xml') },
+    { name: 'EIA Reports', url: rss('https://news.google.com/rss/search?q=site:eia.gov+energy+report+when:7d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'OPEC News', url: rss('https://news.google.com/rss/search?q=(OPEC+OR+"oil+price"+OR+"crude+oil"+OR+WTI+OR+Brent+OR+"oil+production")+when:1d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Natural Gas News', url: rss('https://news.google.com/rss/search?q=("natural+gas"+OR+LNG+OR+"gas+price"+OR+"Henry+Hub")+when:1d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Energy Intel', url: rss('https://news.google.com/rss/search?q=(energy+commodities+OR+"energy+market"+OR+"energy+prices")+when:2d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Reuters Energy', url: rss('https://news.google.com/rss/search?q=site:reuters.com+(oil+OR+gas+OR+energy)+when:1d&hl=en-US&gl=US&ceid=US:en') },
   ],
   'mining-news': [
-    { name: 'Mining Journal', url: rss('https://www.mining-journal.com/feed/') },
-    { name: 'Northern Miner', url: rss('https://www.northernminer.com/feed/') },
-    { name: 'Mining Weekly', url: rss('https://www.miningweekly.com/rss/') },
+    { name: 'Mining Journal', url: rss('https://news.google.com/rss/search?q=site:mining-journal.com+when:3d&hl=en-US&gl=US&ceid=US:en') },
+    { name: 'Northern Miner', url: rss('https://news.google.com/rss/search?q=site:northernminer.com+when:3d&hl=en-US&gl=US&ceid=US:en') },
+    { name: 'Mining Weekly', url: rss('https://news.google.com/rss/search?q=site:miningweekly.com+when:3d&hl=en-US&gl=US&ceid=US:en') },
     { name: 'Mining Technology', url: rss('https://www.mining-technology.com/feed/') },
     { name: 'Australian Mining', url: rss('https://www.australianmining.com.au/feed/') },
     { name: 'Mine Web (SNL)', url: rss('https://news.google.com/rss/search?q=("mining+company"+OR+"mine+production"+OR+"mining+operations")+when:2d&hl=en-US&gl=US&ceid=US:en') },
@@ -1213,7 +1239,7 @@ export const SOURCE_REGION_MAP: Record<string, { labelKey: string; feedKeys: str
 export const INTEL_SOURCES: Feed[] = [
   // Defense & Security (Tier 1)
   { name: 'Defense One', url: rss('https://www.defenseone.com/rss/all/'), type: 'defense' },
-  { name: 'Breaking Defense', url: rss('https://breakingdefense.com/feed/'), type: 'defense' },
+  { name: 'Breaking Defense', url: rss('https://news.google.com/rss/search?q=site:breakingdefense.com+when:3d&hl=en-US&gl=US&ceid=US:en'), type: 'defense' },
   { name: 'The War Zone', url: rss('https://www.twz.com/feed'), type: 'defense' },
   { name: 'Defense News', url: rss('https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml'), type: 'defense' },
   { name: 'Janes', url: rss('https://news.google.com/rss/search?q=site:janes.com+when:3d&hl=en-US&gl=US&ceid=US:en'), type: 'defense' },
@@ -1221,7 +1247,7 @@ export const INTEL_SOURCES: Feed[] = [
   { name: 'Task & Purpose', url: rss('https://taskandpurpose.com/feed/'), type: 'defense' },
   { name: 'USNI News', url: rss('https://news.usni.org/feed'), type: 'defense' },
   { name: 'gCaptain', url: rss('https://gcaptain.com/feed/'), type: 'defense' },
-  { name: 'Oryx OSINT', url: rss('https://www.oryxspioenkop.com/feeds/posts/default?alt=rss'), type: 'defense' },
+  { name: 'Oryx OSINT', url: rss('https://news.google.com/rss/search?q=site:oryxspioenkop.com+when:30d&hl=en-US&gl=US&ceid=US:en'), type: 'defense' },
   { name: 'UK MOD', url: rss('https://www.gov.uk/government/organisations/ministry-of-defence.atom'), type: 'defense' },
   { name: 'CSIS', url: rss('https://news.google.com/rss/search?q=site:csis.org&hl=en&gl=US&ceid=US:en'), type: 'defense' },
 
@@ -1237,7 +1263,7 @@ export const INTEL_SOURCES: Feed[] = [
   { name: 'RAND', url: rss('https://news.google.com/rss/search?q=site:rand.org+when:7d&hl=en-US&gl=US&ceid=US:en'), type: 'research' },
   { name: 'Brookings', url: rss('https://news.google.com/rss/search?q=site:brookings.edu&hl=en&gl=US&ceid=US:en'), type: 'research' },
   { name: 'Carnegie', url: rss('https://news.google.com/rss/search?q=site:carnegieendowment.org&hl=en&gl=US&ceid=US:en'), type: 'research' },
-  { name: 'FAS', url: rss('https://news.google.com/rss/search?q=site:fas.org+nuclear+weapons+security&hl=en&gl=US&ceid=US:en'), type: 'research' },
+  { name: 'FAS', url: rss('https://news.google.com/rss/search?q=site:fas.org+when:30d&hl=en-US&gl=US&ceid=US:en'), type: 'research' },
   { name: 'NTI', url: rss('https://news.google.com/rss/search?q=site:nti.org+when:30d&hl=en-US&gl=US&ceid=US:en'), type: 'research' },
   { name: 'RUSI', url: rss('https://news.google.com/rss/search?q=site:rusi.org+when:7d&hl=en-US&gl=US&ceid=US:en'), type: 'research' },
   { name: 'Wilson Center', url: rss('https://news.google.com/rss/search?q=site:wilsoncenter.org+when:7d&hl=en-US&gl=US&ceid=US:en'), type: 'research' },
@@ -1252,7 +1278,7 @@ export const INTEL_SOURCES: Feed[] = [
 
   // OSINT & Monitoring (Tier 2)
   { name: 'Bellingcat', url: rss('https://news.google.com/rss/search?q=site:bellingcat.com+when:30d&hl=en-US&gl=US&ceid=US:en'), type: 'osint' },
-  { name: 'Krebs Security', url: rss('https://krebsonsecurity.com/feed/'), type: 'cyber' },
+  { name: 'Krebs Security', url: rss('https://news.google.com/rss/search?q=site:krebsonsecurity.com+when:7d&hl=en-US&gl=US&ceid=US:en'), type: 'cyber' },
   { name: 'Ransomware.live', url: rss('https://www.ransomware.live/rss.xml'), type: 'cyber' },
 
   // Economic & Food Security (Tier 2)

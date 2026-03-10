@@ -88,6 +88,8 @@ class FocalPointDetector {
   ): Map<string, EntityMention> {
     const mentions = new Map<string, EntityMention>();
     const index = getEntityIndex();
+    const diversitySum = new Map<string, number>();
+    const diversityCount = new Map<string, number>();
 
     for (const [clusterId, context] of entityContexts) {
       const cluster = clusters.find(c => c.id === clusterId);
@@ -121,6 +123,20 @@ class FocalPointDetector {
             topHeadlines: titleHasEntity ? [{ title: cluster.primaryTitle, url: cluster.primaryLink }] : [],
           });
         }
+
+        // Accumulate source-diversity score from each backing cluster
+        if (cluster.sourceDiversityScore !== undefined) {
+          diversitySum.set(entity.entityId, (diversitySum.get(entity.entityId) ?? 0) + cluster.sourceDiversityScore);
+          diversityCount.set(entity.entityId, (diversityCount.get(entity.entityId) ?? 0) + 1);
+        }
+      }
+    }
+
+    // Attach averaged source-diversity score to each mention
+    for (const [entityId, mention] of mentions) {
+      const count = diversityCount.get(entityId) ?? 0;
+      if (count > 0) {
+        mention.avgSourceDiversityScore = (diversitySum.get(entityId) ?? 0) / count;
       }
     }
 
@@ -245,7 +261,8 @@ class FocalPointDetector {
     const base = Math.min(20, mention.mentionCount * 4);
     const velocity = Math.min(10, (mention.mentionCount / 24) * 2);
     const confidence = mention.avgConfidence * 10;
-    return base + velocity + confidence;
+    const diversityBonus = Math.round(((mention.avgSourceDiversityScore ?? 0) / 100) * 10);
+    return base + velocity + confidence + diversityBonus;
   }
 
   private calculateSignalScore(signals: CountrySignalCluster): number {

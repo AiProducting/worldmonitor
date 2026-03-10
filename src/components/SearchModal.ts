@@ -357,7 +357,7 @@ export class SearchModal {
 
       const icon = document.createElement('span');
       icon.className = 'search-result-icon';
-      icon.textContent = '🕐';
+      icon.textContent = 'R';
 
       const title = document.createElement('span');
       title.className = 'search-result-title';

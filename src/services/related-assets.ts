@@ -162,3 +162,26 @@ export function getNearbyInfrastructure(
 export { haversineDistanceKm };
 
 export { MAX_DISTANCE_KM };
+
+/** Importance weight per asset type (higher = more strategically significant) */
+const ASSET_IMPORTANCE_WEIGHT: Record<AssetType, number> = {
+  nuclear: 5,
+  pipeline: 3,
+  cable: 3,
+  base: 2,
+  datacenter: 2,
+};
+
+/**
+ * Compute a 0–100 proximity score reflecting the strategic importance of
+ * asset types mentioned across the provided titles.
+ * Each detected asset type contributes its importance weight; the total is
+ * normalised against the theoretical maximum (all types present).
+ */
+export function getAssetProximityScore(titles: string[]): number {
+  const detectedTypes = detectAssetTypes(titles);
+  if (detectedTypes.length === 0) return 0;
+  const weightSum = detectedTypes.reduce((acc, t) => acc + ASSET_IMPORTANCE_WEIGHT[t], 0);
+  const maxWeight = Object.values(ASSET_IMPORTANCE_WEIGHT).reduce((a, b) => a + b, 0);
+  return Math.round((weightSum / maxWeight) * 100);
+}

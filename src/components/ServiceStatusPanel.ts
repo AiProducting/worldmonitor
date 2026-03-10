@@ -169,7 +169,7 @@ export class ServiceStatusPanel extends Panel {
       ),
       h('ul', { className: 'service-status-desktop-list' },
         ...checks.map(check =>
-          h('li', null, `${check.ready ? '✅' : '⚠️'} ${check.label}`),
+          h('li', null, `${check.ready ? '[OK]' : '[!]'} ${check.label}`),
         ),
       ),
       h('details', { className: 'service-status-non-parity' },

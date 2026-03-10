@@ -553,6 +553,15 @@ export class InsightsPanel extends Panel {
         badges.push(`<span class="insight-badge velocity ${safeThreat}">${escapeHtml(story.category)}</span>`);
       }
 
+      if (story.velocity?.level === 'rising') {
+        badges.push(`<span class="insight-badge velocity">↑ ${story.velocity.sourcesPerHour}/hr</span>`);
+      }
+
+      if (typeof story.importanceScore === 'number' && story.importanceScore >= 70) {
+        const rank = story.importanceScore >= 90 ? 'high' : 'elevated';
+        badges.push(`<span class="insight-badge importance importance-${rank}">IMP ${story.importanceScore}</span>`);
+      }
+
       return `
         <div class="insight-story">
           <div class="insight-story-header">
@@ -587,7 +596,7 @@ export class InsightsPanel extends Panel {
   private renderWorldBrief(brief: string): string {
     return `
       <div class="insights-brief">
-        <div class="insights-section-title">${SITE_VARIANT === 'tech' ? '🚀 TECH BRIEF' : '🌍 WORLD BRIEF'}</div>
+        <div class="insights-section-title">${SITE_VARIANT === 'tech' ? 'TECH BRIEF' : 'WORLD BRIEF'}</div>
         <div class="insights-brief-text">${escapeHtml(brief)}</div>
       </div>
     `;
@@ -617,6 +626,11 @@ export class InsightsPanel extends Panel {
 
       if (cluster.isAlert) {
         badges.push('<span class="insight-badge alert">⚠ ALERT</span>');
+      }
+
+      if (typeof cluster.sourceDiversityScore === 'number' && cluster.sourceDiversityScore >= 50) {
+        const divRank = cluster.sourceDiversityScore >= 80 ? 'high' : 'med';
+        badges.push(`<span class="insight-badge diversity diversity-${divRank}">DIV ${cluster.sourceDiversityScore}</span>`);
       }
 
       return `
@@ -717,7 +731,7 @@ export class InsightsPanel extends Panel {
             <span class="insight-story-title">${escapeHtml(story.title.slice(0, 80))}${story.title.length > 80 ? '...' : ''}</span>
           </div>
           <div class="insight-badges">
-            <span class="insight-badge ml-detected">🔬 ${perspectiveName}: ${(perspectiveScore * 100).toFixed(0)}%</span>
+            <span class="insight-badge ml-detected">ML ${perspectiveName}: ${(perspectiveScore * 100).toFixed(0)}%</span>
           </div>
         </div>
       `;
@@ -725,7 +739,7 @@ export class InsightsPanel extends Panel {
 
     return `
       <div class="insights-section insights-missed">
-        <div class="insights-section-title">🎯 ML DETECTED</div>
+        <div class="insights-section-title">ML DETECTED</div>
         ${storiesHtml}
       </div>
     `;
@@ -738,14 +752,14 @@ export class InsightsPanel extends Panel {
 
     const zonesHtml = this.lastConvergenceZones.slice(0, 3).map(zone => {
       const signalIcons: Record<string, string> = {
-        internet_outage: '🌐',
-        military_flight: '✈️',
-        military_vessel: '🚢',
-        protest: '🪧',
-        ais_disruption: '⚓',
+        internet_outage: '[NET]',
+        military_flight: '[AIR]',
+        military_vessel: '[SEA]',
+        protest: '[UNR]',
+        ais_disruption: '[AIS]',
       };
 
-      const icons = zone.signalTypes.map(t => signalIcons[t] || '📍').join('');
+      const icons = zone.signalTypes.map(t => signalIcons[t] || '[SIG]').join(' ');
 
       return `
         <div class="convergence-zone">
@@ -758,7 +772,7 @@ export class InsightsPanel extends Panel {
 
     return `
       <div class="insights-section insights-convergence">
-        <div class="insights-section-title">📍 GEOGRAPHIC CONVERGENCE</div>
+        <div class="insights-section-title">GEOGRAPHIC CONVERGENCE</div>
         ${zonesHtml}
       </div>
     `;
@@ -776,12 +790,12 @@ export class InsightsPanel extends Panel {
     }
 
     const signalIcons: Record<string, string> = {
-      internet_outage: '🌐',
-      military_flight: '✈️',
-      military_vessel: '⚓',
-      protest: '📢',
-      ais_disruption: '🚢',
-      active_strike: '💥',
+      internet_outage: '[NET]',
+      military_flight: '[AIR]',
+      military_vessel: '[SEA]',
+      protest: '[UNR]',
+      ais_disruption: '[AIS]',
+      active_strike: '[STR]',
     };
 
     const focalPointsHtml = correlatedFPs.map(fp => {
@@ -808,7 +822,7 @@ export class InsightsPanel extends Panel {
 
     return `
       <div class="insights-section insights-focal">
-        <div class="insights-section-title">🎯 FOCAL POINTS</div>
+        <div class="insights-section-title">FOCAL POINTS</div>
         ${focalPointsHtml}
       </div>
     `;
@@ -817,7 +831,7 @@ export class InsightsPanel extends Panel {
   private renderDisabledState(): void {
     this.setContent(`
       <div class="insights-disabled">
-        <div class="insights-disabled-icon">⚡</div>
+        <div class="insights-disabled-icon">!</div>
         <div class="insights-disabled-title">${t('components.insights.insightsDisabledTitle')}</div>
         <div class="insights-disabled-hint">${t('components.insights.insightsDisabledHint')}</div>
       </div>

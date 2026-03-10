@@ -107,3 +107,55 @@ export async function fetchStockAnalysisHistory(
   }
   return history;
 }
+
+export interface StockSignalTrendStats {
+  symbol: string;
+  /** The most frequently occurring signal value across snapshots */
+  dominantSignal: string;
+  bullCount: number;
+  bearCount: number;
+  neutralCount: number;
+  /** Number of consecutive snapshots (from most recent) sharing the same signal */
+  recentSignalStreak: number;
+}
+
+/**
+ * Compute signal distribution and streak stats for a symbol's snapshot history.
+ * Returns null if no snapshots are available for the symbol.
+ */
+export function getHistorySignalTrendStats(
+  history: StockAnalysisHistory,
+  symbol: string,
+): StockSignalTrendStats | null {
+  const snapshots = history[symbol];
+  if (!snapshots || snapshots.length === 0) return null;
+
+  let bullCount = 0;
+  let bearCount = 0;
+  let neutralCount = 0;
+
+  for (const snap of snapshots) {
+    const sig = (snap.signal ?? '').toLowerCase();
+    if (sig.includes('bull')) bullCount++;
+    else if (sig.includes('bear')) bearCount++;
+    else neutralCount++;
+  }
+
+  const dominantSignal =
+    bullCount >= bearCount && bullCount >= neutralCount
+      ? 'bullish'
+      : bearCount >= neutralCount
+        ? 'bearish'
+        : 'neutral';
+
+  // Count consecutive streak from most-recent snapshot (index 0 = newest)
+  let recentSignalStreak = 0;
+  const firstSig = (snapshots[0]?.signal ?? '').toLowerCase();
+  for (const snap of snapshots) {
+    const sig = (snap.signal ?? '').toLowerCase();
+    if (sig === firstSig) recentSignalStreak++;
+    else break;
+  }
+
+  return { symbol, dominantSignal, bullCount, bearCount, neutralCount, recentSignalStreak };
+}

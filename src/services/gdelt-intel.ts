@@ -29,6 +29,10 @@ export interface TopicIntelligence {
   topic: IntelTopic;
   articles: GdeltArticle[];
   fetchedAt: Date;
+  /** Average GDELT tone score across articles with tone data (-100 to +100) */
+  avgTone?: number;
+  /** Human-readable label derived from avgTone */
+  toneLabel?: 'very negative' | 'negative' | 'neutral' | 'positive' | 'strongly positive';
 }
 
 export const INTEL_TOPICS: IntelTopic[] = [
@@ -133,6 +137,20 @@ const emptyGdeltFallback: SearchGdeltDocumentsResponse = { articles: [], query: 
 const CACHE_TTL = 5 * 60 * 1000;
 const articleCache = new Map<string, { articles: GdeltArticle[]; timestamp: number }>();
 
+function computeAvgTone(articles: GdeltArticle[]): number | undefined {
+  const toned = articles.filter(a => a.tone !== undefined);
+  if (toned.length === 0) return undefined;
+  return toned.reduce((s, a) => s + a.tone!, 0) / toned.length;
+}
+
+function computeToneLabel(avg: number): TopicIntelligence['toneLabel'] {
+  if (avg <= -5) return 'very negative';
+  if (avg <= -2) return 'negative';
+  if (avg < 2) return 'neutral';
+  if (avg < 5) return 'positive';
+  return 'strongly positive';
+}
+
 /** Map proto GdeltArticle (all required strings) to service GdeltArticle (optional fields) */
 function toGdeltArticle(a: ProtoGdeltArticle): GdeltArticle {
   return {
@@ -186,10 +204,13 @@ export async function fetchHotspotContext(hotspot: Hotspot): Promise<GdeltArticl
 
 export async function fetchTopicIntelligence(topic: IntelTopic): Promise<TopicIntelligence> {
   const articles = await fetchGdeltArticles(topic.query, 10, '24h');
+  const avgTone = computeAvgTone(articles);
   return {
     topic,
     articles,
     fetchedAt: new Date(),
+    avgTone,
+    toneLabel: avgTone !== undefined ? computeToneLabel(avgTone) : undefined,
   };
 }
 
@@ -273,7 +294,8 @@ export async function fetchPositiveGdeltArticles(
 
 export async function fetchPositiveTopicIntelligence(topic: IntelTopic): Promise<TopicIntelligence> {
   const articles = await fetchPositiveGdeltArticles(topic.query);
-  return { topic, articles, fetchedAt: new Date() };
+  const avgTone = computeAvgTone(articles);
+  return { topic, articles, fetchedAt: new Date(), avgTone, toneLabel: avgTone !== undefined ? computeToneLabel(avgTone) : undefined };
 }
 
 export async function fetchAllPositiveTopicIntelligence(): Promise<TopicIntelligence[]> {
