@@ -646,6 +646,14 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
+    this.lazyPanel('cyber-threats', () =>
+      import('@/components/CyberThreatPanel').then(m => {
+        const p = new m.CyberThreatPanel();
+        p.setThreatClickHandler((lat: number, lon: number) => { this.ctx.map?.setCenter(lat, lon); });
+        return p;
+      }),
+    );
+
     this.lazyPanel('population-exposure', () =>
       import('@/components/PopulationExposurePanel').then(m => new m.PopulationExposurePanel()),
     );

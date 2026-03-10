@@ -50,6 +50,7 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
   seismology: { name: 'Seismology', enabled: true, priority: 2 },
   'natural-hazards': { name: 'Natural Hazards', enabled: true, priority: 2 },
+  'cyber-threats': { name: 'Cyber Threats', enabled: true, priority: 2 },
 };
 
 // Map layers for geopolitical view

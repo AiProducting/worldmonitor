@@ -1796,6 +1796,7 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setCyberThreats(this.ctx.cyberThreatsCache);
       this.ctx.map?.setLayerReady('cyberThreats', this.ctx.cyberThreatsCache.length > 0);
       ingestCyberThreatsForCII(this.ctx.cyberThreatsCache);
+      this.callPanel('cyber-threats', 'setThreats', this.ctx.cyberThreatsCache);
       this.refreshCiiAndBrief();
       this.ctx.statusPanel?.updateFeed('Cyber Threats', { status: 'ok', itemCount: this.ctx.cyberThreatsCache.length });
       return;
@@ -1807,12 +1808,14 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setCyberThreats(threats);
       this.ctx.map?.setLayerReady('cyberThreats', threats.length > 0);
       ingestCyberThreatsForCII(threats);
+      this.callPanel('cyber-threats', 'setThreats', threats);
       this.refreshCiiAndBrief();
       this.ctx.statusPanel?.updateFeed('Cyber Threats', { status: 'ok', itemCount: threats.length });
       this.ctx.statusPanel?.updateApi('Cyber Threats API', { status: 'ok' });
       dataFreshness.recordUpdate('cyber_threats', threats.length);
     } catch (error) {
       this.ctx.map?.setLayerReady('cyberThreats', false);
+      this.callPanel('cyber-threats', 'setThreats', []);
       this.ctx.statusPanel?.updateFeed('Cyber Threats', { status: 'error', errorMessage: String(error) });
       this.ctx.statusPanel?.updateApi('Cyber Threats API', { status: 'error' });
       dataFreshness.recordError('cyber_threats', String(error));
