@@ -59,6 +59,7 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'cable-health': { name: 'Undersea Cable Health', enabled: true, priority: 2 },
   'gps-jamming': { name: 'GPS/GNSS Interference', enabled: true, priority: 2 },
   'flight-delays': { name: 'Flight Delays', enabled: true, priority: 2 },
+  'iran-events': { name: 'Iran & Proxy Events', enabled: true, priority: 1 },
 };
 
 // Map layers for geopolitical view
