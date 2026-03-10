@@ -436,7 +436,7 @@ export class DataLoaderManager implements AppModule {
     if (SITE_VARIANT !== 'happy' && !isDesktopRuntime() && this.ctx.mapLayers.ais) tasks.push({ name: 'ais', task: () => runGuarded('ais', () => this.loadAisSignals()) });
     if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cables', task: () => runGuarded('cables', () => this.loadCableActivity()) });
     if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.cables || Object.prototype.hasOwnProperty.call(DEFAULT_PANELS, 'cable-health'))) tasks.push({ name: 'cableHealth', task: () => runGuarded('cableHealth', () => this.loadCableHealth()) });
-    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.flights) tasks.push({ name: 'flights', task: () => runGuarded('flights', () => this.loadFlightDelays()) });
+    if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.flights || Object.prototype.hasOwnProperty.call(DEFAULT_PANELS, 'flight-delays'))) tasks.push({ name: 'flights', task: () => runGuarded('flights', () => this.loadFlightDelays()) });
     if (SITE_VARIANT !== 'happy' && CYBER_LAYER_ENABLED && this.ctx.mapLayers.cyberThreats) tasks.push({ name: 'cyberThreats', task: () => runGuarded('cyberThreats', () => this.loadCyberThreats()) });
     if (SITE_VARIANT !== 'happy' && !isDesktopRuntime()) tasks.push({ name: 'iranAttacks', task: () => runGuarded('iranAttacks', () => this.loadIranEvents()) });
     if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.techEvents || SITE_VARIANT === 'tech')) tasks.push({ name: 'techEvents', task: () => runGuarded('techEvents', () => this.loadTechEvents()) });
@@ -2009,6 +2009,7 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setFlightDelays(delays);
       this.ctx.map?.setLayerReady('flights', delays.length > 0);
       this.ctx.intelligenceCache.flightDelays = delays;
+      this.callPanel('flight-delays', 'setData', delays);
       const severe = delays.filter(d => d.severity === 'major' || d.severity === 'severe' || d.delayType === 'closure');
       if (severe.length > 0) ingestAviationForCII(severe);
       this.ctx.statusPanel?.updateFeed('Flights', {
@@ -2018,6 +2019,7 @@ export class DataLoaderManager implements AppModule {
       this.ctx.statusPanel?.updateApi('FAA', { status: 'ok' });
     } catch (error) {
       this.ctx.map?.setLayerReady('flights', false);
+      this.callPanel('flight-delays', 'showError');
       this.ctx.statusPanel?.updateFeed('Flights', { status: 'error', errorMessage: String(error) });
       this.ctx.statusPanel?.updateApi('FAA', { status: 'error' });
     }

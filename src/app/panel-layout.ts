@@ -706,6 +706,14 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
+    this.lazyPanel('flight-delays', () =>
+      import('@/components/FlightDelaysPanel').then(m => {
+        const p = new m.FlightDelaysPanel();
+        p.setClickHandler((lat: number, lon: number) => { this.ctx.map?.setCenter(lat, lon); });
+        return p;
+      }),
+    );
+
     this.lazyPanel('population-exposure', () =>
       import('@/components/PopulationExposurePanel').then(m => new m.PopulationExposurePanel()),
     );
