@@ -1473,9 +1473,11 @@ export class DataLoaderManager implements AppModule {
           this.ctx.map?.setLayerReady('outages', outages.length > 0);
           this.ctx.statusPanel?.updateFeed('NetBlocks', { status: 'ok', itemCount: outages.length });
         }
+        this.callPanel('internet-outages', 'setOutages', outages);
       } catch (error) {
         console.error('[Intelligence] Outages fetch failed:', error);
         dataFreshness.recordError('outages', String(error));
+        this.callPanel('internet-outages', 'setOutages', []);
       }
     })());
 

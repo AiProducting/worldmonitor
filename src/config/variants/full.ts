@@ -53,6 +53,7 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'cyber-threats': { name: 'Cyber Threats', enabled: true, priority: 2 },
   'social-unrest': { name: 'Social Unrest', enabled: true, priority: 2 },
   'military-activity': { name: 'Military Activity', enabled: true, priority: 1 },
+  'internet-outages': { name: 'Internet Outages', enabled: true, priority: 2 },
 };
 
 // Map layers for geopolitical view

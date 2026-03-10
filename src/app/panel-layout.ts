@@ -670,6 +670,14 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
+    this.lazyPanel('internet-outages', () =>
+      import('@/components/InternetOutagePanel').then(m => {
+        const p = new m.InternetOutagePanel();
+        p.setOutageClickHandler((lat: number, lon: number) => { this.ctx.map?.setCenter(lat, lon); });
+        return p;
+      }),
+    );
+
     this.lazyPanel('population-exposure', () =>
       import('@/components/PopulationExposurePanel').then(m => new m.PopulationExposurePanel()),
     );
