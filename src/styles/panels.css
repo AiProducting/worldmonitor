@@ -2227,3 +2227,15 @@
   border-top: 1px solid var(--col-border, #1e293b);
   padding-top: 6px;
 }
+
+/* ─── NaturalHazardsPanel (.nhp-) ──────────────────────── */
+.nhp-overview { display: flex; flex-direction: column; gap: 6px; }
+.nhp-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.nhp-pill { font-size: 0.72rem; padding: 2px 7px; border-radius: 9999px; border: 1px solid; font-weight: 600; background: transparent; }
+.nhp-cat-header { font-size: 0.78rem; font-weight: 700; margin-top: 4px; }
+.nhp-cat-count { font-weight: 400; opacity: 0.7; }
+.nhp-event { display: flex; justify-content: space-between; align-items: flex-start; font-size: 0.75rem; padding: 3px 0 3px 1rem; gap: 8px; }
+.nhp-event:hover { background: var(--col-bg-hover, rgba(255,255,255,0.04)); border-radius: 4px; }
+.nhp-event-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--col-text, #e2e8f0); }
+.nhp-event-time { flex-shrink: 0; font-size: 0.68rem; color: var(--col-text-muted, #64748b); }
+.nhp-more { font-size: 0.68rem; color: var(--col-text-muted, #64748b); padding-left: 1rem; font-style: italic; }

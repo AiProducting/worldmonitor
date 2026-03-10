@@ -1374,6 +1374,7 @@ export class DataLoaderManager implements AppModule {
 
     if (eonetResult.status === 'fulfilled') {
       this.ctx.map?.setNaturalEvents(eonetResult.value);
+      this.callPanel('natural-hazards', 'setEvents', eonetResult.value);
       this.ctx.statusPanel?.updateFeed('EONET', {
         status: 'ok',
         itemCount: eonetResult.value.length,
@@ -1381,6 +1382,7 @@ export class DataLoaderManager implements AppModule {
       this.ctx.statusPanel?.updateApi('NASA EONET', { status: 'ok' });
     } else {
       this.ctx.map?.setNaturalEvents([]);
+      this.callPanel('natural-hazards', 'setEvents', []);
       this.ctx.statusPanel?.updateFeed('EONET', { status: 'error', errorMessage: String(eonetResult.reason) });
       this.ctx.statusPanel?.updateApi('NASA EONET', { status: 'error' });
     }
