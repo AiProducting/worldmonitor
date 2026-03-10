@@ -1450,10 +1450,12 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setLayerReady('weather', alerts.length > 0);
       this.ctx.statusPanel?.updateFeed('Weather', { status: 'ok', itemCount: alerts.length });
       dataFreshness.recordUpdate('weather', alerts.length);
+      this.callPanel('weather-alerts', 'setAlerts', alerts);
     } catch (error) {
       this.ctx.map?.setLayerReady('weather', false);
       this.ctx.statusPanel?.updateFeed('Weather', { status: 'error' });
       dataFreshness.recordError('weather', String(error));
+      this.callPanel('weather-alerts', 'setAlerts', []);
     }
   }
 

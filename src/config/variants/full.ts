@@ -54,6 +54,7 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'social-unrest': { name: 'Social Unrest', enabled: true, priority: 2 },
   'military-activity': { name: 'Military Activity', enabled: true, priority: 1 },
   'internet-outages': { name: 'Internet Outages', enabled: true, priority: 2 },
+  'weather-alerts': { name: 'Weather Alerts', enabled: true, priority: 2 },
 };
 
 // Map layers for geopolitical view
