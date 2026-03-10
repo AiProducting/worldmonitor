@@ -686,6 +686,14 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
+    this.lazyPanel('ais-disruptions', () =>
+      import('@/components/AisDisruptionPanel').then(m => {
+        const p = new m.AisDisruptionPanel();
+        p.setClickHandler((lat: number, lon: number) => { this.ctx.map?.setCenter(lat, lon); });
+        return p;
+      }),
+    );
+
     this.lazyPanel('population-exposure', () =>
       import('@/components/PopulationExposurePanel').then(m => new m.PopulationExposurePanel()),
     );

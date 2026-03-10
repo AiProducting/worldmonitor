@@ -1851,6 +1851,7 @@ export class DataLoaderManager implements AppModule {
       const aisStatus = getAisStatus();
       console.log('[Ships] Events:', { disruptions: disruptions.length, density: density.length, vessels: aisStatus.vessels });
       this.ctx.map?.setAisData(disruptions, density);
+      this.callPanel('ais-disruptions', 'setData', disruptions, density);
       signalAggregator.ingestAisDisruptions(disruptions);
       ingestAisDisruptionsForCII(disruptions);
       this.refreshCiiAndBrief();
@@ -1882,6 +1883,7 @@ export class DataLoaderManager implements AppModule {
       }
     } catch (error) {
       this.ctx.map?.setLayerReady('ais', false);
+      this.callPanel('ais-disruptions', 'setData', [], []);
       this.ctx.statusPanel?.updateFeed('Shipping', { status: 'error', errorMessage: String(error) });
       this.ctx.statusPanel?.updateApi('AISStream', { status: 'error' });
       dataFreshness.recordError('ais', String(error));
