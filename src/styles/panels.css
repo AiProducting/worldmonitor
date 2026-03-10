@@ -2259,3 +2259,23 @@
 .ctp-countries{font-size:.62rem;color:var(--text-secondary,#94a3b8);margin-top:.3rem;padding-top:.3rem;border-top:1px solid var(--border,#1e293b)}
 .ctp-countries-label{font-weight:600}
 .ctp-country{margin-left:.3rem}
+
+/* ── SocialUnrestPanel (.sup-*) ───────────────── */
+.sup-overview{display:flex;flex-direction:column;gap:.4rem}
+.sup-sev-bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:.2rem}
+.sup-sev-seg{height:100%}
+.sup-pills{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.3rem}
+.sup-pill{font-size:.6rem;font-weight:600;padding:.1rem .4rem;border:1px solid var(--border,#334155);border-radius:3px;color:var(--text-secondary,#94a3b8)}
+.sup-country{margin-bottom:.4rem}
+.sup-country-head{font-size:.72rem;font-weight:700;color:var(--text-primary,#e2e8f0);padding-left:.4rem;margin-bottom:.2rem;display:flex;align-items:center;gap:.3rem}
+.sup-country-count{font-size:.6rem;color:var(--text-secondary,#94a3b8);font-weight:400}
+.sup-high-badge{font-size:.55rem;background:#ef444420;color:#ef4444;padding:.05rem .3rem;border-radius:3px;font-weight:600}
+.sup-row{display:grid;grid-template-columns:8px auto 1fr auto auto;gap:.3rem;align-items:center;font-size:.68rem;padding:.15rem 0;border-bottom:1px solid var(--border,#1e293b)}
+.sup-clickable{cursor:pointer}.sup-clickable:hover{background:var(--surface-hover,rgba(255,255,255,.04))}
+.sup-sev-dot{width:6px;height:6px;border-radius:50%}
+.sup-icon{font-size:.7rem}
+.sup-title{color:var(--text-secondary,#94a3b8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sup-loc{font-size:.58rem;color:var(--text-secondary,#64748b)}
+.sup-ago{font-size:.58rem;color:var(--text-secondary,#64748b)}
+.sup-more{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.15rem 0}
+.sup-footer{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.3rem 0;border-top:1px solid var(--border,#1e293b)}

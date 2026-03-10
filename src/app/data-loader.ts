@@ -1500,10 +1500,12 @@ export class DataLoaderManager implements AppModule {
             errorMessage: status.acledConfigured === false ? 'ACLED not configured - using GDELT only' : undefined,
           });
         }
+        this.callPanel('social-unrest', 'setEvents', protestData.events);
         return protestData.events;
       } catch (error) {
         console.error('[Intelligence] Protests fetch failed:', error);
         dataFreshness.recordError('acled', String(error));
+        this.callPanel('social-unrest', 'setEvents', []);
         return [];
       }
     })();
