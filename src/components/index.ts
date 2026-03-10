@@ -39,6 +39,7 @@ export * from './DailyMarketBriefPanel';
 export * from './GivingPanel';
 export * from './DisplacementPanel';
 export * from './ClimateAnomalyPanel';
+export * from './SeismologyPanel';
 export * from './PopulationExposurePanel';
 export * from './InvestmentsPanel';
 export * from './UnifiedSettings';

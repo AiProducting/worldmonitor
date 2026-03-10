@@ -2134,3 +2134,96 @@
   height: 100%;
   min-height: 150px;
 }
+/* ─── SeismologyPanel (.seis-) ─────────────────────────────── */
+.seis-wrap { display: flex; flex-direction: column; gap: 10px; }
+
+.seis-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.seis-stat {
+  background: var(--col-bg-secondary, #0f172a);
+  border-radius: 6px;
+  padding: 6px 4px;
+  text-align: center;
+  border: 1px solid var(--col-border, #1e293b);
+}
+.seis-stat-num { display: block; font-size: 1.1rem; font-weight: 700; line-height: 1.2; }
+.seis-stat-lbl { display: block; font-size: 0.6rem; color: var(--col-text-muted, #64748b); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seis-major-stat .seis-stat-num   { color: #ef4444; }
+.seis-strong-stat .seis-stat-num  { color: #f97316; }
+.seis-moderate-stat .seis-stat-num{ color: #f59e0b; }
+.seis-max-stat .seis-stat-num     { font-size: 1.2rem; }
+
+.seis-top-event {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--col-border, #1e293b);
+  background: var(--col-bg-secondary, #0f172a);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.seis-top-event:hover { background: var(--col-bg-hover, #1e293b); }
+.seis-major-row   { border-left: 3px solid #ef4444 !important; }
+.seis-strong-row  { border-left: 3px solid #f97316 !important; }
+.seis-moderate-row{ border-left: 3px solid #f59e0b !important; }
+.seis-light-row   { border-left: 3px solid #22c55e !important; }
+.seis-minor-row   { border-left: 3px solid #64748b !important; }
+
+.seis-top-mag {
+  font-size: 1.4rem;
+  font-weight: 800;
+  min-width: 54px;
+  text-align: center;
+}
+.seis-top-place { font-size: 0.8rem; font-weight: 600; }
+.seis-top-meta  { font-size: 0.68rem; color: var(--col-text-muted, #64748b); margin-top: 2px; }
+
+.seis-table-wrap { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+.seis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.seis-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--col-bg-secondary, #0f172a);
+  padding: 4px 6px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--col-text-muted, #64748b);
+  border-bottom: 1px solid var(--col-border, #1e293b);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.seis-row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.seis-row:hover { background: var(--col-bg-hover, #1e293b); }
+.seis-row td { padding: 5px 6px; border-bottom: 1px solid var(--col-border-subtle, #1a2235); vertical-align: middle; }
+.seis-mag-cell { white-space: nowrap; }
+.seis-mag-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid;
+  font-weight: 700;
+  font-size: 0.72rem;
+}
+.seis-place { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seis-depth { color: var(--col-text-muted, #64748b); white-space: nowrap; }
+.seis-time  { color: var(--col-text-muted, #64748b); white-space: nowrap; text-align: right; }
+
+.seis-footer {
+  font-size: 0.62rem;
+  color: var(--col-text-muted, #64748b);
+  border-top: 1px solid var(--col-border, #1e293b);
+  padding-top: 6px;
+}
