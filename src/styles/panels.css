@@ -2279,3 +2279,31 @@
 .sup-ago{font-size:.58rem;color:var(--text-secondary,#64748b)}
 .sup-more{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.15rem 0}
 .sup-footer{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.3rem 0;border-top:1px solid var(--border,#1e293b)}
+
+/* ── MilitaryActivityPanel (.mil-*) ───────────────── */
+.mil-overview{display:flex;flex-direction:column;gap:.4rem}
+.mil-summary{display:flex;gap:1rem;font-size:.75rem;font-weight:600;margin-bottom:.2rem}
+.mil-stat{display:flex;align-items:center;gap:.25rem}
+.mil-stat-icon{font-size:.85rem}
+.mil-split-bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:.4rem}
+.mil-split-seg{height:100%;transition:width .3s}
+.mil-seg-air{background:#3b82f6}
+.mil-seg-sea{background:#06b6d4}
+.mil-section-label{font-size:.65rem;font-weight:700;color:var(--text-secondary,#94a3b8);text-transform:uppercase;letter-spacing:.06em;margin:.4rem 0 .15rem}
+.mil-pills{display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.2rem}
+.mil-pill{font-size:.6rem;padding:.1rem .4rem;border-radius:9999px;background:var(--surface,#1e293b);color:var(--text-secondary,#94a3b8);white-space:nowrap}
+.mil-op-row{display:grid;grid-template-columns:1.2rem 2.5rem 1fr 2rem;align-items:center;gap:.25rem;font-size:.65rem;padding:.1rem 0}
+.mil-op-flag{text-align:center}
+.mil-op-name{font-weight:600;color:var(--text-primary,#e2e8f0)}
+.mil-op-bar-wrap{height:5px;background:var(--surface,#1e293b);border-radius:2px;overflow:hidden}
+.mil-op-bar{height:100%;background:#3b82f6;border-radius:2px;transition:width .3s}
+.mil-op-count{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-secondary,#94a3b8)}
+.mil-row{display:grid;grid-template-columns:1.2rem 1.2rem 1fr auto auto;align-items:center;gap:.25rem;font-size:.65rem;padding:.15rem 0;border-bottom:1px solid var(--border,#1e293b)}
+.mil-clickable{cursor:pointer;border-radius:4px;padding:.15rem .2rem}
+.mil-clickable:hover{background:var(--surface-hover,#334155)}
+.mil-flag{text-align:center}
+.mil-flight-icon{text-align:center}
+.mil-callsign{font-weight:600;color:var(--text-primary,#e2e8f0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mil-alt{font-size:.58rem;color:var(--text-secondary,#64748b);text-align:right}
+.mil-ago{font-size:.58rem;color:var(--text-secondary,#64748b);text-align:right}
+.mil-choke{font-size:.55rem;color:#f97316;white-space:nowrap}

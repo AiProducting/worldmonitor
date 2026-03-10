@@ -662,6 +662,14 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
+    this.lazyPanel('military-activity', () =>
+      import('@/components/MilitaryActivityPanel').then(m => {
+        const p = new m.MilitaryActivityPanel();
+        p.setAssetClickHandler((lat: number, lon: number) => { this.ctx.map?.setCenter(lat, lon); });
+        return p;
+      }),
+    );
+
     this.lazyPanel('population-exposure', () =>
       import('@/components/PopulationExposurePanel').then(m => new m.PopulationExposurePanel()),
     );

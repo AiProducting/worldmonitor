@@ -1604,9 +1604,11 @@ export class DataLoaderManager implements AppModule {
             if (this.shouldShowIntelligenceNotifications()) this.ctx.signalModal?.show(foreignSignals);
           }
         }
+        this.callPanel('military-activity', 'setData', flightData.flights, vesselData.vessels);
       } catch (error) {
         console.error('[Intelligence] Military fetch failed:', error);
         dataFreshness.recordError('opensky', String(error));
+        this.callPanel('military-activity', 'setData', [], []);
       }
     })());
 
