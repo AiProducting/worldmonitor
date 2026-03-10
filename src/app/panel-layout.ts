@@ -694,6 +694,10 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
+    this.lazyPanel('cable-health', () =>
+      import('@/components/CableHealthPanel').then(m => new m.CableHealthPanel()),
+    );
+
     this.lazyPanel('population-exposure', () =>
       import('@/components/PopulationExposurePanel').then(m => new m.PopulationExposurePanel()),
     );

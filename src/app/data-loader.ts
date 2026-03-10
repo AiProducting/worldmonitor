@@ -435,7 +435,7 @@ export class DataLoaderManager implements AppModule {
     if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.weather) tasks.push({ name: 'weather', task: () => runGuarded('weather', () => this.loadWeatherAlerts()) });
     if (SITE_VARIANT !== 'happy' && !isDesktopRuntime() && this.ctx.mapLayers.ais) tasks.push({ name: 'ais', task: () => runGuarded('ais', () => this.loadAisSignals()) });
     if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cables', task: () => runGuarded('cables', () => this.loadCableActivity()) });
-    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cableHealth', task: () => runGuarded('cableHealth', () => this.loadCableHealth()) });
+    if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.cables || Object.prototype.hasOwnProperty.call(DEFAULT_PANELS, 'cable-health'))) tasks.push({ name: 'cableHealth', task: () => runGuarded('cableHealth', () => this.loadCableHealth()) });
     if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.flights) tasks.push({ name: 'flights', task: () => runGuarded('flights', () => this.loadFlightDelays()) });
     if (SITE_VARIANT !== 'happy' && CYBER_LAYER_ENABLED && this.ctx.mapLayers.cyberThreats) tasks.push({ name: 'cyberThreats', task: () => runGuarded('cyberThreats', () => this.loadCyberThreats()) });
     if (SITE_VARIANT !== 'happy' && !isDesktopRuntime()) tasks.push({ name: 'iranAttacks', task: () => runGuarded('iranAttacks', () => this.loadIranEvents()) });
@@ -1936,11 +1936,13 @@ export class DataLoaderManager implements AppModule {
     try {
       const healthData = await fetchCableHealth();
       this.ctx.map?.setCableHealth(healthData.cables);
+      this.callPanel('cable-health', 'setHealth', healthData);
       const cableIds = Object.keys(healthData.cables);
       const faultCount = cableIds.filter((id) => healthData.cables[id]?.status === 'fault').length;
       const degradedCount = cableIds.filter((id) => healthData.cables[id]?.status === 'degraded').length;
       this.ctx.statusPanel?.updateFeed('CableHealth', { status: 'ok', itemCount: faultCount + degradedCount });
     } catch {
+      this.callPanel('cable-health', 'showError');
       this.ctx.statusPanel?.updateFeed('CableHealth', { status: 'error' });
     }
   }

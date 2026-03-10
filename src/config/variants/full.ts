@@ -56,6 +56,7 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'internet-outages': { name: 'Internet Outages', enabled: true, priority: 2 },
   'weather-alerts': { name: 'Weather Alerts', enabled: true, priority: 2 },
   'ais-disruptions': { name: 'Maritime Disruptions', enabled: true, priority: 2 },
+  'cable-health': { name: 'Undersea Cable Health', enabled: true, priority: 2 },
 };
 
 // Map layers for geopolitical view
