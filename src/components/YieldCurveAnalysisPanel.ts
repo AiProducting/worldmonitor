@@ -161,9 +161,11 @@ export class YieldCurveAnalysisPanel extends Panel {
     const linePts = points.map(p => `${toX(p.months).toFixed(1)},${toY(p.value).toFixed(1)}`).join(' ');
 
     // Gradient fill area
-    const areaPath = `M ${toX(points[0].months).toFixed(1)},${toY(points[0].value).toFixed(1)} ` +
+    const first = points[0]!;
+    const last = points[points.length - 1]!;
+    const areaPath = `M ${toX(first.months).toFixed(1)},${toY(first.value).toFixed(1)} ` +
       points.slice(1).map(p => `L ${toX(p.months).toFixed(1)},${toY(p.value).toFixed(1)}`).join(' ') +
-      ` L ${toX(points[points.length - 1].months).toFixed(1)},${(PAD.top + plotH).toFixed(1)} L ${toX(points[0].months).toFixed(1)},${(PAD.top + plotH).toFixed(1)} Z`;
+      ` L ${toX(last.months).toFixed(1)},${(PAD.top + plotH).toFixed(1)} L ${toX(first.months).toFixed(1)},${(PAD.top + plotH).toFixed(1)} Z`;
 
     const dots = points.map(p =>
       `<circle cx="${toX(p.months).toFixed(1)}" cy="${toY(p.value).toFixed(1)}" r="3" fill="#42a5f5"/>

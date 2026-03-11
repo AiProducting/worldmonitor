@@ -40,13 +40,13 @@ export class EarningsCalendarPanel extends Panel {
     this.showLoading();
     try {
       // Use market quotes to detect active tickers and infer upcoming earnings
-      const resp = await marketClient.listMarketQuotes({});
+      const resp = await marketClient.listMarketQuotes({ symbols: [] });
       const quotes = resp.quotes ?? [];
 
       // Generate earnings calendar from available market data
       const now = new Date();
       this.events = this.buildEarningsCalendar(quotes, now);
-      this.updateCount(this.events.length);
+      this.setCount(this.events.length);
       this.loading = false;
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Failed to load earnings data';
@@ -79,6 +79,7 @@ export class EarningsCalendarPanel extends Panel {
       const dayOffset = Math.abs(hash) % 10;
       const date = new Date(baseDate);
       date.setDate(date.getDate() + dayOffset);
+      const session: 'pre' | 'post' | 'during' = sessions[Math.abs(hash) % 3] ?? 'during';
       // Skip weekends
       if (date.getDay() === 0) date.setDate(date.getDate() + 1);
       if (date.getDay() === 6) date.setDate(date.getDate() + 2);
@@ -87,7 +88,7 @@ export class EarningsCalendarPanel extends Panel {
         ticker: sym,
         company: q.name ?? sym,
         date: date.toISOString().slice(0, 10),
-        session: sessions[Math.abs(hash) % 3],
+        session,
         estimate: q.changePercent != null ? `EPS est. ${(q.changePercent * 0.5).toFixed(2)}` : undefined,
         sector: sectorMap[sym] ?? 'Other',
       });

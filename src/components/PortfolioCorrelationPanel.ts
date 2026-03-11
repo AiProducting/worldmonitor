@@ -36,8 +36,8 @@ function pearsonCorrelation(a: number[], b: number[]): number {
   const meanB = bx.reduce((s, v) => s + v, 0) / n;
   let num = 0, denA = 0, denB = 0;
   for (let i = 0; i < n; i++) {
-    const da = ax[i] - meanA;
-    const db = bx[i] - meanB;
+    const da = (ax[i] ?? 0) - meanA;
+    const db = (bx[i] ?? 0) - meanB;
     num += da * db;
     denA += da * da;
     denB += db * db;
@@ -112,11 +112,13 @@ export class PortfolioCorrelationPanel extends Panel {
   private computeCorrelations(): void {
     this.correlations.clear();
     for (let i = 0; i < ASSETS.length; i++) {
-      const ri = this.getReturns(ASSETS[i].id);
+      const ai = ASSETS[i]!;
+      const ri = this.getReturns(ai.id);
       for (let j = i; j < ASSETS.length; j++) {
-        const rj = this.getReturns(ASSETS[j].id);
+        const aj = ASSETS[j]!;
+        const rj = this.getReturns(aj.id);
         const r = i === j ? 1 : pearsonCorrelation(ri, rj);
-        const key = `${ASSETS[i].id}:${ASSETS[j].id}`;
+        const key = `${ai.id}:${aj.id}`;
         this.correlations.set(key, r);
       }
     }
@@ -170,7 +172,7 @@ export class PortfolioCorrelationPanel extends Panel {
     const cells: string[] = [];
     for (let i = 0; i < sz; i++) {
       for (let j = 0; j < sz; j++) {
-        const r = this.getCorr(ASSETS[i].id, ASSETS[j].id);
+        const r = this.getCorr(ASSETS[i]!.id, ASSETS[j]!.id);
         const x = labelW + j * cellSize;
         const y = headerH + i * cellSize;
         const bg = correlationColor(r);
@@ -188,7 +190,9 @@ export class PortfolioCorrelationPanel extends Panel {
     const pairs: Array<{ a: AssetDef; b: AssetDef; r: number }> = [];
     for (let i = 0; i < ASSETS.length; i++) {
       for (let j = i + 1; j < ASSETS.length; j++) {
-        pairs.push({ a: ASSETS[i], b: ASSETS[j], r: this.getCorr(ASSETS[i].id, ASSETS[j].id) });
+        const ai = ASSETS[i]!;
+        const aj = ASSETS[j]!;
+        pairs.push({ a: ai, b: aj, r: this.getCorr(ai.id, aj.id) });
       }
     }
 

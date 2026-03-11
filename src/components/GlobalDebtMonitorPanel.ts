@@ -64,7 +64,7 @@ export class GlobalDebtMonitorPanel extends Panel {
         change: e.creditGdpRatio - e.previousRatio,
         risk: classifyRisk(e.creditGdpRatio),
       }));
-      this.updateCount(this.entries.length);
+      this.setCount(this.entries.length);
       this.loading = false;
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Failed to load debt data';
@@ -120,7 +120,7 @@ export class GlobalDebtMonitorPanel extends Panel {
 
     const list = this.filtered();
     const rows = list.slice(0, 30).map(e => {
-      const s = RISK_STYLE[e.risk];
+      const s = RISK_STYLE[e.risk] ?? RISK_STYLE.safe;
       const barW = Math.min(100, (e.ratio / 250) * 100);
       const changeStr = e.change >= 0 ? `+${e.change.toFixed(1)}` : e.change.toFixed(1);
       const changeColor = e.change > 2 ? '#f44336' : e.change < -2 ? '#4caf50' : 'rgba(255,255,255,0.5)';
