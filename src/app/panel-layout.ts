@@ -794,6 +794,14 @@ export class PanelLayoutManager implements AppModule {
       import('@/components/VolatilityDashboardPanel').then(m => new m.VolatilityDashboardPanel()),
     );
 
+    this.lazyPanel('housing-market', () =>
+      import('@/components/HousingMarketPanel').then(m => new m.HousingMarketPanel()),
+    );
+
+    this.lazyPanel('labor-market', () =>
+      import('@/components/LaborMarketPanel').then(m => new m.LaborMarketPanel()),
+    );
+
     if (this.ctx.isDesktopApp) {
       const runtimeConfigPanel = new RuntimeConfigPanel({ mode: 'alert' });
       this.ctx.panels['runtime-config'] = runtimeConfigPanel;
