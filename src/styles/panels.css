@@ -2759,3 +2759,71 @@
 .tfl-chg.pos{color:#66bb6a}
 .tfl-chg.neg{color:#ef5350}
 .tfl-na{font-size:.55rem;color:var(--text-dim,#64748b);font-style:italic}
+
+/* ------------------------------------------------------------------ */
+/* BondYieldsGlobalPanel (.bgy-*)                                      */
+/* ------------------------------------------------------------------ */
+.bgy-container{display:flex;flex-direction:column;gap:.4rem;height:100%}
+.bgy-toolbar{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center}
+.bgy-region-bar,.bgy-sort-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.bgy-region-btn,.bgy-sort-btn{padding:.1rem .35rem;font-size:.54rem;border:1px solid rgba(255,255,255,.12);background:transparent;color:var(--text-dim,#64748b);border-radius:3px;cursor:pointer;transition:all .15s}
+.bgy-region-btn.active,.bgy-region-btn:hover,.bgy-sort-btn.active,.bgy-sort-btn:hover{border-color:#42a5f5;color:#42a5f5;background:rgba(66,165,245,.08)}
+.bgy-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.2rem}
+.bgy-row{display:flex;align-items:center;gap:.35rem;padding:.2rem .3rem;border-radius:4px}
+.bgy-row:hover{background:rgba(255,255,255,.04)}
+.bgy-flag{font-size:.52rem;font-weight:700;color:var(--text-dim,#64748b);width:20px;flex-shrink:0}
+.bgy-country{font-size:.6rem;color:var(--text,#e2e8f0);width:90px;flex-shrink:0}
+.bgy-bar-track{flex:1;height:5px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden}
+.bgy-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.bgy-yield{font-size:.65rem;font-weight:700;font-variant-numeric:tabular-nums;width:40px;text-align:right;flex-shrink:0}
+.bgy-spread{font-size:.52rem;width:42px;text-align:right;flex-shrink:0}
+.bgy-spread.pos{color:#ef5350}
+.bgy-spread.neg{color:#66bb6a}
+.bgy-chg{font-size:.52rem;width:40px;text-align:right;flex-shrink:0}
+.bgy-chg.pos{color:#ef5350}
+.bgy-chg.neg{color:#66bb6a}
+.bgy-na{opacity:.5}
+.bgy-na-text{font-size:.55rem;color:var(--text-dim,#64748b)}
+.bgy-curve{background:rgba(0,0,0,.15);border-radius:6px;padding:.4rem .5rem;margin-top:.2rem}
+.bgy-curve-title{font-size:.55rem;font-weight:600;color:var(--text-dim,#64748b);margin-bottom:.3rem}
+.bgy-curve-bars{display:flex;align-items:flex-end;gap:.5rem;height:70px}
+.bgy-curve-col{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:.15rem;flex:1}
+.bgy-curve-val{font-size:.5rem;color:var(--text-dim,#64748b);font-variant-numeric:tabular-nums}
+.bgy-curve-bar{width:100%;background:#42a5f5;border-radius:2px 2px 0 0;min-height:2px;transition:height .3s}
+.bgy-curve-label{font-size:.5rem;color:var(--text-dim,#64748b)}
+
+/* ------------------------------------------------------------------ */
+/* VolatilityDashboardPanel (.vd-*)                                    */
+/* ------------------------------------------------------------------ */
+.vd-container{display:flex;flex-direction:column;gap:.4rem;height:100%}
+.vd-toolbar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.vd-cat-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.vd-cat-btn{padding:.1rem .3rem;font-size:.54rem;border:1px solid rgba(255,255,255,.12);background:transparent;color:var(--text-dim,#64748b);border-radius:3px;cursor:pointer;transition:all .15s}
+.vd-cat-btn.active,.vd-cat-btn:hover{border-color:var(--cat-color,#42a5f5);color:var(--cat-color,#42a5f5);background:rgba(66,165,245,.08)}
+.vd-overall{font-size:.58rem;color:var(--text-dim,#64748b);display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.vd-overall-label{font-weight:700}
+.vd-risk-danger .vd-overall-label{color:#ef5350}
+.vd-risk-warning .vd-overall-label{color:#ff9800}
+.vd-risk-normal .vd-overall-label{color:#66bb6a}
+.vd-risk-counts{display:flex;gap:.3rem;font-size:.52rem}
+.vd-risk-danger{color:#ef5350;font-weight:600}
+.vd-risk-warn{color:#ff9800;font-weight:600}
+.vd-risk-ok{color:var(--text-dim,#64748b)}
+.vd-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.2rem}
+.vd-row{display:flex;align-items:center;justify-content:space-between;gap:.3rem;padding:.2rem .3rem;border-radius:4px}
+.vd-row:hover{background:rgba(255,255,255,.04)}
+.vd-row-left{display:flex;align-items:center;gap:.3rem;flex:1;min-width:0}
+.vd-cat-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.vd-label{font-size:.6rem;color:var(--text,#e2e8f0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vd-row-right{display:flex;align-items:center;gap:.35rem;flex-shrink:0}
+.vd-spark{display:block;flex-shrink:0}
+.vd-val{font-size:.62rem;font-weight:700;font-variant-numeric:tabular-nums}
+.vd-chg{font-size:.52rem}
+.vd-chg.pos{color:#ef5350}
+.vd-chg.neg{color:#66bb6a}
+.vd-risk{font-size:.5rem;padding:.08rem .25rem;border-radius:3px;white-space:nowrap}
+.vd-risk.danger{background:rgba(239,83,80,.15)}
+.vd-risk.warning{background:rgba(255,152,0,.15)}
+.vd-risk.normal{background:rgba(102,187,106,.1)}
+.vd-na{opacity:.5;justify-content:space-between}
+.vd-na-text{font-size:.55rem;color:var(--text-dim,#64748b)}

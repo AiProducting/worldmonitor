@@ -227,6 +227,8 @@
     "supplyChain": "Supply Chain",
     "econTimeSeries": "Economic Time Series",
     "tradeFlows": "Trade Flows",
+    "bondYieldsGlobal": "Global Bond Yields",
+    "volatilityDashboard": "Volatility Dashboard",
     "finance": "Financial",
     "tech": "Technology",
     "crypto": "Crypto",
