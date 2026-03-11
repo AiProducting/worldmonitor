@@ -2673,3 +2673,24 @@
 .gsi-period{font-size:.52rem;color:var(--text-dim,#64748b);font-weight:400}
 .gsi-up{color:#4caf50}
 .gsi-down{color:#f44336}
+
+/* ── FinanceNewsFeedPanel (.fn-*) ─────────────────── */
+.fn-container{display:flex;flex-direction:column;gap:0}
+.fn-tabs{display:flex;gap:.2rem;flex-wrap:wrap;padding:.3rem .1rem;border-bottom:1px solid var(--border,#1e293b);overflow-x:auto}
+.fn-tab{display:flex;align-items:center;gap:.2rem;font-size:.57rem;padding:.15rem .4rem;border-radius:5px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s;white-space:nowrap}
+.fn-tab:hover,.fn-tab.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.fn-tab-icon{font-size:.75rem;line-height:1}
+.fn-tab-label{font-weight:600}
+.fn-tab-count{font-size:.52rem;padding:.05rem .25rem;border-radius:10px;background:rgba(255,255,255,.07);color:var(--text-dim,#64748b)}
+.fn-alert-count{background:rgba(244,67,54,.15);color:#f44336}
+.fn-items{display:flex;flex-direction:column;gap:0;max-height:380px;overflow-y:auto}
+.fn-item{display:flex;flex-direction:column;gap:.2rem;padding:.45rem .4rem;border-bottom:1px solid var(--border,#1e293b);text-decoration:none;color:inherit;transition:background .1s}
+.fn-item:hover{background:rgba(255,255,255,.03)}
+.fn-item-alert{border-left:2px solid #f44336;padding-left:.5rem}
+.fn-item-header{display:flex;align-items:center;gap:.35rem;font-size:.57rem}
+.fn-source{font-weight:700;color:#4fc3f7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:7rem}
+.fn-alert-badge{background:rgba(244,67,54,.15);color:#f44336;font-size:.52rem;padding:.08rem .25rem;border-radius:3px;font-weight:700}
+.fn-time{color:var(--text-dim,#64748b);margin-left:auto;white-space:nowrap}
+.fn-title{font-size:.65rem;font-weight:600;color:var(--text,#e2e8f0);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.fn-location{font-size:.55rem;color:var(--text-dim,#64748b)}
+.fn-empty{font-size:.65rem;color:var(--text-dim,#64748b);padding:.5rem;text-align:center}

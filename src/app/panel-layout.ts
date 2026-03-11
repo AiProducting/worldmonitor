@@ -774,6 +774,10 @@ export class PanelLayoutManager implements AppModule {
       import('@/components/GlobalStockIndexPanel').then(m => new m.GlobalStockIndexPanel()),
     );
 
+    this.lazyPanel('finance-news', () =>
+      import('@/components/FinanceNewsFeedPanel').then(m => new m.FinanceNewsFeedPanel()),
+    );
+
     if (this.ctx.isDesktopApp) {
       const runtimeConfigPanel = new RuntimeConfigPanel({ mode: 'alert' });
       this.ctx.panels['runtime-config'] = runtimeConfigPanel;

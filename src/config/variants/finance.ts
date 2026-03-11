@@ -173,6 +173,7 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'energy-capacity': { name: 'Energy Transition', enabled: true, priority: 1 },
   'world-bank-gdp': { name: 'World Bank GDP', enabled: true, priority: 1 },
   'global-stock-index': { name: 'Global Stock Indices', enabled: true, priority: 1 },
+  'finance-news': { name: 'Finance News', enabled: true, priority: 1 },
   derivatives: { name: 'Derivatives & Options', enabled: true, priority: 2 },
   fintech: { name: 'Fintech & Trading Tech', enabled: true, priority: 2 },
   regulation: { name: 'Financial Regulation', enabled: true, priority: 2 },
