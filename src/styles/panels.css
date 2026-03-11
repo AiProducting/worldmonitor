@@ -2386,3 +2386,78 @@
 .econ-up{color:#4caf50}
 .econ-down{color:#f44336}
 .ecal-empty{font-size:.7rem;color:var(--text-dim,#64748b);text-align:center;padding:.5rem}
+
+/* ── SectorPerformancePanel (.sp-*) ─────────────────── */
+.sp-container{display:flex;flex-direction:column;gap:.4rem}
+.sp-toolbar{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.sp-period-btn,.sp-sort-btn{font-size:.6rem;padding:.15rem .4rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.sp-period-btn:hover,.sp-period-btn.active,.sp-sort-btn:hover,.sp-sort-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.sp-divider{flex:1}
+.sp-summary{display:flex;gap:.5rem;flex-wrap:wrap;font-size:.6rem}
+.sp-stat{display:flex;flex-direction:column;align-items:center;gap:.05rem}
+.sp-stat-l{color:var(--text-dim,#64748b);font-size:.55rem}
+.sp-stat-v{font-weight:700;color:var(--text,#e2e8f0)}
+.sp-breadth{display:flex;flex-direction:column;gap:.15rem;font-size:.6rem}
+.sp-breadth-bar{display:flex;height:6px;border-radius:3px;overflow:hidden}
+.sp-breadth-bull{background:#4caf50}
+.sp-breadth-neut{background:#90a4ae}
+.sp-breadth-bear{background:#f44336}
+.sp-breadth-counts{display:flex;justify-content:space-between;color:var(--text-dim,#64748b);font-size:.55rem}
+.sp-bull-txt{color:#4caf50}
+.sp-bear-txt{color:#f44336}
+.sp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:.3rem}
+.sp-cell{border-radius:4px;padding:.35rem .4rem;display:flex;flex-direction:column;gap:.15rem;cursor:default;transition:filter .15s}
+.sp-cell:hover{filter:brightness(1.15)}
+.sp-cell-top{display:flex;align-items:center;justify-content:space-between;gap:.2rem}
+.sp-icon{font-size:.9rem}
+.sp-sym{font-size:.6rem;font-weight:700;color:rgba(255,255,255,.9)}
+.sp-name{font-size:.55rem;color:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp-bar-row{display:flex;align-items:center;gap:.2rem}
+.sp-bar-track{flex:1;height:3px;background:rgba(255,255,255,.15);border-radius:2px;overflow:hidden}
+.sp-bar-fill{height:100%;border-radius:2px;background:rgba(255,255,255,.6);transition:width .3s}
+.sp-chg{font-size:.65rem;font-weight:700;color:rgba(255,255,255,.95);min-width:3rem;text-align:right;font-variant-numeric:tabular-nums}
+
+/* ── CommodityTrackerPanel (.cmd-*) ─────────────────── */
+.cmd-container{display:flex;flex-direction:column;gap:.4rem}
+.cmd-toolbar{display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.cmd-grp-btn{font-size:.6rem;padding:.15rem .4rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.cmd-grp-btn:hover,.cmd-grp-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.cmd-grp-count{margin-left:.2rem;font-size:.55rem;opacity:.7}
+.cmd-breadth{display:flex;gap:.4rem;font-size:.6rem;color:var(--text-dim,#64748b)}
+.cmd-list{display:flex;flex-direction:column;gap:.1rem}
+.cmd-row{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:.4rem;padding:.3rem .2rem;border-bottom:1px solid var(--border,#1e293b);font-size:.67rem}
+.cmd-icon{font-size:1rem;line-height:1}
+.cmd-info{display:flex;flex-direction:column;gap:.03rem;min-width:0}
+.cmd-sym{font-weight:700;font-size:.65rem;color:var(--text,#e2e8f0)}
+.cmd-name{font-size:.55rem;color:var(--text-dim,#64748b);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmd-spark-wrap{width:52px;display:flex;align-items:center}
+.cmd-spark{display:block}
+.cmd-price-col{display:flex;flex-direction:column;align-items:flex-end;gap:.03rem;min-width:4rem}
+.cmd-price{font-weight:700;font-variant-numeric:tabular-nums;font-size:.7rem;color:var(--text,#e2e8f0)}
+.cmd-chg{font-size:.6rem;font-variant-numeric:tabular-nums}
+.cmd-up{color:#4caf50}
+.cmd-down{color:#f44336}
+.cmd-flat{color:var(--text-dim,#64748b)}
+
+/* ── ForexDashboardPanel (.fx-*) ─────────────────── */
+.fx-container{display:flex;flex-direction:column;gap:.4rem}
+.fx-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.4rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.fx-region-bar{display:flex;gap:.25rem}
+.fx-rgn-btn{font-size:.6rem;padding:.15rem .4rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.fx-rgn-btn:hover,.fx-rgn-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.fx-usd-strong{font-size:.65rem;font-weight:700;color:#4caf50;padding:.1rem .35rem;border-radius:4px;background:rgba(76,175,80,.12)}
+.fx-usd-weak{font-size:.65rem;font-weight:700;color:#f44336;padding:.1rem .35rem;border-radius:4px;background:rgba(244,67,54,.12)}
+.fx-usd-neutral{font-size:.65rem;font-weight:700;color:#90a4ae;padding:.1rem .35rem;border-radius:4px;background:rgba(144,164,174,.1)}
+.fx-list{display:flex;flex-direction:column;gap:.1rem}
+.fx-row{display:grid;grid-template-columns:1.4rem 1fr auto auto;align-items:center;gap:.4rem;padding:.3rem .2rem;border-bottom:1px solid var(--border,#1e293b);font-size:.67rem}
+.fx-flag{font-size:1rem;line-height:1;text-align:center}
+.fx-pair-info{display:flex;flex-direction:column;gap:.03rem;min-width:0}
+.fx-pair-label{font-weight:700;font-size:.68rem;color:var(--text,#e2e8f0)}
+.fx-pair-sub{font-size:.55rem;color:var(--text-dim,#64748b)}
+.fx-spark-wrap{width:56px;display:flex;align-items:center}
+.fx-spark{display:block}
+.fx-rate-col{display:flex;flex-direction:column;align-items:flex-end;gap:.03rem;min-width:4.5rem}
+.fx-rate{font-weight:700;font-variant-numeric:tabular-nums;font-size:.72rem;color:var(--text,#e2e8f0)}
+.fx-chg{font-size:.6rem;font-variant-numeric:tabular-nums}
+.fx-up{color:#4caf50}
+.fx-down{color:#f44336}

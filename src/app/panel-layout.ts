@@ -726,6 +726,18 @@ export class PanelLayoutManager implements AppModule {
       import('@/components/EconomicIndicatorsPanel').then(m => new m.EconomicIndicatorsPanel()),
     );
 
+    this.lazyPanel('sector-performance', () =>
+      import('@/components/SectorPerformancePanel').then(m => new m.SectorPerformancePanel()),
+    );
+
+    this.lazyPanel('commodity-tracker', () =>
+      import('@/components/CommodityTrackerPanel').then(m => new m.CommodityTrackerPanel()),
+    );
+
+    this.lazyPanel('forex-dashboard', () =>
+      import('@/components/ForexDashboardPanel').then(m => new m.ForexDashboardPanel()),
+    );
+
     if (this.ctx.isDesktopApp) {
       const runtimeConfigPanel = new RuntimeConfigPanel({ mode: 'alert' });
       this.ctx.panels['runtime-config'] = runtimeConfigPanel;
