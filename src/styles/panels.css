@@ -2280,7 +2280,7 @@
 .sup-more{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.15rem 0}
 .sup-footer{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.3rem 0;border-top:1px solid var(--border,#1e293b)}
 
-/* ── MilitaryActivityPanel (.mil-*) ───────────────── */
+/* ── MilitaryActivityPanel (.map-*) ───────────────── */
 .mil-overview{display:flex;flex-direction:column;gap:.4rem}
 .mil-summary{display:flex;gap:1rem;font-size:.75rem;font-weight:600;margin-bottom:.2rem}
 .mil-stat{display:flex;align-items:center;gap:.25rem}
@@ -2307,40 +2307,3 @@
 .mil-alt{font-size:.58rem;color:var(--text-secondary,#64748b);text-align:right}
 .mil-ago{font-size:.58rem;color:var(--text-secondary,#64748b);text-align:right}
 .mil-choke{font-size:.55rem;color:#f97316;white-space:nowrap}
-
-/* ── InternetOutagePanel (.iop-*) ───────────────── */
-.iop-overview{display:flex;flex-direction:column;gap:.4rem}
-.iop-sev-bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:.2rem}
-.iop-sev-seg{height:100%;transition:width .3s}
-.iop-pills{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.3rem}
-.iop-pill{font-size:.6rem;font-weight:600;padding:.1rem .4rem;border-radius:9999px;background:var(--surface,#1e293b)}
-.iop-country{margin-bottom:.25rem}
-.iop-country-head{font-size:.7rem;font-weight:700;padding:.15rem .4rem;display:flex;align-items:center;gap:.4rem}
-.iop-country-count{font-size:.6rem;color:var(--text-secondary,#94a3b8);font-weight:400}
-.iop-total-badge{font-size:.55rem;font-weight:700;background:#ef444425;color:#ef4444;padding:.05rem .3rem;border-radius:3px}
-.iop-row{display:grid;grid-template-columns:8px 1fr auto;align-items:center;gap:.3rem;font-size:.65rem;padding:.12rem .2rem .12rem .6rem}
-.iop-clickable{cursor:pointer;border-radius:4px}
-.iop-clickable:hover{background:var(--surface-hover,#334155)}
-.iop-sev-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.iop-title{color:var(--text-secondary,#94a3b8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.iop-ago{font-size:.58rem;color:var(--text-secondary,#64748b)}
-.iop-more{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.15rem 0}
-.iop-footer{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.3rem 0;border-top:1px solid var(--border,#1e293b)}
-
-/* ─── WeatherAlertPanel (wap-) ─────────────────────────── */
-.wap-empty{font-size:.72rem;color:var(--text-secondary,#64748b);text-align:center;padding:1rem 0}
-.wap-bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:.4rem;gap:1px}
-.wap-bar-seg{min-width:3px;border-radius:2px}
-.wap-pills{display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.5rem}
-.wap-pill{font-size:.6rem;font-weight:600;padding:1px 6px;border-radius:9999px;letter-spacing:.03em}
-.wap-group{margin-bottom:.4rem;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
-.wap-group:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
-.wap-group-hdr{display:flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:600;color:var(--text-primary,#e2e8f0);margin-bottom:.2rem}
-.wap-sev-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.wap-event{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wap-group-count{font-size:.6rem;color:var(--text-secondary,#64748b);min-width:16px;text-align:right}
-.wap-alert{display:flex;align-items:center;gap:.3rem;font-size:.65rem;padding:1px 0;padding-left:.5rem}
-.wap-clickable{cursor:pointer;transition:background .15s}.wap-clickable:hover{background:var(--hover,#1e293b);border-radius:4px}
-.wap-alert-sev{font-weight:700;min-width:12px;text-align:center}
-.wap-alert-area{color:var(--text-secondary,#94a3b8);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wap-more{font-size:.6rem;color:var(--text-secondary,#64748b);text-align:center;padding:.15rem 0}

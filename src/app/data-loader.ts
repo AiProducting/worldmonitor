@@ -435,8 +435,8 @@ export class DataLoaderManager implements AppModule {
     if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.weather) tasks.push({ name: 'weather', task: () => runGuarded('weather', () => this.loadWeatherAlerts()) });
     if (SITE_VARIANT !== 'happy' && !isDesktopRuntime() && this.ctx.mapLayers.ais) tasks.push({ name: 'ais', task: () => runGuarded('ais', () => this.loadAisSignals()) });
     if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cables', task: () => runGuarded('cables', () => this.loadCableActivity()) });
-    if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.cables || Object.prototype.hasOwnProperty.call(DEFAULT_PANELS, 'cable-health'))) tasks.push({ name: 'cableHealth', task: () => runGuarded('cableHealth', () => this.loadCableHealth()) });
-    if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.flights || Object.prototype.hasOwnProperty.call(DEFAULT_PANELS, 'flight-delays'))) tasks.push({ name: 'flights', task: () => runGuarded('flights', () => this.loadFlightDelays()) });
+    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.cables) tasks.push({ name: 'cableHealth', task: () => runGuarded('cableHealth', () => this.loadCableHealth()) });
+    if (SITE_VARIANT !== 'happy' && this.ctx.mapLayers.flights) tasks.push({ name: 'flights', task: () => runGuarded('flights', () => this.loadFlightDelays()) });
     if (SITE_VARIANT !== 'happy' && CYBER_LAYER_ENABLED && this.ctx.mapLayers.cyberThreats) tasks.push({ name: 'cyberThreats', task: () => runGuarded('cyberThreats', () => this.loadCyberThreats()) });
     if (SITE_VARIANT !== 'happy' && !isDesktopRuntime()) tasks.push({ name: 'iranAttacks', task: () => runGuarded('iranAttacks', () => this.loadIranEvents()) });
     if (SITE_VARIANT !== 'happy' && (this.ctx.mapLayers.techEvents || SITE_VARIANT === 'tech')) tasks.push({ name: 'techEvents', task: () => runGuarded('techEvents', () => this.loadTechEvents()) });
@@ -1374,7 +1374,6 @@ export class DataLoaderManager implements AppModule {
 
     if (eonetResult.status === 'fulfilled') {
       this.ctx.map?.setNaturalEvents(eonetResult.value);
-      this.callPanel('natural-hazards', 'setEvents', eonetResult.value);
       this.ctx.statusPanel?.updateFeed('EONET', {
         status: 'ok',
         itemCount: eonetResult.value.length,
@@ -1382,7 +1381,6 @@ export class DataLoaderManager implements AppModule {
       this.ctx.statusPanel?.updateApi('NASA EONET', { status: 'ok' });
     } else {
       this.ctx.map?.setNaturalEvents([]);
-      this.callPanel('natural-hazards', 'setEvents', []);
       this.ctx.statusPanel?.updateFeed('EONET', { status: 'error', errorMessage: String(eonetResult.reason) });
       this.ctx.statusPanel?.updateApi('NASA EONET', { status: 'error' });
     }
@@ -1450,12 +1448,10 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setLayerReady('weather', alerts.length > 0);
       this.ctx.statusPanel?.updateFeed('Weather', { status: 'ok', itemCount: alerts.length });
       dataFreshness.recordUpdate('weather', alerts.length);
-      this.callPanel('weather-alerts', 'setAlerts', alerts);
     } catch (error) {
       this.ctx.map?.setLayerReady('weather', false);
       this.ctx.statusPanel?.updateFeed('Weather', { status: 'error' });
       dataFreshness.recordError('weather', String(error));
-      this.callPanel('weather-alerts', 'setAlerts', []);
     }
   }
 
@@ -1475,11 +1471,9 @@ export class DataLoaderManager implements AppModule {
           this.ctx.map?.setLayerReady('outages', outages.length > 0);
           this.ctx.statusPanel?.updateFeed('NetBlocks', { status: 'ok', itemCount: outages.length });
         }
-        this.callPanel('internet-outages', 'setOutages', outages);
       } catch (error) {
         console.error('[Intelligence] Outages fetch failed:', error);
         dataFreshness.recordError('outages', String(error));
-        this.callPanel('internet-outages', 'setOutages', []);
       }
     })());
 
@@ -1504,12 +1498,10 @@ export class DataLoaderManager implements AppModule {
             errorMessage: status.acledConfigured === false ? 'ACLED not configured - using GDELT only' : undefined,
           });
         }
-        this.callPanel('social-unrest', 'setEvents', protestData.events);
         return protestData.events;
       } catch (error) {
         console.error('[Intelligence] Protests fetch failed:', error);
         dataFreshness.recordError('acled', String(error));
-        this.callPanel('social-unrest', 'setEvents', []);
         return [];
       }
     })();
@@ -1608,11 +1600,9 @@ export class DataLoaderManager implements AppModule {
             if (this.shouldShowIntelligenceNotifications()) this.ctx.signalModal?.show(foreignSignals);
           }
         }
-        this.callPanel('military-activity', 'setData', flightData.flights, vesselData.vessels);
       } catch (error) {
         console.error('[Intelligence] Military fetch failed:', error);
         dataFreshness.recordError('opensky', String(error));
-        this.callPanel('military-activity', 'setData', [], []);
       }
     })());
 
@@ -1728,12 +1718,10 @@ export class DataLoaderManager implements AppModule {
             this.ctx.map?.setGpsJamming(data.hexes);
             this.ctx.map?.setLayerReady('gpsJamming', data.hexes.length > 0);
           }
-          this.callPanel('gps-jamming', 'setData', data);
           this.ctx.statusPanel?.updateFeed('GPS Jam', { status: 'ok', itemCount: data.hexes.length });
           dataFreshness.recordUpdate('gpsjam', data.hexes.length);
         } catch (error) {
           this.ctx.map?.setLayerReady('gpsJamming', false);
-          this.callPanel('gps-jamming', 'showError');
           this.ctx.statusPanel?.updateFeed('GPS Jam', { status: 'error' });
           dataFreshness.recordError('gpsjam', String(error));
         }
@@ -1806,7 +1794,6 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setCyberThreats(this.ctx.cyberThreatsCache);
       this.ctx.map?.setLayerReady('cyberThreats', this.ctx.cyberThreatsCache.length > 0);
       ingestCyberThreatsForCII(this.ctx.cyberThreatsCache);
-      this.callPanel('cyber-threats', 'setThreats', this.ctx.cyberThreatsCache);
       this.refreshCiiAndBrief();
       this.ctx.statusPanel?.updateFeed('Cyber Threats', { status: 'ok', itemCount: this.ctx.cyberThreatsCache.length });
       return;
@@ -1818,14 +1805,12 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setCyberThreats(threats);
       this.ctx.map?.setLayerReady('cyberThreats', threats.length > 0);
       ingestCyberThreatsForCII(threats);
-      this.callPanel('cyber-threats', 'setThreats', threats);
       this.refreshCiiAndBrief();
       this.ctx.statusPanel?.updateFeed('Cyber Threats', { status: 'ok', itemCount: threats.length });
       this.ctx.statusPanel?.updateApi('Cyber Threats API', { status: 'ok' });
       dataFreshness.recordUpdate('cyber_threats', threats.length);
     } catch (error) {
       this.ctx.map?.setLayerReady('cyberThreats', false);
-      this.callPanel('cyber-threats', 'setThreats', []);
       this.ctx.statusPanel?.updateFeed('Cyber Threats', { status: 'error', errorMessage: String(error) });
       this.ctx.statusPanel?.updateApi('Cyber Threats API', { status: 'error' });
       dataFreshness.recordError('cyber_threats', String(error));
@@ -1838,14 +1823,12 @@ export class DataLoaderManager implements AppModule {
       this.ctx.intelligenceCache.iranEvents = events;
       this.ctx.map?.setIranEvents(events);
       this.ctx.map?.setLayerReady('iranAttacks', events.length > 0);
-      this.callPanel('iran-events', 'setData', events);
       const coerced = events.map(e => ({ ...e, timestamp: Number(e.timestamp) || 0 }));
       signalAggregator.ingestConflictEvents(coerced);
       ingestStrikesForCII(coerced);
       this.refreshCiiAndBrief();
     } catch {
       this.ctx.map?.setLayerReady('iranAttacks', false);
-      this.callPanel('iran-events', 'showError');
     }
   }
 
@@ -1855,7 +1838,6 @@ export class DataLoaderManager implements AppModule {
       const aisStatus = getAisStatus();
       console.log('[Ships] Events:', { disruptions: disruptions.length, density: density.length, vessels: aisStatus.vessels });
       this.ctx.map?.setAisData(disruptions, density);
-      this.callPanel('ais-disruptions', 'setData', disruptions, density);
       signalAggregator.ingestAisDisruptions(disruptions);
       ingestAisDisruptionsForCII(disruptions);
       this.refreshCiiAndBrief();
@@ -1887,7 +1869,6 @@ export class DataLoaderManager implements AppModule {
       }
     } catch (error) {
       this.ctx.map?.setLayerReady('ais', false);
-      this.callPanel('ais-disruptions', 'setData', [], []);
       this.ctx.statusPanel?.updateFeed('Shipping', { status: 'error', errorMessage: String(error) });
       this.ctx.statusPanel?.updateApi('AISStream', { status: 'error' });
       dataFreshness.recordError('ais', String(error));
@@ -1940,13 +1921,11 @@ export class DataLoaderManager implements AppModule {
     try {
       const healthData = await fetchCableHealth();
       this.ctx.map?.setCableHealth(healthData.cables);
-      this.callPanel('cable-health', 'setHealth', healthData);
       const cableIds = Object.keys(healthData.cables);
       const faultCount = cableIds.filter((id) => healthData.cables[id]?.status === 'fault').length;
       const degradedCount = cableIds.filter((id) => healthData.cables[id]?.status === 'degraded').length;
       this.ctx.statusPanel?.updateFeed('CableHealth', { status: 'ok', itemCount: faultCount + degradedCount });
     } catch {
-      this.callPanel('cable-health', 'showError');
       this.ctx.statusPanel?.updateFeed('CableHealth', { status: 'error' });
     }
   }
@@ -2011,7 +1990,6 @@ export class DataLoaderManager implements AppModule {
       this.ctx.map?.setFlightDelays(delays);
       this.ctx.map?.setLayerReady('flights', delays.length > 0);
       this.ctx.intelligenceCache.flightDelays = delays;
-      this.callPanel('flight-delays', 'setData', delays);
       const severe = delays.filter(d => d.severity === 'major' || d.severity === 'severe' || d.delayType === 'closure');
       if (severe.length > 0) ingestAviationForCII(severe);
       this.ctx.statusPanel?.updateFeed('Flights', {
@@ -2021,7 +1999,6 @@ export class DataLoaderManager implements AppModule {
       this.ctx.statusPanel?.updateApi('FAA', { status: 'ok' });
     } catch (error) {
       this.ctx.map?.setLayerReady('flights', false);
-      this.callPanel('flight-delays', 'showError');
       this.ctx.statusPanel?.updateFeed('Flights', { status: 'error', errorMessage: String(error) });
       this.ctx.statusPanel?.updateApi('FAA', { status: 'error' });
     }

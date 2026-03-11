@@ -49,17 +49,6 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   stablecoins: { name: 'Stablecoins', enabled: true, priority: 2 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
   seismology: { name: 'Seismology', enabled: true, priority: 2 },
-  'natural-hazards': { name: 'Natural Hazards', enabled: true, priority: 2 },
-  'cyber-threats': { name: 'Cyber Threats', enabled: true, priority: 2 },
-  'social-unrest': { name: 'Social Unrest', enabled: true, priority: 2 },
-  'military-activity': { name: 'Military Activity', enabled: true, priority: 1 },
-  'internet-outages': { name: 'Internet Outages', enabled: true, priority: 2 },
-  'weather-alerts': { name: 'Weather Alerts', enabled: true, priority: 2 },
-  'ais-disruptions': { name: 'Maritime Disruptions', enabled: true, priority: 2 },
-  'cable-health': { name: 'Undersea Cable Health', enabled: true, priority: 2 },
-  'gps-jamming': { name: 'GPS/GNSS Interference', enabled: true, priority: 2 },
-  'flight-delays': { name: 'Flight Delays', enabled: true, priority: 2 },
-  'iran-events': { name: 'Iran & Proxy Events', enabled: true, priority: 1 },
 };
 
 // Map layers for geopolitical view
