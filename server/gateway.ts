@@ -119,6 +119,15 @@ const RPC_CACHE_TIER: Record<string, CacheTier> = {
   '/api/intelligence/v1/classify-event': 'static',
   '/api/news/v1/summarize-article-cache': 'slow',
 
+  '/api/aviation/v1/list-airport-delays': 'fast',
+  '/api/aviation/v1/get-airport-ops-summary': 'medium',
+  '/api/aviation/v1/list-airport-flights': 'fast',
+  '/api/aviation/v1/get-carrier-ops': 'medium',
+  '/api/aviation/v1/get-flight-status': 'fast',
+  '/api/aviation/v1/track-aircraft': 'fast',
+  '/api/aviation/v1/search-flight-prices': 'slow',
+  '/api/aviation/v1/list-aviation-news': 'medium',
+
   '/api/imagery/v1/search-imagery': 'static',
 };
 

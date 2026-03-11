@@ -193,6 +193,8 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'volatility-dashboard': { name: 'Volatility Dashboard', enabled: true, priority: 1 },
   'housing-market': { name: 'Housing Market', enabled: true, priority: 1 },
   'labor-market': { name: 'Labor Market', enabled: true, priority: 1 },
+  'inflation-breakdown': { name: 'Inflation Breakdown', enabled: true, priority: 1 },
+  'money-supply': { name: 'Money Supply & Fed', enabled: true, priority: 1 },
   'stock-analysis': { name: 'Stock Analysis', enabled: true, priority: 2 },
   'stock-backtest': { name: 'Strategy Backtester', enabled: true, priority: 2 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },

@@ -2877,3 +2877,57 @@
 .lm-chg{font-size:.52rem;min-width:45px;text-align:right}
 .lm-na{opacity:.5;justify-content:space-between}
 .lm-na-text{font-size:.55rem;color:var(--text-dim,#64748b)}
+
+/* ------------------------------------------------------------------ */
+/* InflationBreakdownPanel (.inf-*)                                    */
+/* ------------------------------------------------------------------ */
+.inf-container{display:flex;flex-direction:column;gap:.4rem;height:100%}
+.inf-toolbar{display:flex;align-items:center}
+.inf-cat-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.inf-cat-btn{padding:.1rem .35rem;font-size:.54rem;border:1px solid rgba(255,255,255,.12);background:transparent;color:var(--text-dim,#64748b);border-radius:3px;cursor:pointer;transition:all .15s}
+.inf-cat-btn.active,.inf-cat-btn:hover{border-color:var(--cc,#ff9800);color:var(--cc,#ff9800);background:rgba(255,152,0,.08)}
+.inf-summary{display:flex;gap:.8rem;padding:.25rem .4rem;background:rgba(0,0,0,.12);border-radius:5px}
+.inf-sum-item{display:flex;flex-direction:column;align-items:center;gap:.1rem}
+.inf-sum-label{font-size:.52rem;color:var(--text-dim,#64748b)}
+.inf-sum-val{font-size:.7rem;font-weight:700;color:var(--text,#e2e8f0)}
+.inf-legend{display:flex;gap:.6rem;font-size:.52rem;flex-wrap:wrap}
+.inf-legend-item{opacity:.8}
+.inf-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.2rem}
+.inf-row{display:flex;align-items:center;gap:.3rem;padding:.2rem .3rem;border-radius:4px}
+.inf-row:hover{background:rgba(255,255,255,.04)}
+.inf-cat-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.inf-label-col{flex:1;display:flex;flex-direction:column;min-width:0}
+.inf-label{font-size:.6rem;color:var(--text,#e2e8f0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inf-weight{font-size:.5rem;color:var(--text-dim,#64748b)}
+.inf-row-right{display:flex;align-items:center;gap:.3rem;flex-shrink:0}
+.inf-spark{display:block}
+.inf-yoy{font-size:.65rem;font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+.inf-mom{font-size:.52rem;color:var(--text-dim,#64748b);min-width:55px;text-align:right}
+.inf-na{opacity:.5;justify-content:space-between}
+.inf-na-text{font-size:.55rem;color:var(--text-dim,#64748b)}
+
+/* ------------------------------------------------------------------ */
+/* MoneySupplyPanel (.ms-*)                                            */
+/* ------------------------------------------------------------------ */
+.ms-container{display:flex;flex-direction:column;gap:.4rem;height:100%}
+.ms-toolbar{display:flex;align-items:center}
+.ms-group-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.ms-group-btn{padding:.1rem .35rem;font-size:.54rem;border:1px solid rgba(255,255,255,.12);background:transparent;color:var(--text-dim,#64748b);border-radius:3px;cursor:pointer;transition:all .15s}
+.ms-group-btn.active,.ms-group-btn:hover{border-color:var(--gc,#42a5f5);color:var(--gc,#42a5f5);background:rgba(66,165,245,.08)}
+.ms-summary{display:flex;gap:.8rem;padding:.25rem .4rem;background:rgba(0,0,0,.12);border-radius:5px}
+.ms-sum-item{display:flex;flex-direction:column;align-items:center;gap:.1rem}
+.ms-sum-label{font-size:.52rem;color:var(--text-dim,#64748b)}
+.ms-sum-val{font-size:.7rem;font-weight:700;color:var(--text,#e2e8f0)}
+.ms-sum-val.pos{color:#66bb6a}
+.ms-sum-val.neg{color:#42a5f5}
+.ms-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.2rem}
+.ms-row{display:flex;align-items:center;gap:.3rem;padding:.2rem .3rem;border-radius:4px}
+.ms-row:hover{background:rgba(255,255,255,.04)}
+.ms-group-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.ms-label{font-size:.6rem;color:var(--text,#e2e8f0);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ms-row-right{display:flex;align-items:center;gap:.3rem;flex-shrink:0}
+.ms-spark{display:block}
+.ms-val{font-size:.62rem;font-weight:700;color:var(--text,#e2e8f0);font-variant-numeric:tabular-nums;min-width:60px;text-align:right}
+.ms-chg{font-size:.52rem;min-width:40px;text-align:right}
+.ms-na{opacity:.5;justify-content:space-between}
+.ms-na-text{font-size:.55rem;color:var(--text-dim,#64748b)}

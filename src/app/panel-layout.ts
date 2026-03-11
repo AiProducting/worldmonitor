@@ -802,6 +802,14 @@ export class PanelLayoutManager implements AppModule {
       import('@/components/LaborMarketPanel').then(m => new m.LaborMarketPanel()),
     );
 
+    this.lazyPanel('inflation-breakdown', () =>
+      import('@/components/InflationBreakdownPanel').then(m => new m.InflationBreakdownPanel()),
+    );
+
+    this.lazyPanel('money-supply', () =>
+      import('@/components/MoneySupplyPanel').then(m => new m.MoneySupplyPanel()),
+    );
+
     if (this.ctx.isDesktopApp) {
       const runtimeConfigPanel = new RuntimeConfigPanel({ mode: 'alert' });
       this.ctx.panels['runtime-config'] = runtimeConfigPanel;
