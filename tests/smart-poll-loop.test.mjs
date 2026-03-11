@@ -384,7 +384,7 @@ describe('startSmartPollLoop', () => {
       let aborted = false;
       const handle = startSmartPollLoop(async (ctx) => {
         ctx.signal?.addEventListener('abort', () => { aborted = true; });
-        return new Promise(() => {});
+        return new Promise(() => { });
       }, {
         intervalMs: 1_000, jitterFraction: 0, pauseWhenHidden: true,
         runImmediately: true, visibilityDebounceMs: 0,
@@ -504,7 +504,7 @@ describe('startSmartPollLoop', () => {
       let aborted = false;
       const handle = startSmartPollLoop(async (ctx) => {
         ctx.signal?.addEventListener('abort', () => { aborted = true; });
-        return new Promise(() => {});
+        return new Promise(() => { });
       }, {
         intervalMs: 1_000, jitterFraction: 0, runImmediately: true,
       });

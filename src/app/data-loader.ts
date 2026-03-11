@@ -1,4 +1,5 @@
 import type { AppContext, AppModule } from '@/app/app-context';
+import { getRpcBaseUrl } from '@/services/rpc-client';
 import { enqueuePanelCall } from '@/app/pending-panel-data';
 import type { NewsItem, MapLayers, SocialUnrestEvent } from '@/types';
 import type { MarketData } from '@/types';
@@ -97,7 +98,7 @@ import { fetchOrefAlerts, startOrefPolling, stopOrefPolling, onOrefAlertsUpdate 
 import { enrichEventsWithExposure } from '@/services/population-exposure';
 import { debounce, getCircuitBreakerCooldownInfo } from '@/utils';
 import { getSecretState, isFeatureAvailable, isFeatureEnabled } from '@/services/runtime-config';
-import { isDesktopRuntime } from '@/services/runtime';
+import { isDesktopRuntime, toApiUrl } from '@/services/runtime';
 import { getAiFlowSettings } from '@/services/ai-flow-settings';
 import { t, getCurrentLanguage } from '@/services/i18n';
 import { getHydratedData } from '@/services/bootstrap';
@@ -270,7 +271,7 @@ export class DataLoaderManager implements AppModule {
 
     try {
       const resp = await fetch(
-        `/api/news/v1/list-feed-digest?variant=${SITE_VARIANT}&lang=${getCurrentLanguage()}`,
+        toApiUrl(`/api/news/v1/list-feed-digest?variant=${SITE_VARIANT}&lang=${getCurrentLanguage()}`),
         { signal: AbortSignal.timeout(this.digestRequestTimeoutMs) },
       );
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1243,11 +1244,7 @@ export class DataLoaderManager implements AppModule {
           }
         }
 
-        for (let attempt = 0; attempt < 3 && !commoditiesLoaded; attempt++) {
-          if (attempt > 0) {
-            commoditiesPanel.showRetrying();
-            await new Promise(r => setTimeout(r, 20_000));
-          }
+        for (let attempt = 0; attempt < 1 && !commoditiesLoaded; attempt++) {
           const commoditiesResult = await fetchMultipleStocks(COMMODITIES, {
             onBatch: (partial) => commoditiesPanel.renderCommodities(partial.map(mapCommodity)),
             useCommodityBreaker: true,
@@ -1268,12 +1265,7 @@ export class DataLoaderManager implements AppModule {
 
     try {
       const cryptoPanel = this.ctx.panels['crypto'] as CryptoPanel | undefined;
-      let crypto = await fetchCrypto();
-      if (crypto.length === 0) {
-        cryptoPanel?.showRetrying();
-        await new Promise(r => setTimeout(r, 20_000));
-        crypto = await fetchCrypto();
-      }
+      const crypto = await fetchCrypto();
       cryptoPanel?.renderCrypto(crypto);
       this.ctx.statusPanel?.updateApi('CoinGecko', { status: crypto.length > 0 ? 'ok' : 'error' });
     } catch {
@@ -1398,7 +1390,7 @@ export class DataLoaderManager implements AppModule {
     }
 
     try {
-      const client = new ResearchServiceClient('', { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) });
+      const client = new ResearchServiceClient(getRpcBaseUrl(), { fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) });
       const data = await client.listTechEvents({
         type: 'conference',
         mappable: true,
@@ -2136,17 +2128,8 @@ export class DataLoaderManager implements AppModule {
           this.ctx.statusPanel?.updateApi('FRED', { status: 'error' });
           return;
         }
-        economicPanel?.showRetrying();
-        await new Promise(r => setTimeout(r, 20_000));
-        const retryData = await fetchFredData();
-        if (retryData.length === 0) {
-          economicPanel?.showError();
-          this.ctx.statusPanel?.updateApi('FRED', { status: 'error' });
-          return;
-        }
-        economicPanel?.update(retryData);
-        this.ctx.statusPanel?.updateApi('FRED', { status: 'ok' });
-        dataFreshness.recordUpdate('economic', retryData.length);
+        economicPanel?.showError(t('common.upstreamUnavailable'));
+        this.ctx.statusPanel?.updateApi('FRED', { status: 'error' });
         return;
       }
 
@@ -2154,19 +2137,6 @@ export class DataLoaderManager implements AppModule {
       this.ctx.statusPanel?.updateApi('FRED', { status: 'ok' });
       dataFreshness.recordUpdate('economic', data.length);
     } catch {
-      if (isFeatureAvailable('economicFred')) {
-        economicPanel?.showRetrying();
-        try {
-          await new Promise(r => setTimeout(r, 20_000));
-          const retryData = await fetchFredData();
-          if (retryData.length > 0) {
-            economicPanel?.update(retryData);
-            this.ctx.statusPanel?.updateApi('FRED', { status: 'ok' });
-            dataFreshness.recordUpdate('economic', retryData.length);
-            return;
-          }
-        } catch { /* fall through */ }
-      }
       this.ctx.statusPanel?.updateApi('FRED', { status: 'error' });
       economicPanel?.showError();
       economicPanel?.setLoading(false);

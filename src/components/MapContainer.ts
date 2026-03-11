@@ -866,6 +866,12 @@ export class MapContainer {
     if (this.useDeckGL) { this.deckGLMap?.setOnCountryClick(callback); } else { this.svgMap?.setOnCountryClick(callback); }
   }
 
+  public onMapContextMenu(callback: (payload: { lat: number; lon: number; screenX: number; screenY: number }) => void): void {
+    this.cachedOnMapContextMenu = callback;
+    if (this.useGlobe) { this.globeMap?.setOnMapContextMenu(callback); return; }
+    if (this.useDeckGL) { this.deckGLMap?.setOnMapContextMenu(callback); }
+  }
+
   public fitCountry(code: string): void {
     if (this.useGlobe) { this.globeMap?.fitCountry(code); return; }
     if (this.useDeckGL) {

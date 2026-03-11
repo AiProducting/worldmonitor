@@ -144,7 +144,7 @@ describe('CircuitBreaker isolation — independent per-indicator instances', () 
 
     const fallback = { data: [], pagination: undefined };
     const internetData = { data: [{ countryCode: 'USA', indicatorCode: 'IT.NET.USER.ZS', year: 2023, value: 90 }], pagination: undefined };
-    const mobileData   = { data: [{ countryCode: 'USA', indicatorCode: 'IT.CEL.SETS.P2', year: 2023, value: 120 }], pagination: undefined };
+    const mobileData = { data: [{ countryCode: 'USA', indicatorCode: 'IT.CEL.SETS.P2', year: 2023, value: 120 }], pagination: undefined };
 
     // Populate both caches with different data
     await breakerA.execute(async () => internetData, fallback);

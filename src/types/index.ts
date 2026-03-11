@@ -562,8 +562,6 @@ export interface MapLayers {
   gpsJamming: boolean;
   // Satellite orbital tracking + imagery footprints
   satellites: boolean;
-  // NOTAM overlay (airspace closures)
-  notamOverlay: boolean;
 
   // CII choropleth layer
   ciiChoropleth: boolean;
