@@ -2461,3 +2461,155 @@
 .fx-chg{font-size:.6rem;font-variant-numeric:tabular-nums}
 .fx-up{color:#4caf50}
 .fx-down{color:#f44336}
+
+/* ── CryptoMarketPanel (.cmc-*) ─────────────────── */
+.cmc-container{display:flex;flex-direction:column;gap:.4rem}
+.cmc-toolbar{display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.cmc-view-bar,.cmc-sort-bar{display:flex;gap:.2rem}
+.cmc-view-btn,.cmc-sort-btn{font-size:.57rem;padding:.12rem .35rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.cmc-view-btn:hover,.cmc-view-btn.active,.cmc-sort-btn:hover,.cmc-sort-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.cmc-breadth{display:flex;gap:.6rem;font-size:.6rem}
+.cmc-bull-txt{color:#4caf50}
+.cmc-bear-txt{color:#f44336}
+.cmc-list{display:flex;flex-direction:column;gap:.1rem}
+.cmc-row{display:grid;grid-template-columns:1.6rem 1fr auto auto;align-items:center;gap:.35rem;padding:.3rem .2rem;border-bottom:1px solid var(--border,#1e293b)}
+.cmc-icon{font-size:.9rem;text-align:center;line-height:1;font-weight:700;color:var(--text,#e2e8f0)}
+.cmc-info{display:flex;flex-direction:column;gap:.03rem;min-width:0}
+.cmc-sym{font-weight:700;font-size:.65rem;color:var(--text,#e2e8f0)}
+.cmc-name{font-size:.55rem;color:var(--text-dim,#64748b);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmc-spark-wrap{width:52px;display:flex;align-items:center}
+.cmc-spark{display:block}
+.cmc-price-col{display:flex;flex-direction:column;align-items:flex-end;gap:.03rem;min-width:4.5rem}
+.cmc-price{font-weight:700;font-variant-numeric:tabular-nums;font-size:.7rem;color:var(--text,#e2e8f0)}
+.cmc-chg{font-size:.6rem;font-variant-numeric:tabular-nums}
+.cmc-up{color:#4caf50}
+.cmc-down{color:#f44336}
+
+/* ── GlobalIndicesPanel (.gi-*) ─────────────────── */
+.gi-container{display:flex;flex-direction:column;gap:.4rem}
+.gi-toolbar{display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.gi-region-bar,.gi-sort-bar{display:flex;gap:.2rem}
+.gi-rgn-btn,.gi-sort-btn{font-size:.57rem;padding:.12rem .35rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.gi-rgn-btn:hover,.gi-rgn-btn.active,.gi-sort-btn:hover,.gi-sort-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.gi-breadth{display:flex;gap:.4rem;font-size:.6rem;align-items:center}
+.gi-bull-txt{color:#4caf50}
+.gi-bear-txt{color:#f44336}
+.gi-dim{color:var(--text-dim,#64748b)}
+.gi-list{display:flex;flex-direction:column;gap:.1rem}
+.gi-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:.4rem;padding:.3rem .2rem;border-bottom:1px solid var(--border,#1e293b)}
+.gi-info{display:flex;flex-direction:column;gap:.03rem;min-width:0}
+.gi-sym{font-weight:700;font-size:.65rem;color:var(--text,#e2e8f0)}
+.gi-name{font-size:.55rem;color:var(--text-dim,#64748b);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gi-spark-wrap{width:48px;display:flex;align-items:center}
+.gi-spark{display:block}
+.gi-price-col{display:flex;flex-direction:column;align-items:flex-end;gap:.03rem;min-width:4.5rem}
+.gi-price{font-weight:700;font-variant-numeric:tabular-nums;font-size:.7rem;color:var(--text,#e2e8f0)}
+.gi-chg{font-size:.6rem;font-variant-numeric:tabular-nums}
+.gi-up{color:#4caf50}
+.gi-down{color:#f44336}
+
+/* ── CreditRiskPanel (.cr-*) ─────────────────── */
+.cr-container{display:flex;flex-direction:column;gap:.4rem}
+.cr-toolbar{display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.cr-filter-bar,.cr-sort-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.cr-filter-btn,.cr-sort-btn{font-size:.57rem;padding:.12rem .35rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.cr-filter-btn:hover,.cr-filter-btn.active,.cr-sort-btn:hover,.cr-sort-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.cr-summary{display:flex;gap:.6rem;font-size:.6rem;color:var(--text-dim,#64748b)}
+.cr-sum-item{display:flex;align-items:center;gap:.2rem}
+.cr-sum-val{font-weight:700;color:var(--text,#e2e8f0)}
+.cr-sum-critical{color:#f44336}
+.cr-sum-elevated{color:#ff9800}
+.cr-list{display:flex;flex-direction:column;gap:.1rem}
+.cr-row{display:grid;grid-template-columns:1fr 1fr auto;align-items:center;gap:.4rem;padding:.3rem .2rem;border-bottom:1px solid var(--border,#1e293b);font-size:.67rem}
+.cr-country-info{display:flex;flex-direction:column;gap:.02rem;min-width:0}
+.cr-country{font-weight:600;color:var(--text,#e2e8f0);font-size:.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cr-code{font-size:.55rem;color:var(--text-dim,#64748b)}
+.cr-bar-col{display:flex;align-items:center;gap:.3rem}
+.cr-bar-track{flex:1;height:5px;background:var(--surface,#1e293b);border-radius:3px;overflow:hidden;min-width:40px}
+.cr-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.cr-ratio{font-variant-numeric:tabular-nums;font-size:.65rem;font-weight:700;min-width:2.8rem;text-align:right;color:var(--text,#e2e8f0)}
+.cr-meta{display:flex;flex-direction:column;align-items:flex-end;gap:.03rem;min-width:4rem}
+.cr-badge{font-size:.53rem;padding:.1rem .3rem;border-radius:3px;font-weight:600}
+.cr-risk-critical{background:rgba(244,67,54,.15);color:#f44336}
+.cr-risk-elevated{background:rgba(255,152,0,.15);color:#ff9800}
+.cr-risk-moderate{background:rgba(255,235,59,.12);color:#ffeb3b}
+.cr-risk-low{background:rgba(76,175,80,.12);color:#4caf50}
+.cr-delta{font-size:.58rem;font-variant-numeric:tabular-nums}
+
+/* ── RealExchangeRatePanel (.reer-*) ─────────────────── */
+.reer-container{display:flex;flex-direction:column;gap:.4rem}
+.reer-toolbar{display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.reer-filter-bar,.reer-sort-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.reer-sort-btn,.reer-toggle-btn{font-size:.57rem;padding:.12rem .35rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.reer-sort-btn:hover,.reer-sort-btn.active,.reer-toggle-btn:hover,.reer-toggle-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.reer-summary{display:flex;gap:.6rem;font-size:.6rem;color:var(--text-dim,#64748b)}
+.reer-sum-item{display:flex;align-items:center;gap:.2rem}
+.reer-ov{font-weight:700;color:#f44336}
+.reer-uv{font-weight:700;color:#4caf50}
+.reer-note{font-size:.57rem;color:var(--text-dim,#64748b);padding:.1rem 0;border-top:1px dashed var(--border,#1e293b);border-bottom:1px dashed var(--border,#1e293b)}
+.reer-list{display:flex;flex-direction:column;gap:.1rem}
+.reer-row{display:grid;grid-template-columns:1.4rem 1fr 1fr auto;align-items:center;gap:.35rem;padding:.3rem .1rem;border-bottom:1px solid var(--border,#1e293b);font-size:.67rem}
+.reer-flag{font-size:.9rem;text-align:center;line-height:1}
+.reer-country{display:flex;flex-direction:column;gap:.02rem;min-width:0}
+.reer-name{font-weight:600;color:var(--text,#e2e8f0);font-size:.63rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reer-code{font-size:.53rem;color:var(--text-dim,#64748b)}
+.reer-bar-col{display:flex;align-items:center;gap:.3rem;min-width:0}
+.reer-bar-track{flex:1;position:relative;height:5px;background:var(--surface,#1e293b);border-radius:3px;overflow:hidden;min-width:32px}
+.reer-center-line{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.3);z-index:1}
+.reer-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.reer-val{font-variant-numeric:tabular-nums;font-size:.63rem;font-weight:700;min-width:2.5rem;text-align:right;color:var(--text,#e2e8f0)}
+.reer-meta{display:flex;flex-direction:column;align-items:flex-end;gap:.03rem;min-width:4.5rem}
+.reer-label{font-size:.55rem;font-weight:600}
+.reer-delta{font-size:.55rem;font-variant-numeric:tabular-nums}
+
+/* ── EnergyPricesPanel (.ep-*) ─────────────────── */
+.ep-container{display:flex;flex-direction:column;gap:.4rem}
+.ep-toolbar{padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.ep-grp-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.ep-grp-btn{font-size:.57rem;padding:.12rem .35rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.ep-grp-btn:hover,.ep-grp-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.ep-spread{font-size:.62rem;color:var(--text-dim,#64748b);padding:.15rem 0;border-bottom:1px dashed var(--border,#1e293b)}
+.ep-spread-val{font-weight:700;color:var(--text,#e2e8f0)}
+.ep-list{display:flex;flex-direction:column;gap:.1rem}
+.ep-row{display:grid;grid-template-columns:1.6rem 1fr auto;align-items:center;gap:.4rem;padding:.3rem .2rem;border-bottom:1px solid var(--border,#1e293b)}
+.ep-icon{font-size:1rem;text-align:center;line-height:1}
+.ep-info{display:flex;flex-direction:column;gap:.03rem;min-width:0}
+.ep-name{font-weight:600;font-size:.65rem;color:var(--text,#e2e8f0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ep-unit{font-size:.53rem;color:var(--text-dim,#64748b)}
+.ep-price-col{display:flex;flex-direction:column;align-items:flex-end;gap:.03rem;min-width:4.5rem}
+.ep-price{font-weight:700;font-variant-numeric:tabular-nums;font-size:.7rem;color:var(--text,#e2e8f0)}
+.ep-chg{font-size:.6rem;font-variant-numeric:tabular-nums}
+.ep-up{color:#4caf50}
+.ep-down{color:#f44336}
+
+/* ── MacroRegimePanel (.mrp-*) ─────────────────── */
+.mrp-container{display:flex;flex-direction:column;gap:.5rem}
+.mrp-verdict-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;padding:.4rem;background:var(--surface,#1e293b);border-radius:6px}
+.mrp-verdict{font-size:.75rem;font-weight:700;padding:.2rem .5rem;border-radius:5px}
+.mrp-verdict-bull{background:rgba(76,175,80,.15);color:#4caf50}
+.mrp-verdict-bear{background:rgba(244,67,54,.15);color:#f44336}
+.mrp-verdict-neutral{background:rgba(144,164,174,.12);color:#90a4ae}
+.mrp-score{font-size:.65rem;font-weight:700;color:var(--text-dim,#64748b);margin-left:auto}
+.mrp-score-bar-track{width:60px;height:5px;background:var(--border,#1e293b);border-radius:3px;overflow:hidden}
+.mrp-score-bar-fill{height:100%;background:linear-gradient(90deg,#f44336,#ff9800,#4caf50);border-radius:3px;transition:width .4s}
+.mrp-qqq-row{display:flex;align-items:center;gap:.5rem;font-size:.6rem;color:var(--text-dim,#64748b)}
+.mrp-qqq-lbl{min-width:4.5rem}
+.mrp-hist-spark{display:block}
+.mrp-section-title{font-size:.62rem;font-weight:700;color:var(--text-dim,#64748b);padding:.15rem 0;border-bottom:1px solid var(--border,#1e293b);text-transform:uppercase;letter-spacing:.04em}
+.mrp-signals{display:flex;flex-direction:column;gap:.15rem}
+.mrp-signal-row{display:grid;grid-template-columns:1rem 1fr auto;align-items:center;gap:.4rem;padding:.25rem .1rem;border-bottom:1px solid var(--border,#1e293b)}
+.mrp-dot{font-size:.65rem;line-height:1;text-align:center}
+.mrp-bull{color:#4caf50}
+.mrp-bear{color:#f44336}
+.mrp-neutral{color:#90a4ae}
+.mrp-dim{color:#475569}
+.mrp-signal-info{display:flex;flex-direction:column;gap:.02rem;min-width:0}
+.mrp-signal-label{font-size:.65rem;font-weight:600;color:var(--text,#e2e8f0)}
+.mrp-signal-detail{font-size:.55rem;color:var(--text-dim,#64748b)}
+.mrp-signal-status{font-size:.58rem;font-weight:600;color:var(--text-dim,#64748b);white-space:nowrap;max-width:5.5rem;text-align:right;text-overflow:ellipsis;overflow:hidden}
+.mrp-fg-wrap{display:flex;flex-direction:column;gap:.2rem;padding:.3rem;background:var(--surface,#1e293b);border-radius:5px}
+.mrp-fg-bar-track{height:8px;background:linear-gradient(90deg,#f44336 0%,#ff9800 25%,#90a4ae 50%,#8bc34a 75%,#4caf50 100%);border-radius:4px;overflow:hidden;position:relative}
+.mrp-fg-bar-fill{position:absolute;right:0;top:0;bottom:0;background:rgba(0,0,0,.45);border-radius:0 4px 4px 0;transition:width .4s}
+.mrp-fg-labels{display:flex;align-items:center;justify-content:space-between}
+.mrp-fg-val{font-size:.65rem;font-weight:700}
+.mrp-fg-hist{padding:.1rem 0}

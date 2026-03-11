@@ -738,6 +738,30 @@ export class PanelLayoutManager implements AppModule {
       import('@/components/ForexDashboardPanel').then(m => new m.ForexDashboardPanel()),
     );
 
+    this.lazyPanel('crypto-market', () =>
+      import('@/components/CryptoMarketPanel').then(m => new m.CryptoMarketPanel()),
+    );
+
+    this.lazyPanel('global-indices', () =>
+      import('@/components/GlobalIndicesPanel').then(m => new m.GlobalIndicesPanel()),
+    );
+
+    this.lazyPanel('credit-risk', () =>
+      import('@/components/CreditRiskPanel').then(m => new m.CreditRiskPanel()),
+    );
+
+    this.lazyPanel('real-exchange-rate', () =>
+      import('@/components/RealExchangeRatePanel').then(m => new m.RealExchangeRatePanel()),
+    );
+
+    this.lazyPanel('energy-prices', () =>
+      import('@/components/EnergyPricesPanel').then(m => new m.EnergyPricesPanel()),
+    );
+
+    this.lazyPanel('macro-regime', () =>
+      import('@/components/MacroRegimePanel').then(m => new m.MacroRegimePanel()),
+    );
+
     if (this.ctx.isDesktopApp) {
       const runtimeConfigPanel = new RuntimeConfigPanel({ mode: 'alert' });
       this.ctx.panels['runtime-config'] = runtimeConfigPanel;
