@@ -65,6 +65,47 @@ format: ## Format protobuf files
 
 check: lint generate ## Run all checks (lint + generate)
 
+# ── Upstream sync (read-only: pull from koala73/worldmonitor, never push) ─────
+
+sync-upstream: ## Fetch latest upstream/main without merging (safe, read-only)
+	@echo "Fetching upstream (koala73/worldmonitor)..."
+	git fetch upstream
+	@echo ""
+	@echo "=== Commits in upstream/main not in your branch ==="
+	git log HEAD..upstream/main --oneline --no-color | head -30 || true
+	@echo ""
+	@echo "=== Files changed in upstream/main since your branch diverged ==="
+	git diff --stat HEAD...upstream/main | tail -20 || true
+	@echo ""
+	@echo "Run 'make preview-merge' to see full conflict analysis."
+
+preview-merge: ## Preview merge from upstream/main into a temp branch (non-destructive)
+	@echo "Creating temporary merge preview branch..."
+	$(eval PREVIEW_BRANCH := preview/upstream-merge-$(shell date +%Y%m%d-%H%M%S))
+	git checkout -b $(PREVIEW_BRANCH) HEAD
+	@echo "Attempting merge of upstream/main into $(PREVIEW_BRANCH)..."
+	git merge upstream/main --no-commit --no-ff || true
+	@echo ""
+	@echo "=== Merge status ==="
+	git status --short
+	@echo ""
+	@echo "=== Conflicting files ==="
+	git diff --name-only --diff-filter=U || true
+	@echo ""
+	@echo "Aborting merge and cleaning up preview branch..."
+	git merge --abort 2>/dev/null || true
+	git checkout - 
+	git branch -D $(PREVIEW_BRANCH)
+	@echo ""
+	@echo "Preview complete. No changes were made to your working branch."
+
+merge-upstream: ## Merge upstream/main into current branch (manual step — review first!)
+	@echo "⚠ This will merge upstream/main into your current branch: $$(git branch --show-current)"
+	@echo "Run 'make preview-merge' first to check for conflicts."
+	@read -p "Continue? [y/N] " ans && [ "$$ans" = "y" ]
+	git fetch upstream
+	git merge upstream/main --no-ff -m "chore: merge upstream/main into $$(git branch --show-current)"
+
 clean: ## Clean generated files
 	@rm -rf $(GEN_CLIENT_DIR)
 	@rm -rf $(GEN_SERVER_DIR)

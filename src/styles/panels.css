@@ -2307,3 +2307,82 @@
 .mil-alt{font-size:.58rem;color:var(--text-secondary,#64748b);text-align:right}
 .mil-ago{font-size:.58rem;color:var(--text-secondary,#64748b);text-align:right}
 .mil-choke{font-size:.55rem;color:#f97316;white-space:nowrap}
+
+/* ── YieldCurvePanel (.yc-*) ─────────────────────── */
+.yc-container{display:flex;flex-direction:column;gap:.5rem;padding:.3rem 0}
+.yc-header-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.yc-status{font-size:.7rem;font-weight:700;padding:.15rem .5rem;border-radius:4px}
+.yc-status.normal{background:rgba(76,175,80,.15);color:#4caf50}
+.yc-status.flat{background:rgba(255,152,0,.15);color:#ff9800}
+.yc-status.inverted{background:rgba(244,67,54,.15);color:#f44336;animation:pulse-warn 2s infinite}
+@keyframes pulse-warn{0%,100%{opacity:1}50%{opacity:.6}}
+.yc-spreads{display:flex;gap:.3rem;flex-wrap:wrap}
+.yc-spread-badge{display:flex;gap:.3rem;align-items:center;font-size:.65rem;padding:.15rem .45rem;border-radius:4px;background:var(--surface,#1e293b)}
+.yc-spread-label{color:var(--text-dim,#64748b)}
+.yc-spread-value{font-weight:700;font-variant-numeric:tabular-nums}
+.spread-inverted .yc-spread-value{color:#f44336}
+.spread-flat .yc-spread-value{color:#ff9800}
+.spread-normal .yc-spread-value{color:#4caf50}
+.yc-chart{padding:.2rem 0;overflow:hidden}
+.yc-svg{display:block;width:100%;height:auto;max-height:100px}
+.yc-no-data{font-size:.7rem;color:var(--text-dim,#64748b);text-align:center;padding:.5rem}
+.yc-rates{display:flex;flex-direction:column;gap:.2rem}
+.yc-row{display:grid;grid-template-columns:2.2rem 1fr 3rem;align-items:center;gap:.4rem;font-size:.68rem}
+.yc-tenor{font-size:.65rem;color:var(--text-dim,#64748b);text-align:right;font-weight:600}
+.yc-bar-wrap{height:5px;background:var(--surface,#1e293b);border-radius:2px;overflow:hidden}
+.yc-bar{height:100%;border-radius:2px;transition:width .4s}
+.yc-bar.yield-high{background:#f44336}
+.yc-bar.yield-mid{background:#ff9800}
+.yc-bar.yield-low{background:#4caf50}
+.yc-bar.yield-near-zero{background:#3b82f6}
+.yc-rate{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;font-size:.68rem}
+.yc-rate.yield-high{color:#f44336}
+.yc-rate.yield-mid{color:#ff9800}
+.yc-rate.yield-low{color:#4caf50}
+.yc-rate.yield-near-zero{color:#3b82f6}
+.yc-footer{font-size:.58rem;color:var(--text-dim,#64748b);text-align:center;padding-top:.3rem;border-top:1px solid var(--border,#1e293b)}
+
+/* ── CentralBankRatesPanel (.cbr-*) ──────────────── */
+.cbr-container{display:flex;flex-direction:column;gap:.4rem}
+.cbr-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem;padding:.3rem 0;border-bottom:1px solid var(--border,#1e293b);margin-bottom:.2rem}
+.cbr-stat{display:flex;flex-direction:column;align-items:center;gap:.1rem}
+.cbr-stat-label{font-size:.58rem;color:var(--text-dim,#64748b)}
+.cbr-stat-value{font-size:.82rem;font-weight:700;font-variant-numeric:tabular-nums}
+.cbr-sort-bar{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.2rem}
+.cbr-sort-btn{font-size:.6rem;padding:.15rem .4rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.cbr-sort-btn:hover,.cbr-sort-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.cbr-list{display:flex;flex-direction:column;gap:.15rem;max-height:320px;overflow-y:auto}
+.cbr-row{display:grid;grid-template-columns:1.4rem 1fr auto;align-items:center;gap:.4rem;font-size:.67rem;padding:.25rem .2rem;border-bottom:1px solid var(--border,#1e293b);border-radius:3px}
+.cbr-priority{background:rgba(255,255,255,.02)}
+.cbr-flag{font-size:.9rem;text-align:center}
+.cbr-bank-info{display:flex;flex-direction:column;gap:.05rem;min-width:0}
+.cbr-bank-name{color:var(--text,#e2e8f0);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cbr-date{font-size:.57rem;color:var(--text-dim,#64748b)}
+.cbr-rate-col{display:flex;flex-direction:column;align-items:flex-end;gap:.05rem;min-width:3.5rem}
+.cbr-rate{font-weight:700;font-variant-numeric:tabular-nums;font-size:.75rem}
+.cbr-change{font-size:.58rem}
+.rate-up{color:#4caf50}
+.rate-down{color:#f44336}
+.rate-stable{color:var(--text-dim,#64748b)}
+
+/* ── EconomicIndicatorsPanel (.ecal-*) ─────────────── */
+.ecal-container{display:flex;flex-direction:column;gap:.35rem}
+.ecal-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.4rem;flex-wrap:wrap;padding-bottom:.3rem;border-bottom:1px solid var(--border,#1e293b)}
+.ecal-filter-bar{display:flex;gap:.25rem}
+.ecal-filter-btn{font-size:.6rem;padding:.15rem .4rem;border-radius:4px;border:1px solid var(--border,#1e293b);background:transparent;color:var(--text-dim,#64748b);cursor:pointer;transition:all .15s}
+.ecal-filter-btn:hover,.ecal-filter-btn.active{background:var(--surface,#1e293b);color:var(--text,#e2e8f0);border-color:var(--text-dim,#64748b)}
+.ecal-subtitle{font-size:.57rem;color:var(--text-dim,#64748b)}
+.ecal-list{display:flex;flex-direction:column;gap:.15rem}
+.ecal-row{display:grid;grid-template-columns:1fr 4rem auto;align-items:center;gap:.4rem;font-size:.67rem;padding:.3rem .2rem;border-bottom:1px solid var(--border,#1e293b)}
+.ecal-important{background:rgba(255,255,255,.015)}
+.ecal-label-wrap{display:flex;flex-direction:column;gap:.05rem;min-width:0}
+.ecal-label{font-weight:600;color:var(--text,#e2e8f0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ecal-date{font-size:.57rem;color:var(--text-dim,#64748b)}
+.ecal-spark{display:flex;align-items:center;justify-content:center}
+.econ-spark{display:block}
+.ecal-values{display:flex;flex-direction:column;align-items:flex-end;gap:.05rem;min-width:3.5rem}
+.ecal-value{font-weight:700;font-variant-numeric:tabular-nums;font-size:.72rem;color:var(--text,#e2e8f0)}
+.ecal-change{font-size:.57rem}
+.econ-up{color:#4caf50}
+.econ-down{color:#f44336}
+.ecal-empty{font-size:.7rem;color:var(--text-dim,#64748b);text-align:center;padding:.5rem}

@@ -714,6 +714,18 @@ export class PanelLayoutManager implements AppModule {
     this.createPanel('etf-flows', () => new ETFFlowsPanel());
     this.createPanel('stablecoins', () => new StablecoinPanel());
 
+    this.lazyPanel('yield-curve', () =>
+      import('@/components/YieldCurvePanel').then(m => new m.YieldCurvePanel()),
+    );
+
+    this.lazyPanel('central-bank-rates', () =>
+      import('@/components/CentralBankRatesPanel').then(m => new m.CentralBankRatesPanel()),
+    );
+
+    this.lazyPanel('economic-indicators', () =>
+      import('@/components/EconomicIndicatorsPanel').then(m => new m.EconomicIndicatorsPanel()),
+    );
+
     if (this.ctx.isDesktopApp) {
       const runtimeConfigPanel = new RuntimeConfigPanel({ mode: 'alert' });
       this.ctx.panels['runtime-config'] = runtimeConfigPanel;
