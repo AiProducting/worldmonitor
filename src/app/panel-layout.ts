@@ -762,6 +762,18 @@ export class PanelLayoutManager implements AppModule {
       import('@/components/MacroRegimePanel').then(m => new m.MacroRegimePanel()),
     );
 
+    this.lazyPanel('energy-capacity', () =>
+      import('@/components/EnergyCapacityPanel').then(m => new m.EnergyCapacityPanel()),
+    );
+
+    this.lazyPanel('world-bank-gdp', () =>
+      import('@/components/WorldBankGdpPanel').then(m => new m.WorldBankGdpPanel()),
+    );
+
+    this.lazyPanel('global-stock-index', () =>
+      import('@/components/GlobalStockIndexPanel').then(m => new m.GlobalStockIndexPanel()),
+    );
+
     if (this.ctx.isDesktopApp) {
       const runtimeConfigPanel = new RuntimeConfigPanel({ mode: 'alert' });
       this.ctx.panels['runtime-config'] = runtimeConfigPanel;
