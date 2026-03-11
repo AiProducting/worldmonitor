@@ -184,6 +184,13 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'gcc-investments': { name: 'GCC Investments', enabled: true, priority: 2 },
   gccNews: { name: 'GCC Business News', enabled: true, priority: 2 },
   polymarket: { name: 'Predictions', enabled: true, priority: 2 },
+  'trade-policy': { name: 'Trade Policy & Tariffs', enabled: true, priority: 1 },
+  'supply-chain': { name: 'Supply Chain & Shipping', enabled: true, priority: 1 },
+  'daily-market-brief': { name: 'Daily Market Brief', enabled: true, priority: 1 },
+  'econ-time-series': { name: 'Economic Time Series', enabled: true, priority: 1 },
+  'trade-flows': { name: 'Trade Flows', enabled: true, priority: 1 },
+  'stock-analysis': { name: 'Stock Analysis', enabled: true, priority: 2 },
+  'stock-backtest': { name: 'Strategy Backtester', enabled: true, priority: 2 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
 };
 

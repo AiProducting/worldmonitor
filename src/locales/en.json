@@ -225,6 +225,8 @@
     "economic": "Economic Indicators",
     "tradePolicy": "Trade Policy",
     "supplyChain": "Supply Chain",
+    "econTimeSeries": "Economic Time Series",
+    "tradeFlows": "Trade Flows",
     "finance": "Financial",
     "tech": "Technology",
     "crypto": "Crypto",

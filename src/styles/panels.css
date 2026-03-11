@@ -2694,3 +2694,68 @@
 .fn-title{font-size:.65rem;font-weight:600;color:var(--text,#e2e8f0);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .fn-location{font-size:.55rem;color:var(--text-dim,#64748b)}
 .fn-empty{font-size:.65rem;color:var(--text-dim,#64748b);padding:.5rem;text-align:center}
+
+/* ------------------------------------------------------------------ */
+/* EconTimeSeriesPanel (.ets-*)                                        */
+/* ------------------------------------------------------------------ */
+.ets-container{display:flex;gap:.5rem;height:100%;min-height:260px}
+.ets-sidebar{width:140px;flex-shrink:0;display:flex;flex-direction:column;gap:.3rem;overflow:hidden}
+.ets-cat-bar{display:flex;flex-wrap:wrap;gap:.2rem}
+.ets-cat-btn{padding:.1rem .3rem;font-size:.52rem;border:1px solid rgba(255,255,255,.12);background:transparent;color:var(--text-dim,#64748b);border-radius:3px;cursor:pointer;transition:all .15s}
+.ets-cat-btn.active,.ets-cat-btn:hover{border-color:var(--cat-color,#42a5f5);color:var(--cat-color,#42a5f5);background:rgba(66,165,245,.08)}
+.ets-series-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.1rem}
+.ets-series-item{cursor:pointer;padding:.25rem .4rem;border-radius:4px;border-left:2px solid transparent;display:flex;align-items:center;gap:.3rem;transition:all .15s}
+.ets-series-item:hover,.ets-series-item.selected{background:rgba(255,255,255,.07);border-left-color:var(--item-color,#42a5f5)}
+.ets-series-label{font-size:.58rem;color:var(--text,#e2e8f0);flex:1;line-height:1.3}
+.ets-series-val{font-size:.55rem;color:var(--item-color,#42a5f5);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ets-spin{font-size:.6rem;animation:ets-rotate 1s linear infinite;display:inline-block}
+@keyframes ets-rotate{to{transform:rotate(360deg)}}
+.ets-main{flex:1;display:flex;flex-direction:column;gap:.4rem;min-width:0}
+.ets-chart-area{flex:1;background:rgba(0,0,0,.15);border-radius:6px;padding:.5rem;display:flex;flex-direction:column;gap:.3rem;min-height:130px}
+.ets-chart-header{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.ets-chart-val{font-size:1.1rem;font-weight:700;color:var(--text,#e2e8f0);font-variant-numeric:tabular-nums}
+.ets-chart-units{font-size:.52rem;color:var(--text-dim,#64748b);margin-left:.4rem;font-weight:400}
+.ets-chart-yoy{font-size:.6rem;font-weight:600;padding:.1rem .3rem;border-radius:3px}
+.ets-chart-yoy.pos{color:#66bb6a;background:rgba(102,187,106,.1)}
+.ets-chart-yoy.neg{color:#ef5350;background:rgba(239,83,80,.1)}
+.ets-svg{width:100%;height:110px}
+.ets-axis-label{font-size:8px;fill:var(--text-dim,#64748b);font-family:inherit}
+.ets-chart-loading{font-size:.6rem;color:var(--text-dim,#64748b);text-align:center;padding:2rem 0;flex:1}
+.ets-series-meta{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.ets-meta-id{font-size:.55rem;color:var(--text-dim,#64748b);font-family:monospace}
+.ets-meta-cat{font-size:.55rem;font-weight:600}
+.ets-meta-freq{font-size:.52rem;color:var(--text-dim,#64748b)}
+
+/* ------------------------------------------------------------------ */
+/* TradeFlowsPanel (.tfl-*)                                           */
+/* ------------------------------------------------------------------ */
+.tfl-container{display:flex;flex-direction:column;gap:.4rem;height:100%}
+.tfl-toolbar{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center}
+.tfl-region-bar,.tfl-sort-bar{display:flex;gap:.2rem;flex-wrap:wrap}
+.tfl-region-btn,.tfl-sort-btn{padding:.12rem .4rem;font-size:.56rem;border:1px solid rgba(255,255,255,.12);background:transparent;color:var(--text-dim,#64748b);border-radius:3px;cursor:pointer;transition:all .15s}
+.tfl-region-btn.active,.tfl-region-btn:hover,.tfl-sort-btn.active,.tfl-sort-btn:hover{border-color:#42a5f5;color:#42a5f5;background:rgba(66,165,245,.08)}
+.tfl-summary{display:flex;gap:.8rem;font-size:.58rem;padding:.2rem 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.tfl-sum-exp,.tfl-sum-imp,.tfl-sum-bal{color:var(--text-dim,#64748b)}
+.tfl-sum-bal.surplus strong{color:#66bb6a}
+.tfl-sum-bal.deficit strong{color:#ef5350}
+.tfl-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.3rem}
+.tfl-row{padding:.3rem .4rem;border-radius:4px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:.2rem}
+.tfl-row-na{flex-direction:row;align-items:center;justify-content:space-between;padding:.25rem .4rem}
+.tfl-row-head{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.tfl-label{font-size:.62rem;font-weight:600;color:var(--text,#e2e8f0);flex:1}
+.tfl-balance{font-size:.6rem;font-weight:700;padding:.05rem .3rem;border-radius:3px}
+.tfl-balance.surplus{color:#66bb6a;background:rgba(102,187,106,.1)}
+.tfl-balance.deficit{color:#ef5350;background:rgba(239,83,80,.1)}
+.tfl-year{font-size:.52rem;color:var(--text-dim,#64748b)}
+.tfl-bars{display:flex;flex-direction:column;gap:.15rem}
+.tfl-bar-row{display:flex;align-items:center;gap:.3rem}
+.tfl-bar-label{font-size:.52rem;color:var(--text-dim,#64748b);width:24px;flex-shrink:0}
+.tfl-bar-track{flex:1;height:5px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden}
+.tfl-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.tfl-bar-fill.exp{background:#42a5f5}
+.tfl-bar-fill.imp{background:#ef5350}
+.tfl-bar-val{font-size:.55rem;color:var(--text-dim,#64748b);white-space:nowrap;min-width:60px}
+.tfl-chg{padding:.02rem .2rem;border-radius:2px;font-size:.5rem;font-weight:600}
+.tfl-chg.pos{color:#66bb6a}
+.tfl-chg.neg{color:#ef5350}
+.tfl-na{font-size:.55rem;color:var(--text-dim,#64748b);font-style:italic}
