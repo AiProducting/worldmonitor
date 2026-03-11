@@ -2931,3 +2931,39 @@
 .ms-chg{font-size:.52rem;min-width:40px;text-align:right}
 .ms-na{opacity:.5;justify-content:space-between}
 .ms-na-text{font-size:.55rem;color:var(--text-dim,#64748b)}
+
+/* ------------------------------------------------------------------ */
+/* FearGreedIndexPanel (.fg-*)                                         */
+/* ------------------------------------------------------------------ */
+.fg-gauge{display:block;margin:0 auto}
+.fg-panel{padding:.5rem}
+.fg-breakdown{padding:0 .2rem}
+.fg-row{transition:background .15s}
+.fg-row:hover{filter:brightness(1.1)}
+
+/* ------------------------------------------------------------------ */
+/* PortfolioCorrelationPanel (.pc-*)                                   */
+/* ------------------------------------------------------------------ */
+.pc-tabs{flex-wrap:wrap}
+.pc-tab{transition:all .15s}
+.pc-tab:hover{filter:brightness(1.2)}
+
+/* ------------------------------------------------------------------ */
+/* GlobalDebtMonitorPanel (.gd-*)                                      */
+/* ------------------------------------------------------------------ */
+.gd-summary{font-variant-numeric:tabular-nums}
+.gd-filter{transition:all .15s}
+.gd-filter:hover{filter:brightness(1.2)}
+.gd-list{max-height:400px;overflow-y:auto}
+
+/* ------------------------------------------------------------------ */
+/* YieldCurveAnalysisPanel (.yca-*)                                    */
+/* ------------------------------------------------------------------ */
+.yca-tab{transition:all .15s}
+.yca-tab:hover{filter:brightness(1.2)}
+
+/* ------------------------------------------------------------------ */
+/* EarningsCalendarPanel (.ec-*)                                       */
+/* ------------------------------------------------------------------ */
+.ec-time,.ec-sector{transition:all .15s}
+.ec-time:hover,.ec-sector:hover{filter:brightness(1.2)}
