@@ -202,6 +202,11 @@ export const DEFAULT_PANELS: Record<string, PanelConfig> = {
   'earnings-calendar': { name: 'Earnings Calendar', enabled: true, priority: 1 },
   'stock-analysis': { name: 'Stock Analysis', enabled: true, priority: 2 },
   'stock-backtest': { name: 'Strategy Backtester', enabled: true, priority: 2 },
+  'market-breadth': { name: 'Market Breadth', enabled: true, priority: 1 },
+  'currency-strength': { name: 'Currency Strength', enabled: true, priority: 1 },
+  'dividend-tracker': { name: 'Yield & Income Monitor', enabled: true, priority: 1 },
+  'ipo-pipeline': { name: 'IPO Pipeline', enabled: true, priority: 2 },
+  'economic-calendar': { name: 'Economic Calendar', enabled: true, priority: 1 },
   monitors: { name: 'My Monitors', enabled: true, priority: 2 },
 };
 

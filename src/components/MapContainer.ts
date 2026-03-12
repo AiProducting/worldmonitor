@@ -94,6 +94,7 @@ export class MapContainer {
   private cachedOnCountryClicked: ((country: CountryClickPayload) => void) | null = null;
   private cachedOnHotspotClicked: ((hotspot: Hotspot) => void) | null = null;
   private cachedOnAircraftPositionsUpdate: ((positions: PositionSample[]) => void) | null = null;
+  private cachedOnMapContextMenu: ((payload: { lat: number; lon: number; screenX: number; screenY: number }) => void) | null = null;
 
 
   // ─── Data cache (survives map mode switches) ───────────────────────────────
@@ -261,6 +262,7 @@ export class MapContainer {
     if (this.cachedOnCountryClicked) this.onCountryClicked(this.cachedOnCountryClicked);
     if (this.cachedOnHotspotClicked) this.onHotspotClicked(this.cachedOnHotspotClicked);
     if (this.cachedOnAircraftPositionsUpdate) this.setOnAircraftPositionsUpdate(this.cachedOnAircraftPositionsUpdate);
+    if (this.cachedOnMapContextMenu) this.onMapContextMenu(this.cachedOnMapContextMenu);
 
 
     // 2. Re-push all cached data

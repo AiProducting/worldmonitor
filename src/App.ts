@@ -584,7 +584,7 @@ export class App {
     // Phase 6: Data loading
     this.dataLoader.syncDataFreshnessWithLayers();
     await preloadCountryGeometry();
-    await this.dataLoader.loadAllData(true);
+    await this.dataLoader.loadAllData();
     await this.primeVisiblePanelData(true);
     window.addEventListener('scroll', this.handleViewportPrime, { passive: true });
     window.addEventListener('resize', this.handleViewportPrime);

@@ -20,7 +20,6 @@ function extractGetRoutes() {
         const src = readFileSync(full, 'utf-8');
         // Pattern 1: inline route object { method: "GET", path: "/api/..." }
         const re = /method:\s*"GET",[\s\S]*?path:\s*"([^"]+)"/g;
-        const re2 = /makeHandler\s*\(\s*"[^"]+",\s*"([^"]+)"/g;
         let m;
         while ((m = re.exec(src)) !== null) {
           routes.push(m[1]);

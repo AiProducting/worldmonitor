@@ -1,15 +1,21 @@
-import { getRpcBaseUrl } from '@/services/rpc-client';
-import {
-  MarketServiceClient,
-  type AnalyzeStockResponse,
-} from '@/generated/client/worldmonitor/market/v1/service_client';
+import type { AnalyzeStockResponse } from '../generated/client/worldmonitor/market/v1/service_client';
 
 export type StockAnalysisSnapshot = AnalyzeStockResponse;
 export type StockAnalysisHistory = Record<string, StockAnalysisSnapshot[]>;
 
-const client = new MarketServiceClient(getRpcBaseUrl(), {
-  fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
-});
+// Lazy-init avoids import.meta.env access at module load (breaks Node test runner)
+let _client: Awaited<ReturnType<typeof createClient>> | null = null;
+async function createClient() {
+  const { MarketServiceClient } = await import('../generated/client/worldmonitor/market/v1/service_client');
+  const { getRpcBaseUrl } = await import('./rpc-client');
+  return new MarketServiceClient(getRpcBaseUrl(), {
+    fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
+  });
+}
+async function getClient() {
+  if (!_client) _client = await createClient();
+  return _client;
+}
 
 const DEFAULT_LIMIT = 4;
 const DEFAULT_LIMIT_PER_SYMBOL = 4;
@@ -96,7 +102,7 @@ export async function fetchStockAnalysisHistory(
   limitPerSymbol = DEFAULT_LIMIT_PER_SYMBOL,
 ): Promise<StockAnalysisHistory> {
   const symbols = await getTargetSymbols(limit);
-  const response = await client.getStockAnalysisHistory({
+  const response = await (await getClient()).getStockAnalysisHistory({
     symbols,
     limitPerSymbol,
     includeNews: true,
