@@ -3,6 +3,7 @@ import { t } from '@/services/i18n';
 import { escapeHtml } from '@/utils/sanitize';
 import { EconomicServiceClient } from '@/generated/client/worldmonitor/economic/v1/service_client';
 import type { FredSeries } from '@/generated/client/worldmonitor/economic/v1/service_client';
+import { recordSentimentScore, getSentimentTrend, type SentimentTrend } from '@/services/sentiment-trend';
 
 const econClient = new EconomicServiceClient('', { fetch: (...args) => globalThis.fetch(...args) });
 
@@ -68,6 +69,7 @@ export class FearGreedIndexPanel extends Panel {
   private data: Map<string, FredSeries> = new Map();
   private loading = true;
   private error: string | null = null;
+  private trend: SentimentTrend | null = null;
 
   constructor() {
     super({ id: 'fear-greed', title: t('panels.fearGreed') });
@@ -88,6 +90,12 @@ export class FearGreedIndexPanel extends Panel {
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Failed to load sentiment data';
       this.loading = false;
+    }
+    // Record composite score for trend tracking (F-25)
+    if (!this.error) {
+      const { composite } = this.computeScore();
+      recordSentimentScore(composite);
+      this.trend = getSentimentTrend();
     }
     if (this.element?.isConnected) this.renderPanel();
     setTimeout(() => { if (this.element?.isConnected) void this.fetchData(); }, 15 * 60 * 1000);
@@ -121,6 +129,24 @@ export class FearGreedIndexPanel extends Panel {
     return { composite, breakdown };
   }
 
+  private renderTrend(trend: SentimentTrend): string {
+    const arrow = trend.direction === 'improving' ? '↗' : trend.direction === 'deteriorating' ? '↘' : '→';
+    const dirColor = trend.direction === 'improving' ? '#66bb6a' : trend.direction === 'deteriorating' ? '#f44336' : '#ffc107';
+    const regime = trend.regimeShift
+      ? '<span style="color:#ff9800;font-weight:600;margin-left:6px">⚡ Regime shift</span>'
+      : '';
+    const smaText = trend.sma5 != null ? `SMA₅: ${trend.sma5.toFixed(1)}` : '';
+    const sma20Text = trend.sma20 != null ? ` · SMA₂₀: ${trend.sma20.toFixed(1)}` : '';
+
+    return `<div style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.6);display:flex;align-items:center;justify-content:center;gap:4px">
+      <span style="color:${dirColor};font-size:14px">${arrow}</span>
+      <span style="color:${dirColor};font-weight:600">${escapeHtml(trend.direction)}</span>
+      <span style="opacity:0.5">(${trend.momentum > 0 ? '+' : ''}${trend.momentum}/hr)</span>
+      ${regime}
+    </div>
+    ${smaText ? `<div style="font-size:10px;color:rgba(255,255,255,0.4);text-align:center;margin-top:2px">${escapeHtml(smaText + sma20Text)}</div>` : ''}`;
+  }
+
   protected renderPanel(): void {
     if (this.loading) { this.showLoading(); return; }
     if (this.error) { this.showError(this.error); return; }
@@ -143,12 +169,15 @@ export class FearGreedIndexPanel extends Panel {
       </div>`;
     }).join('');
 
+    const trendHtml = this.trend ? this.renderTrend(this.trend) : '';
+
     const html = `
       <div class="fg-panel" style="text-align:center;">
         ${gaugeArc(composite)}
         <div style="margin:8px 0 4px;font-size:13px;color:rgba(255,255,255,0.6)">
           Composite Sentiment: <strong style="color:${color}">${label}</strong>
         </div>
+        ${trendHtml}
       </div>
       <div class="fg-breakdown" style="margin-top:12px">
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">Components</div>

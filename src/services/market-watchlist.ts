@@ -135,3 +135,109 @@ export function parseMarketWatchlistInput(text: string): MarketWatchlistEntry[] 
 
   return entries;
 }
+
+// ── F-26: Watchlist Alert Thresholds ─────────────────────────────────
+
+export interface WatchlistAlert {
+  symbol: string;
+  /** Alert when price goes above this value */
+  upperBound?: number;
+  /** Alert when price drops below this value */
+  lowerBound?: number;
+  /** Alert when daily change exceeds ±pct (e.g. 5 = ±5%) */
+  changePct?: number;
+  /** Whether this alert is active */
+  enabled: boolean;
+}
+
+export interface TriggeredAlert {
+  symbol: string;
+  type: 'upper-breach' | 'lower-breach' | 'change-breach';
+  threshold: number;
+  actual: number;
+  triggeredAt: number;
+}
+
+const ALERTS_STORAGE_KEY = 'wm-watchlist-alerts-v1';
+export const WATCHLIST_ALERT_EVENT = 'wm-watchlist-alert-triggered';
+
+export function getWatchlistAlerts(): WatchlistAlert[] {
+  try {
+    const parsed = safeParseJson<unknown[]>(localStorage.getItem(ALERTS_STORAGE_KEY));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (a): a is WatchlistAlert =>
+        !!a && typeof a === 'object' && typeof (a as any).symbol === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function setWatchlistAlert(alert: WatchlistAlert): void {
+  const alerts = getWatchlistAlerts();
+  const idx = alerts.findIndex((a) => a.symbol === alert.symbol);
+  if (idx >= 0) {
+    alerts[idx] = alert;
+  } else {
+    alerts.push(alert);
+  }
+  try {
+    localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+  } catch { /* ignore */ }
+}
+
+export function removeWatchlistAlert(symbol: string): void {
+  const alerts = getWatchlistAlerts().filter((a) => a.symbol !== symbol);
+  try {
+    localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+  } catch { /* ignore */ }
+}
+
+export function checkWatchlistAlerts(prices: Record<string, { price: number; changePct: number }>): TriggeredAlert[] {
+  const alerts = getWatchlistAlerts().filter((a) => a.enabled);
+  const triggered: TriggeredAlert[] = [];
+
+  for (const alert of alerts) {
+    const data = prices[alert.symbol];
+    if (!data) continue;
+
+    if (alert.upperBound != null && data.price >= alert.upperBound) {
+      triggered.push({
+        symbol: alert.symbol,
+        type: 'upper-breach',
+        threshold: alert.upperBound,
+        actual: data.price,
+        triggeredAt: Date.now(),
+      });
+    }
+    if (alert.lowerBound != null && data.price <= alert.lowerBound) {
+      triggered.push({
+        symbol: alert.symbol,
+        type: 'lower-breach',
+        threshold: alert.lowerBound,
+        actual: data.price,
+        triggeredAt: Date.now(),
+      });
+    }
+    if (alert.changePct != null && Math.abs(data.changePct) >= alert.changePct) {
+      triggered.push({
+        symbol: alert.symbol,
+        type: 'change-breach',
+        threshold: alert.changePct,
+        actual: data.changePct,
+        triggeredAt: Date.now(),
+      });
+    }
+  }
+
+  if (triggered.length > 0) {
+    try {
+      window.dispatchEvent(
+        new CustomEvent(WATCHLIST_ALERT_EVENT, { detail: { alerts: triggered } }),
+      );
+    } catch { /* SSR-safe */ }
+  }
+
+  return triggered;
+}
