@@ -74,6 +74,7 @@ const SEED_META = {
   stablecoinMarkets:{ key: 'seed-meta:market:stablecoins',      maxStaleMin: 60 },
   naturalEvents:    { key: 'seed-meta:natural:events',          maxStaleMin: 120 },
   flightDelays:     { key: 'seed-meta:aviation:faa',            maxStaleMin: 60 },
+  notamClosures:    { key: 'seed-meta:aviation:notam',          maxStaleMin: 90 },
   predictions:      { key: 'seed-meta:prediction:markets',      maxStaleMin: 15 },
   insights:         { key: 'seed-meta:news:insights',           maxStaleMin: 30 },
   marketQuotes:     { key: 'seed-meta:market:stocks',         maxStaleMin: 30 },
@@ -326,8 +327,12 @@ export default async function handler(req) {
     checks[name] = entry;
   }
 
+  // On-demand keys that simply haven't been requested yet should not affect overall status.
+  const onDemandWarnCount = Object.values(checks).filter(c => c.status === 'EMPTY_ON_DEMAND').length;
+  const realWarnCount = warnCount - onDemandWarnCount;
+
   let overall;
-  if (critCount === 0 && warnCount === 0) overall = 'HEALTHY';
+  if (critCount === 0 && realWarnCount === 0) overall = 'HEALTHY';
   else if (critCount === 0) overall = 'WARNING';
   else if (critCount <= 3) overall = 'DEGRADED';
   else overall = 'UNHEALTHY';

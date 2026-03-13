@@ -38,6 +38,7 @@ export async function fetchBootstrapData(): Promise<void> {
   const desktop = isDesktopRuntime();
   const fastTimeout = setTimeout(() => fastCtrl.abort(), desktop ? 8_000 : 3_000);
   const slowTimeout = setTimeout(() => slowCtrl.abort(), desktop ? 12_000 : 5_000);
+
   try {
     await Promise.all([
       fetchTier('slow', slowCtrl.signal),
