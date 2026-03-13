@@ -104,9 +104,7 @@ export class PortfolioCorrelationPanel extends Panel {
     const vals = sorted.map(o => o.value).filter(v => Number.isFinite(v));
     const returns: number[] = [];
     for (let i = 1; i < vals.length; i++) {
-      const prev = vals[i - 1]!;
-      const curr = vals[i]!;
-      if (prev !== 0) returns.push((curr - prev) / Math.abs(prev));
+      if (vals[i - 1] !== 0) returns.push((vals[i] - vals[i - 1]) / Math.abs(vals[i - 1]));
     }
     return returns;
   }

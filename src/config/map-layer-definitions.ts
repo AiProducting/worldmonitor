@@ -143,7 +143,7 @@ export function sanitizeLayersForVariant(layers: MapLayers, variant: MapVariant)
 }
 
 export const LAYER_SYNONYMS: Record<string, Array<keyof MapLayers>> = {
-  flight: ['flights'],
+  flight: ['flights', 'notamOverlay'],
   airplane: ['flights'],
   plane: ['flights'],
   notam: ['flights'],

@@ -30,7 +30,7 @@ function classifyRisk(ratio: number): DebtEntry['risk'] {
   return 'safe';
 }
 
-const RISK_STYLE: { [key: string]: { label: string; color: string; bg: string } } & { safe: { label: string; color: string; bg: string } } = {
+const RISK_STYLE: Record<string, { label: string; color: string; bg: string }> = {
   danger:   { label: 'Critical',  color: '#f44336', bg: 'rgba(244,67,54,0.12)' },
   warning:  { label: 'Elevated',  color: '#ff9800', bg: 'rgba(255,152,0,0.10)' },
   moderate: { label: 'Moderate',  color: '#ffc107', bg: 'rgba(255,193,7,0.08)' },
