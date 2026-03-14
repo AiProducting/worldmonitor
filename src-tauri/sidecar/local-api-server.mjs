@@ -137,7 +137,7 @@ globalThis.fetch = async function ipv4Fetch(input, init) {
 
 const ALLOWED_ENV_KEYS = new Set([
   'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'TAVILY_API_KEYS', 'BRAVE_API_KEYS', 'SERPAPI_API_KEYS', 'FRED_API_KEY', 'EIA_API_KEY',
-  'CLOUDFLARE_API_TOKEN', 'ACLED_ACCESS_TOKEN', 'ACLED_EMAIL', 'ACLED_PASSWORD', 'URLHAUS_AUTH_KEY',
+  'CLOUDFLARE_API_TOKEN', 'ACLED_ACCESS_TOKEN', 'URLHAUS_AUTH_KEY',
   'OTX_API_KEY', 'ABUSEIPDB_API_KEY', 'WINGBITS_API_KEY', 'WS_RELAY_URL',
   'VITE_OPENSKY_RELAY_URL', 'OPENSKY_CLIENT_ID', 'OPENSKY_CLIENT_SECRET',
   'AISSTREAM_API_KEY', 'VITE_WS_RELAY_URL', 'FINNHUB_API_KEY', 'NASA_FIRMS_API_KEY',
@@ -806,51 +806,6 @@ async function validateSecretAgainstProvider(key, rawValue, context = {}) {
       return ok('ACLED token verified');
     }
 
-    case 'ACLED_EMAIL':
-      // Email is validated together with ACLED_PASSWORD; store it for now.
-      return ok('ACLED email stored');
-
-    case 'ACLED_PASSWORD': {
-      // Validate ACLED credentials via OAuth token exchange.
-      // Uses the same /oauth/token endpoint as server/_shared/acled-auth.ts.
-      // Requires ACLED_EMAIL to be set first (via local-env-update).
-      const email = String(context.ACLED_EMAIL || process.env.ACLED_EMAIL || '').trim();
-      if (!email) {
-        return fail('Set ACLED_EMAIL before verifying the password');
-      }
-      const oauthBody = new URLSearchParams({
-        username: email,
-        password: value,
-        grant_type: 'password',
-        client_id: 'acled',
-      });
-      const loginResponse = await fetchWithTimeout('https://acleddata.com/oauth/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Accept: 'application/json',
-          'User-Agent': CHROME_UA,
-        },
-        body: oauthBody.toString(),
-      });
-      const loginText = await loginResponse.text();
-      if (isCloudflareChallenge403(loginResponse, loginText)) {
-        return ok('ACLED credentials stored (Cloudflare blocked verification)');
-      }
-      if (isAuthFailure(loginResponse.status, loginText)) {
-        return fail('ACLED rejected these credentials');
-      }
-      if (!loginResponse.ok) return fail(`ACLED OAuth probe failed (${loginResponse.status})`);
-      let loginPayload = null;
-      try { loginPayload = JSON.parse(loginText); } catch { /* ignore */ }
-      if (loginPayload?.access_token) {
-        // Store the obtained OAuth token so API handlers can use it.
-        process.env.ACLED_ACCESS_TOKEN = loginPayload.access_token;
-        return ok('ACLED credentials verified (OAuth token obtained)');
-      }
-      return ok('ACLED credentials accepted');
-    }
-
     case 'URLHAUS_AUTH_KEY': {
       const response = await fetchWithTimeout('https://urlhaus-api.abuse.ch/v1/urls/recent/limit/1/', {
         headers: {
@@ -1180,6 +1135,35 @@ async function dispatch(requestUrl, req, routes, context) {
       routes: routes.length,
     });
   }
+  // LLM health endpoint — mirrors probe logic from server/_shared/llm-health.ts.
+  // TODO: refactor to import getLlmHealthStatus() once handlers share a process-level module cache.
+  if (requestUrl.pathname === '/api/llm-health') {
+    const PROBE_TIMEOUT = 2000;
+    async function probeOrigin(url) {
+      try { await fetch(url, { method: 'GET', signal: AbortSignal.timeout(PROBE_TIMEOUT) }); return true; } catch { return false; }
+    }
+    const providers = [];
+    const ollamaUrl = process.env.OLLAMA_API_URL || process.env.LLM_API_URL;
+    const groqKey = process.env.GROQ_API_KEY;
+    const openrouterKey = process.env.OPENROUTER_API_KEY;
+
+    if (ollamaUrl) {
+      try {
+        const origin = new URL(ollamaUrl).origin;
+        providers.push({ name: 'ollama', url: origin, available: await probeOrigin(origin) });
+      } catch {}
+    }
+    if (groqKey && groqKey.startsWith('gsk_')) {
+      providers.push({ name: 'groq', url: 'https://api.groq.com', available: await probeOrigin('https://api.groq.com') });
+    }
+    if (openrouterKey) {
+      providers.push({ name: 'openrouter', url: 'https://openrouter.ai', available: await probeOrigin('https://openrouter.ai') });
+    }
+
+    const anyAvailable = providers.some(p => p.available);
+    return json({ available: anyAvailable, providers, checkedAt: Date.now() });
+  }
+
   if (requestUrl.pathname === '/api/local-traffic-log') {
     if (req.method === 'DELETE') {
       trafficLog.length = 0;
@@ -1536,6 +1520,20 @@ export async function createLocalApiServer(options = {}) {
       }
 
       context.logger.log(`[local-api] listening on http://127.0.0.1:${boundPort} (apiDir=${context.apiDir}, routes=${routes.length}, cloudFallback=${context.cloudFallback})`);
+
+      // Warm LLM health cache in background (non-blocking)
+      (async () => {
+        const urls = [
+          process.env.OLLAMA_API_URL || process.env.LLM_API_URL,
+          process.env.GROQ_API_KEY ? 'https://api.groq.com' : null,
+          process.env.OPENROUTER_API_KEY ? 'https://openrouter.ai' : null,
+        ].filter(Boolean);
+        for (const url of urls) {
+          try { await fetch(url, { method: 'GET', signal: AbortSignal.timeout(2000) }); } catch {}
+        }
+        if (urls.length) console.log(`[local-api] LLM health warmed for ${urls.length} provider(s)`);
+      })();
+
       return { port: boundPort };
     },
     async close() {

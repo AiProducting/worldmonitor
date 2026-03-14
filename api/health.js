@@ -28,6 +28,7 @@ const BOOTSTRAP_KEYS = {
   weatherAlerts:     'weather:alerts:v1',
   spending:          'economic:spending:v1',
   techEvents:        'research:tech-events-bootstrap:v1',
+  gdeltIntel:        'intelligence:gdelt-intel:v1',
 };
 
 const STANDALONE_KEYS = {
@@ -100,10 +101,14 @@ const SEED_META = {
   weatherAlerts:    { key: 'seed-meta:weather:alerts',             maxStaleMin: 30 },
   spending:         { key: 'seed-meta:economic:spending',          maxStaleMin: 120 },
   techEvents:       { key: 'seed-meta:research:tech-events',       maxStaleMin: 420 },
+  gdeltIntel:       { key: 'seed-meta:intelligence:gdelt-intel',   maxStaleMin: 120 },
   sectors:          { key: 'seed-meta:market:sectors',             maxStaleMin: 30 },
   techReadiness:    { key: 'seed-meta:economic:worldbank-techreadiness:v1', maxStaleMin: 10080 },
   progressData:     { key: 'seed-meta:economic:worldbank-progress:v1',     maxStaleMin: 10080 },
   renewableEnergy:  { key: 'seed-meta:economic:worldbank-renewable:v1',    maxStaleMin: 10080 },
+  intlDelays:       { key: 'seed-meta:aviation:intl',           maxStaleMin: 90 },
+  faaDelays:        { key: 'seed-meta:aviation:faa',            maxStaleMin: 60 },
+  theaterPosture:   { key: 'seed-meta:theater-posture',         maxStaleMin: 30 },
 };
 
 // Standalone keys that are populated on-demand by RPC handlers (not seeds).
@@ -115,6 +120,10 @@ const ON_DEMAND_KEYS = new Set([
   'macroSignals', 'shippingRates', 'chokepoints', 'minerals', 'giving',
   'cyberThreatsRpc', 'militaryBases', 'temporalAnomalies', 'displacement',
 ]);
+
+// Keys where 0 records is a valid healthy state (e.g. no airports closed).
+// The key must still exist in Redis; only the record count can be 0.
+const EMPTY_DATA_OK_KEYS = new Set(['notamClosures']);
 
 // Cascade groups: if any key in the group has data, all empty siblings are OK.
 // Theater posture uses live → stale → backup fallback chain.
@@ -157,8 +166,8 @@ function dataSize(parsed) {
                       'papers', 'repos', 'articles', 'signals', 'rates', 'countries',
                       'chokepoints', 'minerals', 'anomalies', 'flows', 'bases', 'flights',
                       'theaters', 'fleets', 'warnings', 'closures', 'cables',
-                      'airports', 'categories', 'regions', 'entries', 'satellites',
-                      'sectors', 'statuses', 'scores']) {
+                      'airports', 'closedIcaos', 'categories', 'regions', 'entries', 'satellites',
+                      'sectors', 'statuses', 'scores', 'topics']) {
       if (Array.isArray(parsed[k])) return parsed[k].length;
     }
     return Object.keys(parsed).length;
@@ -295,6 +304,9 @@ export default async function handler(req) {
       if (cascadeCovered) {
         status = 'OK_CASCADE';
         okCount++;
+      } else if (EMPTY_DATA_OK_KEYS.has(name) && seedStale === false) {
+        status = 'OK';
+        okCount++;
       } else if (isOnDemand) {
         status = 'EMPTY_ON_DEMAND';
         warnCount++;
@@ -305,6 +317,9 @@ export default async function handler(req) {
     } else if (size === 0) {
       if (cascadeCovered) {
         status = 'OK_CASCADE';
+        okCount++;
+      } else if (EMPTY_DATA_OK_KEYS.has(name)) {
+        status = 'OK';
         okCount++;
       } else if (isOnDemand) {
         status = 'EMPTY_ON_DEMAND';

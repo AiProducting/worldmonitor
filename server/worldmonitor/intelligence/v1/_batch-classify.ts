@@ -1,6 +1,7 @@
 import { setCachedJson } from '../../../_shared/redis';
-import { sha256Hex } from './_shared';
+import { buildClassifyCacheKey } from './_shared';
 import { CHROME_UA } from '../../../_shared/constants';
+import { isProviderAvailable } from '../../../_shared/llm-health';
 
 const VALID_LEVELS = ['critical', 'high', 'medium', 'low', 'info'];
 const VALID_CATEGORIES = [
@@ -55,6 +56,11 @@ export async function batchClassifyTitles(
     const prompt = sanitized.map((t, i) => `${i}|${t}`).join('\n');
 
     try {
+      // Health gate: abort all batches if provider is unreachable
+      if (!(await isProviderAvailable(apiUrl))) {
+        return results;
+      }
+
       const resp = await fetch(apiUrl, {
         method: 'POST',
         headers: {
@@ -101,21 +107,21 @@ export async function batchClassifyTitles(
         classified.add(idx);
 
         const originalTitle = chunk[idx]!;
-        const cacheKey = `classify:sebuf:v1:${(await sha256Hex(originalTitle.toLowerCase())).slice(0, 16)}`;
+        const cacheKey = await buildClassifyCacheKey(originalTitle);
         await setCachedJson(cacheKey, { level, category, timestamp: Date.now() }, CLASSIFY_CACHE_TTL);
         results.set(originalTitle, { level, category });
       }
 
       for (let i = 0; i < chunk.length; i++) {
         if (!classified.has(i)) {
-          const cacheKey = `classify:sebuf:v1:${(await sha256Hex(chunk[i]!.toLowerCase())).slice(0, 16)}`;
+          const cacheKey = await buildClassifyCacheKey(chunk[i]!);
           await setCachedJson(cacheKey, { level: '_skip', timestamp: Date.now() }, SKIP_SENTINEL_TTL);
         }
       }
     } catch {
       for (const title of chunk) {
         try {
-          const cacheKey = `classify:sebuf:v1:${(await sha256Hex(title.toLowerCase())).slice(0, 16)}`;
+          const cacheKey = await buildClassifyCacheKey(title);
           await setCachedJson(cacheKey, { level: '_skip', timestamp: Date.now() }, SKIP_SENTINEL_TTL);
         } catch { /* ignore sentinel write failure */ }
       }
