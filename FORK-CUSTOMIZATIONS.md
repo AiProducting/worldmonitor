@@ -1,6 +1,6 @@
 # Fork Customizations
 
-> This repository is a fork of [unknown]().
+> This repository is a fork of [koala73/worldmonitor](https://github.com/koala73/worldmonitor).
 > Managed under the [iAiFy Enterprise](https://github.com/enterprises/iAiFy) governance model.
 
 ## Purpose
@@ -11,7 +11,7 @@ Real-time global intelligence dashboard — AI-powered news aggregation, geopoli
 
 | Property | Value |
 |----------|-------|
-| Upstream | [unknown]() |
+| Upstream | [koala73/worldmonitor](https://github.com/koala73/worldmonitor) |
 | Language | TypeScript |
 | Fork org | AiProducting |
 
