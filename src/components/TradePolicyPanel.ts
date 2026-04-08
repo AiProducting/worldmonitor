@@ -229,6 +229,142 @@ export class TradePolicyPanel extends Panel {
     </div>`;
   }
 
+  private renderRevenue(): string {
+    if (!this.revenueData || !this.revenueData.months?.length) {
+      return `<div class="economic-empty">${t('components.tradePolicy.noRevenueData')}</div>`;
+    }
+
+    const months = this.revenueData.months;
+    const latest = months[months.length - 1]!;
+    const latestFy = latest.fiscalYear;
+
+    const currentFyMonths = months.filter(m => m.fiscalYear === latestFy);
+    const currentFyCount = currentFyMonths.length;
+    const priorFyAll = months.filter(m => m.fiscalYear === latestFy - 1);
+    const priorFyMonths = priorFyAll.slice(0, currentFyCount);
+    const currentFytd = currentFyMonths.reduce((s, m) => s + m.monthlyAmountBillions, 0);
+    const priorFytd = priorFyMonths.reduce((s, m) => s + m.monthlyAmountBillions, 0);
+    const yoyChange = priorFytd > 0 ? ((currentFytd - priorFytd) / priorFytd) * 100 : 0;
+    const changeClass = yoyChange >= 0 ? 'change-negative' : 'change-positive';
+    const arrow = yoyChange >= 0 ? '\u25B2' : '\u25BC';
+
+    const summaryHtml = `
+      <div class="trade-revenue-summary">
+        <div class="trade-revenue-headline">
+          <span class="trade-revenue-label">${t('components.tradePolicy.fytdLabel', { year: String(latestFy) })}</span>
+          <span class="trade-revenue-value">$${currentFytd.toFixed(1)}B</span>
+        </div>
+        <div class="trade-revenue-compare">
+          ${t('components.tradePolicy.vsPriorFy', { year: String(latestFy - 1) })}: $${priorFytd.toFixed(1)}B
+          <span class="${changeClass}">${arrow} ${Math.abs(yoyChange).toFixed(0)}%</span>
+        </div>
+      </div>
+    `;
+
+    const priorAvg = priorFyMonths.length > 0 ? priorFytd / priorFyMonths.length : 0;
+
+    const chartMonths = [...months].slice(-12);
+    const maxVal = Math.max(...chartMonths.map(m => m.monthlyAmountBillions), 1);
+    const chartBars = chartMonths.map(m => {
+      const pct = Math.round((m.monthlyAmountBillions / maxVal) * 100);
+      const label = m.recordDate.slice(0, 7);
+      const isSpike = m.monthlyAmountBillions > priorAvg * 1.5;
+      return `<div class="trade-chart-col" title="${label}: $${m.monthlyAmountBillions.toFixed(1)}B">
+        <div class="trade-chart-bar${isSpike ? ' trade-chart-spike' : ''}" style="height:${pct}%"></div>
+        <div class="trade-chart-label">${m.recordDate.slice(5, 7)}</div>
+      </div>`;
+    }).join('');
+
+    const chartHtml = `<div class="trade-revenue-chart">${chartBars}</div>`;
+
+    const rows = [...months].reverse().slice(0, 24).map(m => {
+      const highlight = m.monthlyAmountBillions > priorAvg * 2 ? ' class="trade-revenue-spike"' : '';
+      return `<tr${highlight}>
+        <td>${m.recordDate}</td>
+        <td>$${m.monthlyAmountBillions.toFixed(1)}B</td>
+        <td>$${m.fytdAmountBillions.toFixed(1)}B</td>
+      </tr>`;
+    }).join('');
+
+    return `${summaryHtml}
+    ${chartHtml}
+    <div class="trade-tariffs-table">
+      <table>
+        <thead>
+          <tr>
+            <th>${t('components.tradePolicy.colDate')}</th>
+            <th>${t('components.tradePolicy.colMonthly')}</th>
+            <th>${t('components.tradePolicy.colFytd')}</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }
+
+  private renderComtradeFlows(): string {
+    const flows = this.comtradeData?.flows;
+    if (!flows?.length) {
+      return `<div class="economic-empty">${t('components.tradePolicy.noComtradeData')}</div>`;
+    }
+
+    // Prefer world-total rows: UN Comtrade API returns partnerCode as integer 0 for world aggregates,
+    // stored as string "0"; "000" is the seed fallback default. If no world-total rows exist
+    // (bilateral-only preview data), fall back to all flows so the table is never empty.
+    // Two-step dedup: (1) within same (reporter, cmd, year) keep max tradeValueUsd
+    //   — world-total path: disambiguates exports vs imports; fallback path: keeps highest-value bilateral entry;
+    // (2) then keep latest year per (reporter, cmd).
+    const worldTotals = flows.filter(f => f.partnerCode === '0' || f.partnerCode === '000');
+    const toDedup = worldTotals.length > 0 ? worldTotals : flows;
+    const byYearDominant = new Map<string, typeof flows[0]>();
+    for (const f of toDedup) {
+      const key = `${f.reporterCode}:${f.cmdCode}:${f.year}`;
+      const existing = byYearDominant.get(key);
+      if (!existing || f.tradeValueUsd > existing.tradeValueUsd) byYearDominant.set(key, f);
+    }
+    const latest = new Map<string, typeof flows[0]>();
+    for (const f of byYearDominant.values()) {
+      const key = `${f.reporterCode}:${f.cmdCode}`;
+      const existing = latest.get(key);
+      if (!existing || f.year > existing.year) latest.set(key, f);
+    }
+
+    const sorted = [...latest.values()].sort((a, b) => {
+      if (a.isAnomaly !== b.isAnomaly) return a.isAnomaly ? -1 : 1;
+      return Math.abs(b.yoyChange) - Math.abs(a.yoyChange);
+    });
+
+    const rows = sorted.map(f => {
+      const yoySign = f.yoyChange >= 0 ? '▲' : '▼';
+      const yoyClass = f.yoyChange >= 0 ? 'change-positive' : 'change-negative';
+      const yoyPct = `${yoySign} ${Math.abs(f.yoyChange * 100).toFixed(0)}%`;
+      const valueStr = f.tradeValueUsd >= 1e9
+        ? `$${(f.tradeValueUsd / 1e9).toFixed(1)}B`
+        : `$${(f.tradeValueUsd / 1e6).toFixed(0)}M`;
+      const anomalyBadge = f.isAnomaly
+        ? `<span style="margin-left:6px;font-size:9px;font-weight:600;letter-spacing:0.05em;padding:1px 5px;border-radius:3px;background:rgba(255,68,68,0.15);color:var(--red);vertical-align:middle;text-transform:uppercase">${t('components.tradePolicy.anomalyBadge')}</span>`
+        : '';
+      return `<tr class="${f.isAnomaly ? 'trade-anomaly-row' : ''}">
+        <td>${escapeHtml(f.reporterName)}${anomalyBadge}</td>
+        <td>${escapeHtml(f.cmdDesc)}</td>
+        <td>${valueStr} <span class="trade-flow-year">${f.year}</span></td>
+        <td class="${yoyClass}">${yoyPct}</td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="trade-tariffs-table">
+      <table>
+        <thead><tr>
+          <th>${t('components.tradePolicy.colReporter')}</th>
+          <th>${t('components.tradePolicy.colCommodity')}</th>
+          <th>${t('components.tradePolicy.colTradeValue')}</th>
+          <th>${t('components.tradePolicy.yoyChange')}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }
+
   private renderSourceUrl(url: string): string {
     if (!url) return '';
     try {

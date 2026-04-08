@@ -39,6 +39,13 @@ export interface SummarizeOptions {
 const newsClient = new NewsServiceClient(getRpcBaseUrl(), { fetch: (...args) => globalThis.fetch(...args) });
 const summaryBreaker = createCircuitBreaker<SummarizeArticleResponse>({ name: 'News Summarization', cacheTtlMs: 0 });
 
+const summaryResultBreaker = createCircuitBreaker<SummarizationResult | null>({
+  name: 'SummaryResult',
+  cacheTtlMs: 2 * 60 * 60 * 1000,
+  persistCache: true,
+  maxCacheEntries: 128,
+});
+
 const emptySummaryFallback: SummarizeArticleResponse = { summary: '', provider: '', model: '', fallback: true, tokens: 0, error: '', errorType: '', status: 'SUMMARIZE_STATUS_UNSPECIFIED', statusDetail: '' };
 
 // ── Provider definitions ──
@@ -76,6 +83,7 @@ async function tryApiProvider(
         geoContext: geoContext || '',
         variant: SITE_VARIANT,
         lang: lang || 'en',
+        systemAppend: '',
       });
     }, emptySummaryFallback);
 
@@ -294,6 +302,7 @@ export async function translateText(
           geoContext: '',
           variant: targetLang,
           lang: '',
+          systemAppend: '',
         });
       }, emptySummaryFallback);
 

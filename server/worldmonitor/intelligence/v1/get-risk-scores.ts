@@ -8,7 +8,9 @@ import type {
   SeverityLevel,
 } from '../../../../src/generated/server/worldmonitor/intelligence/v1/service_server';
 
+import iso3ToIso2Json from '../../../../shared/iso3-to-iso2.json';
 import { getCachedJson, setCachedJson, cachedFetchJsonWithMeta } from '../../../_shared/redis';
+import { CLIMATE_ANOMALIES_KEY } from '../../../_shared/cache-keys';
 import { TIER1_COUNTRIES } from './_shared';
 import { fetchAcledCached } from '../../../_shared/acled';
 
@@ -124,6 +126,8 @@ function safeNum(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+const ISO3_TO_ISO2: Record<string, string> = iso3ToIso2Json;
+
 interface CountrySignals {
   protests: number;
   riots: number;
@@ -148,6 +152,9 @@ interface CountrySignals {
   orefAlertCount: number;
   orefHistoryCount24h: number;
   advisoryLevel: 'do-not-travel' | 'reconsider' | 'caution' | null;
+  totalDisplaced: number;
+  newsScore: number;
+  threatSummaryScore: number;
 }
 
 function emptySignals(): CountrySignals {
@@ -161,6 +168,9 @@ function emptySignals(): CountrySignals {
     iranStrikes: 0, highSeverityStrikes: 0,
     orefAlertCount: 0, orefHistoryCount24h: 0,
     advisoryLevel: null,
+    totalDisplaced: 0,
+    newsScore: 0,
+    threatSummaryScore: 0,
   };
 }
 
@@ -189,18 +199,32 @@ interface AuxiliarySources {
   gpsHexes: any[];
   iranEvents: any[];
   orefData: { activeAlertCount: number; historyCount24h: number } | null;
+  advisories: { byCountry: Record<string, 'do-not-travel' | 'reconsider' | 'caution'> } | null;
+  // Per-country displaced population by ISO3 code (UNHCR — persists after ceasefires)
+  displacedByIso3: Record<string, number>;
+  newsTopStories: Array<{ countryCode: string | null; threatLevel: string; primaryTitle: string }>;
+  // Per-country classified headline counts from relay seedClassify() — written to news:threat:summary:v1
+  threatSummaryByCountry: Record<string, { critical: number; high: number; medium: number; low: number; info: number }> | null;
 }
 
 async function fetchAuxiliarySources(): Promise<AuxiliarySources> {
-  const [ucdpRaw, outagesRaw, climateRaw, cyberRaw, firesRaw, gpsRaw, iranRaw, orefRaw] = await Promise.all([
+  const currentYear = new Date().getFullYear();
+  const [ucdpRaw, outagesRaw, climateRaw, cyberRaw, firesRaw, gpsRaw, iranRaw, orefRaw, advisoriesRaw, displacementRaw, insightsRaw, threatSummaryRaw] = await Promise.all([
     getCachedJson('conflict:ucdp-events:v1', true).catch(() => null),
     getCachedJson('infra:outages:v1', true).catch(() => null),
-    getCachedJson('climate:anomalies:v1', true).catch(() => null),
+    getCachedJson(CLIMATE_ANOMALIES_KEY, true).catch(() => null),
     getCachedJson('cyber:threats-bootstrap:v2', true).catch(() => null),
     getCachedJson('wildfire:fires:v1', true).catch(() => null),
     getCachedJson('intelligence:gpsjam:v2', true).catch(() => null),
     getCachedJson('conflict:iran-events:v1', true).catch(() => null),
     getCachedJson('relay:oref:history:v1', true).catch(() => null),
+    getCachedJson('intelligence:advisories:v1', true).catch(() => null),
+    // Try current year, fall back to previous year if not yet seeded
+    getCachedJson(`displacement:summary:v1:${currentYear}`, true)
+      .catch(() => null)
+      .then(d => d ?? getCachedJson(`displacement:summary:v1:${currentYear - 1}`, true).catch(() => null)),
+    getCachedJson('news:insights:v1', true).catch(() => null),
+    getCachedJson('news:threat:summary:v1', true).catch(() => null),
   ]);
   const arr = (v: any, field?: string, maxLen = 10000) => {
     let a: any[];
@@ -216,6 +240,35 @@ async function fetchAuxiliarySources(): Promise<AuxiliarySources> {
     orefData = { activeAlertCount: alertCount, historyCount24h: histCount };
   }
 
+  // Build ISO3→totalDisplaced map from UNHCR displacement summary
+  const displacedByIso3: Record<string, number> = {};
+  const dispCountries: any[] = arr(displacementRaw, 'countries');
+  for (const c of dispCountries) {
+    const iso3 = String(c.code || '').toUpperCase();
+    if (iso3) displacedByIso3[iso3] = safeNum(c.totalDisplaced);
+  }
+  // Also try nested summary.countries (seed wraps in { summary: { countries: [...] } })
+  if (dispCountries.length === 0) {
+    const summaryCountries: any[] = arr((displacementRaw as any)?.summary, 'countries');
+    for (const c of summaryCountries) {
+      const iso3 = String(c.code || '').toUpperCase();
+      if (iso3) displacedByIso3[iso3] = safeNum(c.totalDisplaced);
+    }
+  }
+
+  const rawStories: any[] = insightsRaw && Array.isArray((insightsRaw as any).topStories)
+    ? (insightsRaw as any).topStories
+    : [];
+  const newsTopStories = rawStories.map((s: any) => ({
+    countryCode: typeof s.countryCode === 'string' ? s.countryCode : null,
+    threatLevel: typeof s.threatLevel === 'string' ? s.threatLevel.toLowerCase() : 'low',
+    primaryTitle: typeof s.primaryTitle === 'string' ? s.primaryTitle : '',
+  }));
+  const threatSummaryByCountry: AuxiliarySources['threatSummaryByCountry'] =
+    threatSummaryRaw && typeof threatSummaryRaw === 'object' && (threatSummaryRaw as any).byCountry
+      ? (threatSummaryRaw as any).byCountry
+      : null;
+
   return {
     ucdpEvents: arr(ucdpRaw, 'events'),
     outages: arr(outagesRaw, 'outages'),
@@ -225,6 +278,12 @@ async function fetchAuxiliarySources(): Promise<AuxiliarySources> {
     gpsHexes: arr(gpsRaw, 'hexes'),
     iranEvents: arr(iranRaw, 'events'),
     orefData,
+    advisories: advisoriesRaw && typeof advisoriesRaw === 'object' && (advisoriesRaw as any).byCountry
+      ? { byCountry: (advisoriesRaw as any).byCountry }
+      : null,
+    displacedByIso3,
+    newsTopStories,
+    threatSummaryByCountry,
   };
 }
 
@@ -333,6 +392,20 @@ export function computeCIIScores(
     data['IL'].orefHistoryCount24h = aux.orefData.historyCount24h;
   }
 
+  // --- News threat summary (from relay seedClassify — all classified headlines) ---
+  if (aux.threatSummaryByCountry) {
+    const SUMMARY_WEIGHT: Record<string, number> = { critical: 4, high: 2, medium: 1, low: 0.5, info: 0 };
+    for (const [code, counts] of Object.entries(aux.threatSummaryByCountry)) {
+      const signals = data[code];
+      if (!signals) continue;
+      let score = 0;
+      for (const [lvl, w] of Object.entries(SUMMARY_WEIGHT)) {
+        score += (counts[lvl as keyof typeof counts] || 0) * w;
+      }
+      signals.threatSummaryScore = Math.min(20, score);
+    }
+  }
+
   // --- Scoring ---
   const scores: CiiScore[] = [];
   for (const code of Object.keys(TIER1_COUNTRIES)) {
@@ -364,7 +437,7 @@ export function computeCIIScores(
     const gpsJammingScore = Math.min(35, d.gpsHighCount * 5 + d.gpsMediumCount * 2);
     const security = Math.min(100, Math.round(gpsJammingScore));
 
-    const information = 0;
+    const information = Math.min(20, d.newsScore + d.threatSummaryScore);
 
     const eventScore = unrest * 0.25 + conflict * 0.30 + security * 0.20 + information * 0.25;
 
@@ -479,7 +552,7 @@ export async function getRiskScores(
 
   const stale = (await getCachedJson(RISK_STALE_CACHE_KEY)) as GetRiskScoresResponse | null;
   if (stale) return stale;
-  const emptyAux: AuxiliarySources = { ucdpEvents: [], outages: [], climate: [], cyber: [], fires: [], gpsHexes: [], iranEvents: [], orefData: null };
+  const emptyAux: AuxiliarySources = { ucdpEvents: [], outages: [], climate: [], cyber: [], fires: [], gpsHexes: [], iranEvents: [], orefData: null, advisories: null, displacedByIso3: {}, newsTopStories: [], threatSummaryByCountry: null };
   const ciiScores = computeCIIScores([], emptyAux);
   return { ciiScores, strategicRisks: computeStrategicRisks(ciiScores) };
 }

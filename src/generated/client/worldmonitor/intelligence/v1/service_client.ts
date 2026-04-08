@@ -103,8 +103,24 @@ export interface EventClassification {
   entities: string[];
 }
 
+export interface GetCountryRiskRequest {
+  countryCode: string;
+}
+
+export interface GetCountryRiskResponse {
+  countryCode: string;
+  countryName: string;
+  cii?: CiiScore;
+  advisoryLevel: string;
+  sanctionsActive: boolean;
+  sanctionsCount: number;
+  fetchedAt: number;
+  upstreamUnavailable: boolean;
+}
+
 export interface GetCountryIntelBriefRequest {
   countryCode: string;
+  framework: string;
 }
 
 export interface GetCountryIntelBriefResponse {
@@ -142,6 +158,7 @@ export interface GdeltArticle {
 export interface DeductSituationRequest {
   query: string;
   geoContext: string;
+  framework: string;
 }
 
 export interface DeductSituationResponse {
@@ -167,9 +184,224 @@ export interface GetCountryFactsResponse {
   countryName: string;
 }
 
+export interface ListSecurityAdvisoriesRequest {
+}
+
+export interface ListSecurityAdvisoriesResponse {
+  advisories: SecurityAdvisoryItem[];
+  byCountry: Record<string, string>;
+}
+
+export interface SecurityAdvisoryItem {
+  title: string;
+  link: string;
+  pubDate: string;
+  source: string;
+  sourceCountry: string;
+  level: string;
+  country: string;
+}
+
+export interface GetGdeltTopicTimelineRequest {
+  topic: string;
+}
+
+export interface GetGdeltTopicTimelineResponse {
+  topic: string;
+  tone: GdeltTimelinePoint[];
+  vol: GdeltTimelinePoint[];
+  fetchedAt: string;
+  error: string;
+}
+
+export interface GdeltTimelinePoint {
+  date: string;
+  value: number;
+}
+
+export interface ListCrossSourceSignalsRequest {
+}
+
+export interface ListCrossSourceSignalsResponse {
+  signals: CrossSourceSignal[];
+  evaluatedAt: number;
+  compositeCount: number;
+}
+
+export interface CrossSourceSignal {
+  id: string;
+  type: CrossSourceSignalType;
+  theater: string;
+  summary: string;
+  severity: CrossSourceSignalSeverity;
+  severityScore: number;
+  detectedAt: number;
+  contributingTypes: string[];
+  signalCount: number;
+}
+
+export interface ListMarketImplicationsRequest {
+  frameworkId: string;
+}
+
+export interface ListMarketImplicationsResponse {
+  cards: MarketImplicationCard[];
+  degraded: boolean;
+  emptyReason: string;
+  generatedAt: string;
+}
+
+export interface MarketImplicationCard {
+  ticker: string;
+  name: string;
+  direction: string;
+  timeframe: string;
+  confidence: string;
+  title: string;
+  narrative: string;
+  riskCaveat: string;
+  driver: string;
+  transmissionChain: TransmissionNode[];
+}
+
+export interface TransmissionNode {
+  node: string;
+  impactType: string;
+  logic: string;
+}
+
+export interface GetSocialVelocityRequest {
+}
+
+export interface GetSocialVelocityResponse {
+  posts: SocialVelocityPost[];
+  fetchedAt: number;
+}
+
+export interface SocialVelocityPost {
+  id: string;
+  title: string;
+  subreddit: string;
+  url: string;
+  score: number;
+  upvoteRatio: number;
+  numComments: number;
+  velocityScore: number;
+  createdAt: number;
+}
+
+export interface GetCountryEnergyProfileRequest {
+  countryCode: string;
+}
+
+export interface GetCountryEnergyProfileResponse {
+  mixAvailable: boolean;
+  mixYear: number;
+  coalShare: number;
+  gasShare: number;
+  oilShare: number;
+  nuclearShare: number;
+  renewShare: number;
+  windShare: number;
+  solarShare: number;
+  hydroShare: number;
+  importShare: number;
+  gasStorageAvailable: boolean;
+  gasStorageFillPct: number;
+  gasStorageChange1d: number;
+  gasStorageTrend: string;
+  gasStorageDate: string;
+  electricityAvailable: boolean;
+  electricityPriceMwh: number;
+  electricitySource: string;
+  electricityDate: string;
+  jodiOilAvailable: boolean;
+  jodiOilDataMonth: string;
+  gasolineDemandKbd: number;
+  gasolineImportsKbd: number;
+  dieselDemandKbd: number;
+  dieselImportsKbd: number;
+  jetDemandKbd: number;
+  jetImportsKbd: number;
+  lpgDemandKbd: number;
+  crudeImportsKbd: number;
+  lpgImportsKbd: number;
+  jodiGasAvailable: boolean;
+  jodiGasDataMonth: string;
+  gasTotalDemandTj: number;
+  gasLngImportsTj: number;
+  gasPipeImportsTj: number;
+  gasLngShare: number;
+  ieaStocksAvailable: boolean;
+  ieaStocksDataMonth: string;
+  ieaDaysOfCover: number;
+  ieaNetExporter: boolean;
+  ieaBelowObligation: boolean;
+}
+
+export interface ComputeEnergyShockScenarioRequest {
+  countryCode: string;
+  chokepointId: string;
+  disruptionPct: number;
+}
+
+export interface ComputeEnergyShockScenarioResponse {
+  countryCode: string;
+  chokepointId: string;
+  disruptionPct: number;
+  gulfCrudeShare: number;
+  crudeLossKbd: number;
+  products: ProductImpact[];
+  effectiveCoverDays: number;
+  assessment: string;
+  dataAvailable: boolean;
+  jodiOilCoverage: boolean;
+  comtradeCoverage: boolean;
+  ieaStocksCoverage: boolean;
+  portwatchCoverage: boolean;
+  coverageLevel: string;
+  limitations: string[];
+  degraded: boolean;
+  chokepointConfidence: string;
+  liveFlowRatio?: number;
+}
+
+export interface ProductImpact {
+  product: string;
+  outputLossKbd: number;
+  demandKbd: number;
+  deficitPct: number;
+}
+
+export interface GetCountryPortActivityRequest {
+  countryCode: string;
+}
+
+export interface CountryPortActivityResponse {
+  ports: PortActivityEntry[];
+  fetchedAt: string;
+  available: boolean;
+}
+
+export interface PortActivityEntry {
+  portId: string;
+  portName: string;
+  lat: number;
+  lon: number;
+  tankerCalls30d: number;
+  trendDeltaPct: number;
+  importTankerDwt: number;
+  exportTankerDwt: number;
+  anomalySignal: boolean;
+}
+
 export type SeverityLevel = "SEVERITY_LEVEL_UNSPECIFIED" | "SEVERITY_LEVEL_LOW" | "SEVERITY_LEVEL_MEDIUM" | "SEVERITY_LEVEL_HIGH";
 
 export type TrendDirection = "TREND_DIRECTION_UNSPECIFIED" | "TREND_DIRECTION_RISING" | "TREND_DIRECTION_STABLE" | "TREND_DIRECTION_FALLING";
+
+export type CrossSourceSignalSeverity = "CROSS_SOURCE_SIGNAL_SEVERITY_UNSPECIFIED" | "CROSS_SOURCE_SIGNAL_SEVERITY_LOW" | "CROSS_SOURCE_SIGNAL_SEVERITY_MEDIUM" | "CROSS_SOURCE_SIGNAL_SEVERITY_HIGH" | "CROSS_SOURCE_SIGNAL_SEVERITY_CRITICAL";
+
+export type CrossSourceSignalType = "CROSS_SOURCE_SIGNAL_TYPE_UNSPECIFIED" | "CROSS_SOURCE_SIGNAL_TYPE_COMPOSITE_ESCALATION" | "CROSS_SOURCE_SIGNAL_TYPE_THERMAL_SPIKE" | "CROSS_SOURCE_SIGNAL_TYPE_GPS_JAMMING" | "CROSS_SOURCE_SIGNAL_TYPE_MILITARY_FLIGHT_SURGE" | "CROSS_SOURCE_SIGNAL_TYPE_UNREST_SURGE" | "CROSS_SOURCE_SIGNAL_TYPE_OREF_ALERT_CLUSTER" | "CROSS_SOURCE_SIGNAL_TYPE_VIX_SPIKE" | "CROSS_SOURCE_SIGNAL_TYPE_COMMODITY_SHOCK" | "CROSS_SOURCE_SIGNAL_TYPE_CYBER_ESCALATION" | "CROSS_SOURCE_SIGNAL_TYPE_SHIPPING_DISRUPTION" | "CROSS_SOURCE_SIGNAL_TYPE_SANCTIONS_SURGE" | "CROSS_SOURCE_SIGNAL_TYPE_EARTHQUAKE_SIGNIFICANT" | "CROSS_SOURCE_SIGNAL_TYPE_RADIATION_ANOMALY" | "CROSS_SOURCE_SIGNAL_TYPE_INFRASTRUCTURE_OUTAGE" | "CROSS_SOURCE_SIGNAL_TYPE_WILDFIRE_ESCALATION" | "CROSS_SOURCE_SIGNAL_TYPE_DISPLACEMENT_SURGE" | "CROSS_SOURCE_SIGNAL_TYPE_FORECAST_DETERIORATION" | "CROSS_SOURCE_SIGNAL_TYPE_MARKET_STRESS" | "CROSS_SOURCE_SIGNAL_TYPE_WEATHER_EXTREME" | "CROSS_SOURCE_SIGNAL_TYPE_MEDIA_TONE_DETERIORATION" | "CROSS_SOURCE_SIGNAL_TYPE_RISK_SCORE_SPIKE";
 
 export type DataFreshness = "DATA_FRESHNESS_UNSPECIFIED" | "DATA_FRESHNESS_FRESH" | "DATA_FRESHNESS_STALE";
 
@@ -299,10 +531,36 @@ export class IntelligenceServiceClient {
     return await resp.json() as ClassifyEventResponse;
   }
 
+  async getCountryRisk(req: GetCountryRiskRequest, options?: IntelligenceServiceCallOptions): Promise<GetCountryRiskResponse> {
+    let path = "/api/intelligence/v1/get-country-risk";
+    const params = new URLSearchParams();
+    if (req.countryCode != null && req.countryCode !== "") params.set("country_code", String(req.countryCode));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetCountryRiskResponse;
+  }
+
   async getCountryIntelBrief(req: GetCountryIntelBriefRequest, options?: IntelligenceServiceCallOptions): Promise<GetCountryIntelBriefResponse> {
     let path = "/api/intelligence/v1/get-country-intel-brief";
     const params = new URLSearchParams();
     if (req.countryCode != null && req.countryCode !== "") params.set("country_code", String(req.countryCode));
+    if (req.framework != null && req.framework !== "") params.set("framework", String(req.framework));
     const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
 
     const headers: Record<string, string> = {
@@ -400,6 +658,202 @@ export class IntelligenceServiceClient {
     }
 
     return await resp.json() as GetCountryFactsResponse;
+  }
+
+  async listSecurityAdvisories(req: ListSecurityAdvisoriesRequest, options?: IntelligenceServiceCallOptions): Promise<ListSecurityAdvisoriesResponse> {
+    let path = "/api/intelligence/v1/list-security-advisories";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListSecurityAdvisoriesResponse;
+  }
+
+  async getGdeltTopicTimeline(req: GetGdeltTopicTimelineRequest, options?: IntelligenceServiceCallOptions): Promise<GetGdeltTopicTimelineResponse> {
+    let path = "/api/intelligence/v1/get-gdelt-topic-timeline";
+    const params = new URLSearchParams();
+    if (req.topic != null && req.topic !== "") params.set("topic", String(req.topic));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetGdeltTopicTimelineResponse;
+  }
+
+  async listCrossSourceSignals(req: ListCrossSourceSignalsRequest, options?: IntelligenceServiceCallOptions): Promise<ListCrossSourceSignalsResponse> {
+    let path = "/api/intelligence/v1/list-cross-source-signals";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListCrossSourceSignalsResponse;
+  }
+
+  async listMarketImplications(req: ListMarketImplicationsRequest, options?: IntelligenceServiceCallOptions): Promise<ListMarketImplicationsResponse> {
+    let path = "/api/intelligence/v1/list-market-implications";
+    const params = new URLSearchParams();
+    if (req.frameworkId != null && req.frameworkId !== "") params.set("frameworkId", String(req.frameworkId));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListMarketImplicationsResponse;
+  }
+
+  async getSocialVelocity(req: GetSocialVelocityRequest, options?: IntelligenceServiceCallOptions): Promise<GetSocialVelocityResponse> {
+    let path = "/api/intelligence/v1/get-social-velocity";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetSocialVelocityResponse;
+  }
+
+  async getCountryEnergyProfile(req: GetCountryEnergyProfileRequest, options?: IntelligenceServiceCallOptions): Promise<GetCountryEnergyProfileResponse> {
+    let path = "/api/intelligence/v1/get-country-energy-profile";
+    const params = new URLSearchParams();
+    if (req.countryCode != null && req.countryCode !== "") params.set("country_code", String(req.countryCode));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetCountryEnergyProfileResponse;
+  }
+
+  async computeEnergyShockScenario(req: ComputeEnergyShockScenarioRequest, options?: IntelligenceServiceCallOptions): Promise<ComputeEnergyShockScenarioResponse> {
+    let path = "/api/intelligence/v1/compute-energy-shock";
+    const params = new URLSearchParams();
+    if (req.countryCode != null && req.countryCode !== "") params.set("country_code", String(req.countryCode));
+    if (req.chokepointId != null && req.chokepointId !== "") params.set("chokepoint_id", String(req.chokepointId));
+    if (req.disruptionPct != null && req.disruptionPct !== 0) params.set("disruption_pct", String(req.disruptionPct));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ComputeEnergyShockScenarioResponse;
+  }
+
+  async getCountryPortActivity(req: GetCountryPortActivityRequest, options?: IntelligenceServiceCallOptions): Promise<CountryPortActivityResponse> {
+    let path = "/api/intelligence/v1/get-country-port-activity";
+    const params = new URLSearchParams();
+    if (req.countryCode != null && req.countryCode !== "") params.set("country_code", String(req.countryCode));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as CountryPortActivityResponse;
   }
 
   private async handleError(resp: Response): Promise<never> {

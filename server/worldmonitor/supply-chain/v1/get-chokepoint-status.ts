@@ -22,9 +22,11 @@ import { CANONICAL_CHOKEPOINTS } from './_chokepoint-ids';
 import { computeDisruptionScore, scoreToStatus, SEVERITY_SCORE, THREAT_LEVEL } from './_scoring.mjs';
 
 const REDIS_CACHE_KEY = 'supply_chain:chokepoints:v4';
-const PORTWATCH_REDIS_KEY = 'supply_chain:portwatch:v1';
-const CORRIDORRISK_REDIS_KEY = 'supply_chain:corridorrisk:v1';
-const RELAY_TRANSIT_KEY = 'supply_chain:chokepoint_transits:v1';
+const TRANSIT_SUMMARIES_KEY = 'supply_chain:transit-summaries:v1';
+const PORTWATCH_FALLBACK_KEY = 'supply_chain:portwatch:v1';
+const CORRIDORRISK_FALLBACK_KEY = 'supply_chain:corridorrisk:v1';
+const TRANSIT_COUNTS_FALLBACK_KEY = 'supply_chain:chokepoint_transits:v1';
+const FLOWS_KEY = 'energy:chokepoint-flows:v1';
 const REDIS_CACHE_TTL = 300; // 5 min
 const THREAT_CONFIG_MAX_AGE_DAYS = 120;
 const NEARBY_CHOKEPOINT_RADIUS_KM = 300;
@@ -67,11 +69,19 @@ interface ChokepointConfig {
 
 type DirectionLabel = 'eastbound' | 'westbound' | 'northbound' | 'southbound';
 
-interface RelayTransitEntry {
-  tanker: number;
-  cargo: number;
-  other: number;
-  total: number;
+interface PreBuiltTransitSummary {
+  todayTotal: number;
+  todayTanker: number;
+  todayCargo: number;
+  todayOther: number;
+  wowChangePct: number;
+  history: import('./_portwatch-upstream').TransitDayCount[];
+  riskLevel: string;
+  incidentCount7d: number;
+  disruptionPct: number;
+  riskSummary: string;
+  riskReportAction: string;
+  anomaly: { dropPct: number; signal: boolean };
 }
 
 interface RelayTransitPayload {
@@ -231,15 +241,10 @@ interface ChokepointFetchResult {
   upstreamUnavailable: boolean;
 }
 
-function buildRelayLookup(transitData: RelayTransitPayload | null): Map<string, RelayTransitEntry> {
-  const map = new Map<string, RelayTransitEntry>();
-  if (!transitData?.transits) return map;
-  for (const [relayName, entry] of Object.entries(transitData.transits)) {
-    const canonical = CANONICAL_CHOKEPOINTS.find(c => c.relayName === relayName);
-    if (canonical) map.set(canonical.id, entry);
-  }
-  return map;
-}
+interface CorridorRiskEntry { riskLevel: string; incidentCount7d: number; disruptionPct: number; riskSummary: string; riskReportAction: string }
+interface RelayTransitEntry { tanker: number; cargo: number; other: number; total: number }
+interface FlowEstimateEntry { currentMbd: number; baselineMbd: number; flowRatio: number; disrupted: boolean; source: string; hazardAlertLevel: string | null; hazardAlertName: string | null }
+interface RelayTransitPayload { transits: Record<string, RelayTransitEntry>; fetchedAt: number }
 
 function buildTransitSummary(
   cp: ChokepointConfig,
@@ -269,12 +274,11 @@ async function fetchChokepointData(): Promise<ChokepointFetchResult> {
   let navFailed = false;
   let vesselFailed = false;
 
-  const [navResult, vesselResult, portwatchData, corridorRiskData, transitData] = await Promise.all([
+  const [navResult, vesselResult, transitSummariesData, flowsData] = await Promise.all([
     listNavigationalWarnings(ctx, { area: '', pageSize: 0, cursor: '' }).catch((): ListNavigationalWarningsResponse => { navFailed = true; return { warnings: [], pagination: undefined }; }),
     getVesselSnapshot(ctx, { neLat: 90, neLon: 180, swLat: -90, swLon: -180 }).catch((): GetVesselSnapshotResponse => { vesselFailed = true; return { snapshot: undefined }; }),
-    getCachedJson(PORTWATCH_REDIS_KEY, true).catch(() => null) as Promise<PortWatchData | null>,
-    getCachedJson(CORRIDORRISK_REDIS_KEY, true).catch(() => null) as Promise<CorridorRiskData | null>,
-    getCachedJson(RELAY_TRANSIT_KEY, true).catch(() => null) as Promise<RelayTransitPayload | null>,
+    getCachedJson(TRANSIT_SUMMARIES_KEY, true).catch(() => null) as Promise<TransitSummariesPayload | null>,
+    getCachedJson(FLOWS_KEY, true).catch(() => null) as Promise<Record<string, FlowEstimateEntry> | null>,
   ]);
 
   const warnings = navResult.warnings || [];
@@ -328,7 +332,28 @@ async function fetchChokepointData(): Promise<ChokepointFetchResult> {
       description: descriptions.join('; '),
       directions: cp.directions,
       directionalDwt: [],
-      transitSummary: buildTransitSummary(cp, portwatchData, relayLookup, corridorRiskData),
+      transitSummary: ts ? {
+        todayTotal: ts.todayTotal,
+        todayTanker: ts.todayTanker,
+        todayCargo: ts.todayCargo,
+        todayOther: ts.todayOther,
+        wowChangePct: ts.wowChangePct,
+        history: ts.history,
+        riskLevel: ts.riskLevel,
+        incidentCount7d: ts.incidentCount7d,
+        disruptionPct: ts.disruptionPct,
+        riskSummary: ts.riskSummary,
+        riskReportAction: ts.riskReportAction,
+      } : { todayTotal: 0, todayTanker: 0, todayCargo: 0, todayOther: 0, wowChangePct: 0, history: [], riskLevel: '', incidentCount7d: 0, disruptionPct: 0, riskSummary: '', riskReportAction: '' },
+      flowEstimate: flowsData?.[cp.id] ? {
+        currentMbd: flowsData[cp.id]!.currentMbd,
+        baselineMbd: flowsData[cp.id]!.baselineMbd,
+        flowRatio: flowsData[cp.id]!.flowRatio,
+        disrupted: flowsData[cp.id]!.disrupted,
+        source: flowsData[cp.id]!.source,
+        hazardAlertLevel: flowsData[cp.id]!.hazardAlertLevel ?? '',
+        hazardAlertName: flowsData[cp.id]!.hazardAlertName ?? '',
+      } : undefined,
     };
   });
 

@@ -15,6 +15,10 @@ All notable changes to World Monitor are documented here. Subscribe via [RSS](/c
 - Expandable chokepoint cards with TradingView lightweight-charts 180-day time-series (#1560)
 - Real-time transit counting with crossing detection on Railway relay (#1560)
 
+### Security
+
+- **CDN cache bypass closed**: `CDN-Cache-Control` header now only emitted for trusted origins (worldmonitor.app, Vercel previews, Tauri). No-origin server-side requests always invoke the edge function so `validateApiKey` runs, preventing a cached 200 from being served to external scrapers.
+
 ### Fixed
 
 - PortWatch ArcGIS URL, field names, and chokepoint name mappings (#1572)

@@ -15,7 +15,7 @@ function fmtPct(value: number): string {
 
 export class StockBacktestPanel extends Panel {
   constructor() {
-    super({ id: 'stock-backtest', title: 'Premium Backtesting' });
+    super({ id: 'stock-backtest', title: 'Premium Backtesting', infoTooltip: t('components.stockBacktest.infoTooltip'), premium: 'locked' });
   }
 
   public renderBacktests(items: StockBacktestResult[], source: 'live' | 'cached' = 'live'): void {
