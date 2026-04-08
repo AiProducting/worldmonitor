@@ -19,6 +19,7 @@ CLAUDE.md
 .factory/
 .windsurf/
 skills/
+!api/skills/
 ideas/
 docs/internal/
 internal/
@@ -58,3 +59,8 @@ api-cache.json
 verbose-mode.json
 skills-lock.json
 tmp/
+
+# Local planning documents (not for public repo)
+docs/plans/
+docs/brainstorms/
+playground-pricing.html

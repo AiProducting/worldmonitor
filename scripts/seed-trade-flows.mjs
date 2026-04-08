@@ -60,7 +60,7 @@ async function fetchFlows(reporter, commodity) {
     const flowCode = String(r.flowCode ?? r.rgDesc ?? 'X');
     const val = Number(r.primaryValue ?? r.cifvalue ?? r.fobvalue ?? 0);
     const wt = Number(r.netWgt ?? 0);
-    const partnerCode = String(r.partnerCode ?? r.partner2Code ?? '000');
+    const partnerCode = String(r.partnerCode ?? r.partner2Code ?? '000').padStart(3, '0');
     const partnerName = String(r.partnerDesc ?? r.partner2Desc ?? 'World');
     const mapKey = `${flowCode}:${year}`;
     byFlowYear.set(mapKey, { year, flowCode, val, wt, partnerCode, partnerName });
@@ -135,7 +135,9 @@ function publishTransform(data) {
 
 async function afterPublish(data, _meta) {
   for (const [key, value] of Object.entries(data.perKeyFlows ?? {})) {
-    await writeExtraKey(key, value, CACHE_TTL);
+    if ((value.flows?.length ?? 0) > 0) {
+      await writeExtraKey(key, value, CACHE_TTL);
+    }
   }
 }
 

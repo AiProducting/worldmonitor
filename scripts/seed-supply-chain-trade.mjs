@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
-import { loadEnvFile, CHROME_UA, runSeed, writeExtraKeyWithMeta, sleep, verifySeedKey } from './_seed-utils.mjs';
+import { loadEnvFile, CHROME_UA, runSeed, writeExtraKeyWithMeta, sleep, verifySeedKey, resolveProxyForConnect, fredFetchJson } from './_seed-utils.mjs';
 import { BUDGET_LAB_TARIFFS_URL, htmlToPlainText, toIsoDate, parseBudgetLabEffectiveTariffHtml } from './_trade-parse-utils.mjs';
 
 loadEnvFile(import.meta.url);
+
+const _proxyAuth = resolveProxyForConnect();
 
 // ─── Keys (must match handler cache keys exactly) ───
 const KEYS = {
@@ -26,6 +28,18 @@ const WTO_MEMBER_CODES = {
   '076': 'Brazil', '410': 'South Korea', '036': 'Australia', '124': 'Canada',
   '484': 'Mexico', '380': 'Italy', '528': 'Netherlands', '000': 'World',
 };
+
+const WTO_CODE_TO_ISO2 = {
+  '840': 'US', '156': 'CN', '276': 'DE', '392': 'JP', '826': 'GB',
+  '356': 'IN', '076': 'BR', '643': 'RU', '410': 'KR', '036': 'AU',
+  '124': 'CA', '484': 'MX', '250': 'FR', '380': 'IT', '528': 'NL',
+};
+
+const REPORTER_ISO2 = MAJOR_REPORTERS.map(c => {
+  const iso2 = WTO_CODE_TO_ISO2[c];
+  if (!iso2) throw new Error(`WTO code '${c}' has no ISO2 mapping — add it to WTO_CODE_TO_ISO2`);
+  return iso2;
+});
 
 // ─── Shipping Rates (FRED) ───
 
@@ -56,12 +70,11 @@ async function fetchShippingRates() {
         series_id: cfg.seriesId, api_key: apiKey, file_type: 'json',
         frequency: cfg.frequency, sort_order: 'desc', limit: '24',
       });
-      const resp = await fetch(`https://api.stlouisfed.org/fred/series/observations?${params}`, {
-        headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
-        signal: AbortSignal.timeout(10_000),
+      const data = await fredFetchJson(`https://api.stlouisfed.org/fred/series/observations?${params}`, _proxyAuth).catch((e) => {
+        console.warn(`  FRED ${cfg.seriesId}: ${e.message}`);
+        return null;
       });
-      if (!resp.ok) { console.warn(`  FRED ${cfg.seriesId}: HTTP ${resp.status}`); continue; }
-      const data = await resp.json();
+      if (!data) continue;
       const observations = (data.observations || [])
         .map(o => { const v = parseFloat(o.value); return Number.isNaN(v) || o.value === '.' ? null : { date: o.date, value: v }; })
         .filter(Boolean).reverse();
@@ -403,7 +416,7 @@ async function fetchTradeBarriers() {
     return gapB - gapA;
   });
   console.log(`  Trade barriers: ${barriers.length} countries`);
-  return { barriers: barriers.slice(0, 50), fetchedAt: new Date().toISOString(), upstreamUnavailable: false };
+  return { barriers: barriers.slice(0, 50), _reporterCountries: REPORTER_ISO2, fetchedAt: new Date().toISOString(), upstreamUnavailable: false };
 }
 
 // ─── Trade Restrictions (WTO) ───
@@ -445,7 +458,7 @@ async function fetchTradeRestrictions() {
   }).slice(0, 50);
 
   console.log(`  Trade restrictions: ${restrictions.length} countries`);
-  return { restrictions, fetchedAt: new Date().toISOString(), upstreamUnavailable: false };
+  return { restrictions, _reporterCountries: REPORTER_ISO2, fetchedAt: new Date().toISOString(), upstreamUnavailable: false };
 }
 
 // ─── Tariff Trends (WTO) — pre-seed major reporters ───

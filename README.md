@@ -25,9 +25,9 @@
 </p>
 
 <p align="center">
-  <a href="https://docs.worldmonitor.app"><strong>Documentation</strong></a> &nbsp;·&nbsp;
+  <a href="https://www.worldmonitor.app/docs/documentation"><strong>Documentation</strong></a> &nbsp;·&nbsp;
   <a href="https://github.com/koala73/worldmonitor/releases/latest"><strong>Releases</strong></a> &nbsp;·&nbsp;
-  <a href="https://docs.worldmonitor.app/contributing"><strong>Contributing</strong></a>
+  <a href="https://www.worldmonitor.app/docs/contributing"><strong>Contributing</strong></a>
 </p>
 
 ![World Monitor Dashboard](docs/images/worldmonitor-7-mar-2026.jpg)
@@ -46,7 +46,7 @@
 - **Native desktop app** (Tauri 2) for macOS, Windows, and Linux
 - **21 languages** with native-language feeds and RTL support
 
-For the full feature list, architecture, data sources, and algorithms, see the **[documentation](https://docs.worldmonitor.app)**.
+For the full feature list, architecture, data sources, and algorithms, see the **[documentation](https://www.worldmonitor.app/docs/documentation)**.
 
 ---
 
@@ -70,7 +70,7 @@ npm run dev:commodity  # commodity.worldmonitor.app
 npm run dev:happy      # happy.worldmonitor.app
 ```
 
-See the **[self-hosting guide](https://docs.worldmonitor.app/getting-started)** for deployment options (Vercel, Docker, static).
+See the **[self-hosting guide](https://www.worldmonitor.app/docs/getting-started)** for deployment options (Vercel, Docker, static).
 
 ---
 
@@ -85,7 +85,19 @@ See the **[self-hosting guide](https://docs.worldmonitor.app/getting-started)** 
 | **Deployment** | Vercel Edge Functions (60+), Railway relay, Tauri, PWA |
 | **Caching** | Redis (Upstash), 3-tier cache, CDN, service worker |
 
-Full stack details in the **[architecture docs](https://docs.worldmonitor.app/architecture)**.
+Full stack details in the **[architecture docs](https://www.worldmonitor.app/docs/architecture)**.
+
+---
+
+## Flight Data
+
+Flight data provided gracefully by [Wingbits](https://wingbits.com?utm_source=worldmonitor&utm_medium=referral&utm_campaign=worldmonitor), the most advanced ADS-B flight data solution.
+
+---
+
+## Data Sources
+
+WorldMonitor aggregates 65+ external data sources across geopolitics, finance, energy, climate, aviation, cyber, military, infrastructure, and news intelligence. See the full [data sources catalog](https://www.worldmonitor.app/docs/data-sources) for providers, feed tiers, and collection methods.
 
 ---
 
@@ -139,7 +151,7 @@ See our [Security Policy](./SECURITY.md) for responsible disclosure guidelines.
 
 <p align="center">
   <a href="https://worldmonitor.app">worldmonitor.app</a> &nbsp;·&nbsp;
-  <a href="https://docs.worldmonitor.app">docs.worldmonitor.app</a> &nbsp;·&nbsp;
+  <a href="https://www.worldmonitor.app/docs/documentation">docs.worldmonitor.app</a> &nbsp;·&nbsp;
   <a href="https://finance.worldmonitor.app">finance.worldmonitor.app</a> &nbsp;·&nbsp;
   <a href="https://commodity.worldmonitor.app">commodity.worldmonitor.app</a>
 </p>

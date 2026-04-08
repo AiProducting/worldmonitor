@@ -30,6 +30,17 @@ export function initSettingsWindow(): void {
     STORAGE_KEYS.panels,
     DEFAULT_PANELS
   );
+  // Prune stale panel keys not in current registry (e.g. renamed panels)
+  const validPanelKeys = new Set(Object.keys(ALL_PANELS));
+  for (const key of Object.keys(panelSettings)) {
+    if (!validPanelKeys.has(key) && key !== 'runtime-config') delete panelSettings[key];
+  }
+  const variantDefaults = new Set(VARIANT_DEFAULTS[SITE_VARIANT] ?? []);
+  for (const key of Object.keys(ALL_PANELS)) {
+    if (!(key in panelSettings)) {
+      panelSettings[key] = { ...getEffectivePanelConfig(key, SITE_VARIANT), enabled: variantDefaults.has(key) };
+    }
+  }
 
   const isDesktopApp = isDesktopRuntime();
 
@@ -40,9 +51,9 @@ export function initSettingsWindow(): void {
     const panelHtml = panelEntries
       .map(
         ([key, panel]) => `
-        <div class="panel-toggle-item ${panel.enabled ? 'active' : ''}" data-panel="${key}">
+        <div class="panel-toggle-item ${panel.enabled ? 'active' : ''}" data-panel="${escapeHtml(key)}">
           <div class="panel-toggle-checkbox">${panel.enabled ? '✓' : ''}</div>
-          <span class="panel-toggle-label">${getLocalizedPanelName(key, panel.name)}</span>
+          <span class="panel-toggle-label">${escapeHtml(getLocalizedPanelName(key, panel.name))}</span>
         </div>
       `
       )

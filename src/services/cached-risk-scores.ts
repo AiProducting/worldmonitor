@@ -246,7 +246,7 @@ export async function fetchCachedRiskScores(signal?: AbortSignal): Promise<Cache
       saveToStorage(data);
       setHasCachedScores(true);
       return data;
-    }, emptyFallback()),
+    }, emptyFallback(), { shouldCache: (r) => r.cii.length > 0 }),
     signal,
   );
 

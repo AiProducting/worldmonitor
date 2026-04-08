@@ -26,7 +26,7 @@ const WEBCAM_FEEDS: WebcamFeed[] = [
   { id: 'iran-tehran', city: 'Tehran', country: 'Iran', region: 'iran', channelHandle: '@IranHDCams', fallbackVideoId: '-zGuR1qVKrU' },
   { id: 'iran-telaviv', city: 'Tel Aviv', country: 'Israel', region: 'iran', channelHandle: '@IsraelLiveCam', fallbackVideoId: 'gmtlJ_m2r5A' },
   { id: 'iran-jerusalem', city: 'Jerusalem', country: 'Israel', region: 'iran', channelHandle: '@JerusalemLive', fallbackVideoId: 'fIurYTprwzg' },
-  { id: 'iran-multicam', city: 'Middle East', country: 'Multi', region: 'iran', channelHandle: '@MiddleEastCams', fallbackVideoId: '4E-iFtUM2kk' },
+  { id: 'iran-multicam', city: 'Middle East', country: 'Multi', region: 'iran', channelHandle: '@MiddleEastCams', fallbackVideoId: 'FGUKbzulB_Y' },
   // Middle East — Jerusalem & Tehran adjacent (conflict hotspots)
   { id: 'jerusalem', city: 'Jerusalem', country: 'Israel', region: 'middle-east', channelHandle: '@TheWesternWall', fallbackVideoId: 'UyduhBUpO7Q' },
   { id: 'tehran', city: 'Tehran', country: 'Iran', region: 'middle-east', channelHandle: '@IranHDCams', fallbackVideoId: '-zGuR1qVKrU' },
@@ -124,7 +124,7 @@ export class LiveWebcamsPanel extends Panel {
   private boundEmbedMessageHandler: (e: MessageEvent) => void;
 
   constructor() {
-    super({ id: 'live-webcams', title: t('panels.liveWebcams'), className: 'panel-wide', closable: true });
+    super({ id: 'live-webcams', title: t('panels.liveWebcams'), className: 'panel-wide', closable: true, collapsible: true, infoTooltip: t('components.liveWebcams.infoTooltip') });
     this.insertLiveCountBadge(WEBCAM_FEEDS.length);
 
     const prefs = loadWebcamPrefs(this.forceSingleView);
@@ -367,7 +367,22 @@ export class LiveWebcamsPanel extends Panel {
       return;
     }
     const freshIframe = this.createIframe(tracker.feed);
-    oldIframe.replaceWith(freshIframe);
+    try {
+      oldIframe.replaceWith(freshIframe);
+    } catch {
+      // DOM was restructured between parentNode check and replaceWith (race with scroll/channel switch).
+      // Fall back to appending the fresh iframe to the container.
+      this.clearIframeTimeout(oldIframe);
+      this.iframeTrackers.delete(oldIframe);
+      oldIframe.src = 'about:blank';
+      tracker.container.querySelector('.webcam-embed-fallback')?.remove();
+      tracker.container.appendChild(freshIframe);
+      const idx = this.iframes.indexOf(oldIframe);
+      if (idx >= 0) this.iframes[idx] = freshIframe;
+      else this.iframes.push(freshIframe);
+      this.trackIframe(freshIframe, tracker.feed, tracker.container);
+      return;
+    }
     oldIframe.src = 'about:blank';
 
     const idx = this.iframes.indexOf(oldIframe);

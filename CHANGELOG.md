@@ -12,6 +12,10 @@ All notable changes to World Monitor are documented here.
 - Real-time transit counting with enter+dwell+exit crossing detection, 30min cooldown (#1560)
 - PortWatch, CorridorRisk, and transit seed loops on Railway relay (#1560)
 
+### Security
+
+- CDN-Cache-Control header now only set for trusted origins (worldmonitor.app, Vercel previews, Tauri); no-origin server-side requests always reach the edge function so `validateApiKey` can run, closing a potential cache-bypass path for external scrapers
+
 ### Fixed
 
 - PortWatch ArcGIS URL, field names, and chokepoint name mappings (#1572)

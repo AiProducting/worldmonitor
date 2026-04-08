@@ -6,20 +6,116 @@
  * Event-level helpers are kept as no-ops to preserve existing call sites.
  */
 
+import { subscribeAuthState } from './auth-state';
+
+// ---------------------------------------------------------------------------
+// Type-safe event catalog — every event name lives here.
+// Typo in an event string = compile error.
+// ---------------------------------------------------------------------------
+
+const EVENTS = {
+  // Search
+  'search-open': true,
+  'search-used': true,
+  'search-result-selected': true,
+  // Country / map
+  'country-selected': true,
+  'country-brief-opened': true,
+  'map-layer-toggle': true,
+  // Panels
+  'panel-toggle': true,
+  // Settings
+  'settings-open': true,
+  'variant-switch': true,
+  'theme-changed': true,
+  'language-change': true,
+  'feature-toggle': true,
+  // News
+  'news-sort-toggle': true,
+  'news-summarize': true,
+  'live-news-fullscreen': true,
+  // Webcams
+  'webcam-selected': true,
+  'webcam-region-filter': true,
+  'webcam-fullscreen': true,
+  // Downloads / banners
+  'download-clicked': true,
+  'critical-banner': true,
+  // AI widget
+  'widget-ai-open': true,
+  'widget-ai-generate': true,
+  'widget-ai-success': true,
+  // MCP
+  'mcp-connect-attempt': true,
+  'mcp-connect-success': true,
+  'mcp-panel-add': true,
+  // Auth (wired in PR #1812 — do not remove)
+  'sign-in': true,
+  'sign-up': true,
+  'sign-out': true,
+  'gate-hit': true,
+} as const;
+
+export type UmamiEvent = keyof typeof EVENTS;
+
+/** Type-safe Umami wrapper. Safe to call even if the script hasn't loaded. */
+export function track(event: UmamiEvent, data?: Record<string, unknown>): void {
+  window.umami?.track(event, data);
+}
+
 export async function initAnalytics(): Promise<void> {
   // Intentionally no-op.
 }
 
-export function trackEvent(_name: string, _props?: Record<string, unknown>): void {
-  // Intentionally no-op.
+// ---------------------------------------------------------------------------
+// User identity — call after auth state resolves so Umami can segment events
+// by user/plan. Safe to call before Umami script loads.
+// ---------------------------------------------------------------------------
+
+export function identifyUser(userId: string, plan: string): void {
+  window.umami?.identify({ userId, plan });
 }
 
-export function trackEventBeforeUnload(_name: string, _props?: Record<string, unknown>): void {
-  // Intentionally no-op.
+export function clearIdentity(): void {
+  window.umami?.identify({});
 }
 
-export function trackPanelView(_panelId: string): void {
-  // Intentionally no-op.
+let _unsubscribeAuthAnalytics: (() => void) | null = null;
+
+/**
+ * Call once after initAuthState() to keep Umami identity in sync with
+ * the authenticated user. Re-entrant safe: subsequent calls are no-ops.
+ */
+export function initAuthAnalytics(): void {
+  if (_unsubscribeAuthAnalytics) return;
+
+  _unsubscribeAuthAnalytics = subscribeAuthState((state) => {
+    if (state.user) {
+      identifyUser(state.user.id, state.user.role);
+    } else {
+      clearIdentity();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Auth events
+// ---------------------------------------------------------------------------
+
+export function trackSignIn(method: string): void {
+  track('sign-in', { method });
+}
+
+export function trackSignUp(method: string): void {
+  track('sign-up', { method });
+}
+
+export function trackSignOut(): void {
+  track('sign-out');
+}
+
+export function trackGateHit(feature: string): void {
+  track('gate-hit', { feature });
 }
 
 export function trackApiKeysSnapshot(): void {

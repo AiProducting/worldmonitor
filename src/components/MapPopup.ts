@@ -784,6 +784,113 @@ export class MapPopup {
     }
   }
 
+  public async loadWingbitsLiveFlight(hexCode: string): Promise<void> {
+    if (!this.popup) return;
+
+    const section = this.popup.querySelector('.wingbits-live-section');
+    if (!section) return;
+
+    try {
+      const live = await getWingbitsLiveFlight(hexCode);
+
+      if (!this.popup || !section.isConnected) return;
+
+      if (!live) {
+        section.innerHTML = '';
+        return;
+      }
+
+      const parts: string[] = [];
+      let photoHtml = '';
+
+      // Photo — built separately so it renders at the bottom after route/times/stats
+      if (live.photoUrl) {
+        const photoSrc = sanitizeUrl(live.photoUrl);
+        if (photoSrc) {
+          const photoLink = live.photoLink ? sanitizeUrl(live.photoLink) : '#';
+          const credit = live.photoCredit ? `<span class="flight-photo-credit">\u00a9 ${escapeHtml(live.photoCredit)}</span>` : '';
+          photoHtml = `<div class="flight-photo"><a href="${photoLink}" target="_blank" rel="noopener"><img src="${photoSrc}" alt="${escapeHtml(live.callsign)}" style="width:100%;border-radius:4px;display:block"></a>${credit}</div>`;
+        }
+      }
+
+      // IATA callsign + airline name header
+      if (live.callsignIata) {
+        const name = live.airlineName ? ` <span style="font-size:12px;opacity:0.6;font-weight:400">${escapeHtml(live.airlineName)}</span>` : '';
+        parts.push(`<div style="font-weight:700;font-size:15px;margin:4px 0">${escapeHtml(live.callsignIata)}${name}</div>`);
+      }
+
+      // Route (FROM → TO)
+      if (live.depIata && live.arrIata) {
+        const terminal = live.arrTerminal ? `<span style="font-size:10px;opacity:0.5;margin-left:4px">T${escapeHtml(live.arrTerminal)}</span>` : '';
+        const duration = live.flightDurationMin ? `<span style="font-size:11px;opacity:0.6">${Math.floor(live.flightDurationMin / 60)}h${live.flightDurationMin % 60 > 0 ? ` ${live.flightDurationMin % 60}m` : ''}</span>` : '';
+        parts.push(`
+          <div class="flight-route" style="display:flex;align-items:center;gap:6px;margin:8px 0 4px;font-weight:700;font-size:18px">
+            <span>${escapeHtml(live.depIata)}</span>
+            <span style="font-size:12px;opacity:0.4;font-weight:400">&#9992;</span>
+            <span>${escapeHtml(live.arrIata)}${terminal}</span>
+            <span style="flex:1;text-align:right">${duration}</span>
+          </div>`);
+
+        const depSched = fmtUtcTime(live.depTimeUtc);
+        const arrSched = fmtUtcTime(live.arrTimeUtc);
+        const depEst = fmtUtcTime(live.depEstimatedUtc);
+        const arrEst = fmtUtcTime(live.arrEstimatedUtc);
+        const hasDelay = live.depDelayedMin !== 0 || live.arrDelayedMin !== 0;
+
+        parts.push(`
+          <div class="flight-times" style="font-size:11px;display:grid;grid-template-columns:1fr auto 1fr;gap:2px 8px;margin-bottom:6px;opacity:0.85">
+            <span style="opacity:0.5;font-size:10px;text-transform:uppercase">DEP</span>
+            <span></span>
+            <span style="opacity:0.5;font-size:10px;text-transform:uppercase;text-align:right">ARR</span>
+            <span style="opacity:0.5;font-size:10px">${t('popups.flight.scheduled') || 'Sched'}</span><span></span><span style="opacity:0.5;font-size:10px;text-align:right">${t('popups.flight.scheduled') || 'Sched'}</span>
+            <span>${depSched}</span><span style="opacity:0.3;text-align:center">\u2194</span><span style="text-align:right">${arrSched}</span>
+            ${hasDelay ? `
+            <span style="opacity:0.5;font-size:10px">${t('popups.flight.estimated') || 'Est'}</span><span></span><span style="opacity:0.5;font-size:10px;text-align:right">${t('popups.flight.estimated') || 'Est'}</span>
+            <span>${depEst}${fmtDelayMin(live.depDelayedMin)}</span><span style="opacity:0.3;text-align:center">\u2194</span><span style="text-align:right">${arrEst}${fmtDelayMin(live.arrDelayedMin)}</span>` : ''}
+          </div>`);
+
+        // Book this route CTA
+        const today = new Date();
+        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        const bookUrl = sanitizeUrl(`https://www.google.com/travel/flights/search?q=Flights+from+${encodeURIComponent(live.depIata)}+to+${encodeURIComponent(live.arrIata)}+on+${encodeURIComponent(todayStr)}`);
+        parts.push(`<a href="${bookUrl}" target="_blank" rel="noopener" style="display:block;margin-top:8px;padding:7px 12px;background:rgba(68,255,136,.06);border:1px solid rgba(68,255,136,.18);border-radius:6px;color:var(--green,#44ff88);text-decoration:none;font-size:12px;text-align:center">Book this route &rarr;</a>`);
+      }
+
+      // Enrichment stats row
+      const rows: string[] = [];
+      if (live.registration) rows.push(`<div class="popup-stat"><span class="stat-label">Reg</span><span class="stat-value">${escapeHtml(live.registration)}</span></div>`);
+      if (live.model) rows.push(`<div class="popup-stat"><span class="stat-label">Model</span><span class="stat-value">${escapeHtml(live.model)}</span></div>`);
+      if (live.operator) rows.push(`<div class="popup-stat"><span class="stat-label">Operator</span><span class="stat-value">${escapeHtml(live.operator)}</span></div>`);
+      if (live.verticalRate !== 0) rows.push(`<div class="popup-stat"><span class="stat-label">Climb</span><span class="stat-value">${live.verticalRate > 0 ? '+' : ''}${Math.round(live.verticalRate)} fpm</span></div>`);
+
+      if (parts.length === 0 && rows.length === 0 && !photoHtml) {
+        section.innerHTML = '';
+        return;
+      }
+
+      const statsHtml = rows.length > 0 ? `<div class="popup-stats">${rows.join('')}</div>` : '';
+      section.innerHTML = `
+        <div class="popup-section-label" style="font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:.05em;margin-top:8px">Live Data</div>
+        ${parts.join('')}
+        ${statsHtml}
+        ${photoHtml}
+      `;
+      // Clamp for text content immediately, then re-clamp once the photo is sized.
+      this.clampPopupToViewport();
+      if (photoHtml) {
+        const img = section.querySelector<HTMLImageElement>('img');
+        if (img && !img.complete) {
+          img.addEventListener('load', () => { this.clampPopupToViewport(); }, { once: true });
+          img.addEventListener('error', () => { this.clampPopupToViewport(); }, { once: true });
+        }
+      }
+    } catch {
+      if (section.isConnected) {
+        section.innerHTML = '';
+      }
+    }
+  }
+
   private renderGdeltArticle(article: GdeltArticle): string {
     const domain = article.source || extractDomain(article.url);
     const timeAgo = formatArticleDate(article.date);
@@ -1688,7 +1795,7 @@ export class MapPopup {
             </div>
           </div>
         ` : ''}
-        <p class="popup-description">${escapeHtml(outage.description.slice(0, 250))}${outage.description.length > 250 ? '...' : ''}</p>
+        ${outage.description ? `<p class="popup-description">${escapeHtml(outage.description.slice(0, 250))}${outage.description.length > 250 ? '...' : ''}</p>` : ''}
         <a href="${sanitizeUrl(outage.link)}" target="_blank" class="popup-link">${t('popups.outage.readReport')} →</a>
       </div>
     `;

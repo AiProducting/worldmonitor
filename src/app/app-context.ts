@@ -111,16 +111,17 @@ export interface AppContext {
   countryBriefPage: CountryBriefPanel | null;
   countryTimeline: CountryTimeline | null;
 
-  // Happy variant state
-  positivePanel: PositiveNewsFeedPanel | null;
-  countersPanel: CountersPanel | null;
-  progressPanel: ProgressChartsPanel | null;
-  breakthroughsPanel: BreakthroughsTickerPanel | null;
-  heroPanel: HeroSpotlightPanel | null;
-  digestPanel: GoodThingsDigestPanel | null;
-  speciesPanel: SpeciesComebackPanel | null;
-  renewablePanel: RenewableEnergyPanel | null;
-  tvMode: TvModeController | null;
+  positivePanel: import('@/components/PositiveNewsFeedPanel').PositiveNewsFeedPanel | null;
+  countersPanel: import('@/components/CountersPanel').CountersPanel | null;
+  progressPanel: import('@/components/ProgressChartsPanel').ProgressChartsPanel | null;
+  breakthroughsPanel: import('@/components/BreakthroughsTickerPanel').BreakthroughsTickerPanel | null;
+  heroPanel: import('@/components/HeroSpotlightPanel').HeroSpotlightPanel | null;
+  digestPanel: import('@/components/GoodThingsDigestPanel').GoodThingsDigestPanel | null;
+  speciesPanel: import('@/components/SpeciesComebackPanel').SpeciesComebackPanel | null;
+  renewablePanel: import('@/components/RenewableEnergyPanel').RenewableEnergyPanel | null;
+  authModal: { open(): void; close(): void; destroy(): void } | null;
+  authHeaderWidget: import('@/components/AuthHeaderWidget').AuthHeaderWidget | null;
+  tvMode: import('@/services/tv-mode').TvModeController | null;
   happyAllItems: NewsItem[];
   isDestroyed: boolean;
   isPlaybackMode: boolean;

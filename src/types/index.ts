@@ -18,6 +18,16 @@ export interface Feed {
 
 export type { ThreatClassification, ThreatLevel, EventCategory } from '@/services/threat-classifier';
 
+export type StoryPhase = 'breaking' | 'developing' | 'sustained' | 'fading';
+
+export interface StoryMeta {
+  firstSeen: number;        // epoch ms
+  mentionCount: number;
+  sourceCount: number;
+  phase: StoryPhase;
+}
+
+
 export interface NewsItem {
   source: string;
   title: string;
@@ -35,6 +45,9 @@ export interface NewsItem {
   happyCategory?: import('@/services/positive-classifier').HappyContentCategory;
   // Image URL extracted from RSS media/enclosure tags
   imageUrl?: string;
+  importanceScore?: number;
+  corroborationCount?: number;
+  storyMeta?: StoryMeta;
 }
 
 export type VelocityLevel = 'normal' | 'elevated' | 'spike';
@@ -558,6 +571,8 @@ export interface MapLayers {
 
   // CII choropleth layer
   ciiChoropleth: boolean;
+  // Resilience choropleth layer
+  resilienceScore: boolean;
   // Overlay layers
   dayNight: boolean;
   // Commodity variant layers
@@ -565,6 +580,8 @@ export interface MapLayers {
   processingPlants: boolean;
   commodityPorts: boolean;
   webcams: boolean;
+  // Health layers
+  diseaseOutbreaks: boolean;
 }
 
 export interface AIDataCenter {
@@ -1355,4 +1372,32 @@ export interface MapDatacenterCluster {
   existingCount?: number;
   plannedCount?: number;
   sampled?: boolean;
+}
+
+export interface CountryBriefSignals {
+  criticalNews: number;
+  protests: number;
+  militaryFlights: number;
+  militaryVessels: number;
+  outages: number;
+  aisDisruptions: number;
+  satelliteFires: number;
+  radiationAnomalies: number;
+  temporalAnomalies: number;
+  cyberThreats: number;
+  earthquakes: number;
+  displacementOutflow: number;
+  climateStress: number;
+  conflictEvents: number;
+  activeStrikes: number;
+  orefSirens: number;
+  orefHistory24h: number;
+  aviationDisruptions: number;
+  travelAdvisories: number;
+  travelAdvisoryMaxLevel: string | null;
+  gpsJammingHexes: number;
+  isTier1: boolean;
+  thermalEscalations: number;
+  sanctionsDesignations: number;
+  sanctionsNewDesignations: number;
 }
