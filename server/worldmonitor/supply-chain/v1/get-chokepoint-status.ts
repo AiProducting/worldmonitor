@@ -19,9 +19,9 @@ import type { PortWatchData } from './_portwatch-upstream';
 import type { CorridorRiskData } from './_corridorrisk-upstream';
 import { CANONICAL_CHOKEPOINTS } from './_chokepoint-ids';
 // @ts-expect-error — .mjs module, no declaration file
-import { computeDisruptionScore, scoreToStatus, SEVERITY_SCORE, THREAT_LEVEL } from './_scoring.mjs';
-
-const REDIS_CACHE_KEY = 'supply_chain:chokepoints:v4';
+import { computeDisruptionScore, scoreToStatus, SEVERITY_SCORE, THREAT_LEVEL, detectTrafficAnomaly } from './_scoring.mjs';
+import { type ThreatLevel, threatLevelToWarRiskTier } from './_insurance-tier';
+import { CHOKEPOINT_STATUS_KEY as REDIS_CACHE_KEY } from '../../../_shared/cache-keys';
 const TRANSIT_SUMMARIES_KEY = 'supply_chain:transit-summaries:v1';
 const PORTWATCH_FALLBACK_KEY = 'supply_chain:portwatch:v1';
 const CORRIDORRISK_FALLBACK_KEY = 'supply_chain:corridorrisk:v1';
@@ -32,7 +32,6 @@ const THREAT_CONFIG_MAX_AGE_DAYS = 120;
 const NEARBY_CHOKEPOINT_RADIUS_KM = 300;
 const THREAT_CONFIG_STALE_NOTE = `Threat baseline last reviewed > ${THREAT_CONFIG_MAX_AGE_DAYS} days ago — review recommended`;
 
-type ThreatLevel = 'war_zone' | 'critical' | 'high' | 'elevated' | 'normal';
 type GeoCoordinates = { latitude: number; longitude: number };
 
 interface ChokepointConfig {
@@ -354,6 +353,7 @@ async function fetchChokepointData(): Promise<ChokepointFetchResult> {
         hazardAlertLevel: flowsData[cp.id]!.hazardAlertLevel ?? '',
         hazardAlertName: flowsData[cp.id]!.hazardAlertName ?? '',
       } : undefined,
+      warRiskTier: threatLevelToWarRiskTier(cp.threatLevel),
     };
   });
 

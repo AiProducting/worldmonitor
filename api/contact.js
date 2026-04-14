@@ -36,29 +36,6 @@ function isRateLimited(ip) {
   return entry.count > RATE_LIMIT;
 }
 
-async function verifyTurnstile(token, ip) {
-  const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) {
-    const isLocal = (process.env.VERCEL_ENV ?? 'development') === 'development';
-    if (!isLocal) {
-      console.error('[contact] TURNSTILE_SECRET_KEY not set in production, rejecting');
-      return false;
-    }
-    return true;
-  }
-  try {
-    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ secret, response: token, remoteip: ip }),
-    });
-    const data = await res.json();
-    return data.success === true;
-  } catch {
-    return false;
-  }
-}
-
 async function sendNotificationEmail(name, email, organization, phone, message, ip, country) {
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) {

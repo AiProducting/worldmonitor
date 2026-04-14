@@ -428,54 +428,6 @@ export interface AviationServiceHandler {
   searchGoogleDates(ctx: ServerContext, req: SearchGoogleDatesRequest): Promise<SearchGoogleDatesResponse>;
 }
 
-function makeHandler<Req, Res>(
-  methodName: string,
-  path: string,
-  parseReq: (params: URLSearchParams) => Req,
-  handlerFn: (ctx: ServerContext, req: Req) => Promise<Res>,
-  options?: ServerOptions,
-): RouteDescriptor {
-  return {
-    method: "GET",
-    path,
-    handler: async (req: Request): Promise<Response> => {
-      try {
-        const pathParams: Record<string, string> = {};
-        const url = new URL(req.url, "http://localhost");
-        const params = url.searchParams;
-        const body = parseReq(params);
-        if (options?.validateRequest) {
-          const violations = options.validateRequest(methodName, body);
-          if (violations) throw new ValidationError(violations);
-        }
-        const ctx: ServerContext = {
-          request: req,
-          pathParams,
-          headers: Object.fromEntries(req.headers.entries()),
-        };
-        const result = await handlerFn(ctx, body);
-        return new Response(JSON.stringify(result), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (err: unknown) {
-        if (err instanceof ValidationError) {
-          return new Response(JSON.stringify({ violations: err.violations }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        if (options?.onError) return options.onError(err, req);
-        const message = err instanceof Error ? err.message : String(err);
-        return new Response(JSON.stringify({ message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    },
-  };
-}
-
 export function createAviationServiceRoutes(
   handler: AviationServiceHandler,
   options?: ServerOptions,

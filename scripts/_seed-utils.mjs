@@ -214,10 +214,9 @@ export async function writeExtraKey(key, data, ttl) {
   console.log(`  Extra key ${key}: written`);
 }
 
-export async function writeExtraKeyWithMeta(key, data, ttl, recordCount, metaKeyOverride, metaTtlSeconds) {
-  await writeExtraKey(key, data, ttl);
+export async function writeSeedMeta(dataKey, recordCount, metaKeyOverride, metaTtlSeconds) {
   const { url, token } = getRedisCredentials();
-  const metaKey = metaKeyOverride || `seed-meta:${key.replace(/:v\d+$/, '')}`;
+  const metaKey = metaKeyOverride || `seed-meta:${dataKey.replace(/:v\d+$/, '')}`;
   const meta = { fetchedAt: Date.now(), recordCount: recordCount ?? 0 };
   const metaTtl = metaTtlSeconds ?? 86400 * 7;
   const resp = await fetch(url, {
@@ -227,6 +226,11 @@ export async function writeExtraKeyWithMeta(key, data, ttl, recordCount, metaKey
     signal: AbortSignal.timeout(5_000),
   });
   if (!resp.ok) console.warn(`  seed-meta ${metaKey}: write failed`);
+}
+
+export async function writeExtraKeyWithMeta(key, data, ttl, recordCount, metaKeyOverride, metaTtlSeconds) {
+  await writeExtraKey(key, data, ttl);
+  await writeSeedMeta(key, recordCount, metaKeyOverride, metaTtlSeconds);
 }
 
 export async function extendExistingTtl(keys, ttlSeconds = 600) {
@@ -275,11 +279,15 @@ export function resolveProxyForConnect() {
 }
 
 // curl-based fetch; throws on non-2xx. Returns response body as string.
-// NOTE: requires curl binary — only available in Dockerfile.relay (apk add curl).
-// Do NOT call from standalone seed scripts; use fredFetchJson or httpsProxyFetchJson instead.
+// NOTE: requires curl binary — available in Dockerfile.relay (apk add curl) and Railway.
+// Prefer httpsProxyFetchJson (pure Node.js) when possible; use curlFetch when curl-specific
+// features are needed (e.g. --compressed, -L redirect following with proxy).
 export function curlFetch(url, proxyAuth, headers = {}) {
   const args = ['-sS', '--compressed', '--max-time', '15', '-L'];
-  if (proxyAuth) args.push('-x', `http://${proxyAuth}`);
+  if (proxyAuth) {
+    const proxyUrl = /^https?:\/\//i.test(proxyAuth) ? proxyAuth : `http://${proxyAuth}`;
+    args.push('-x', proxyUrl);
+  }
   for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
   args.push('-w', '\n%{http_code}');
   args.push(url);
@@ -311,20 +319,105 @@ export async function httpsProxyFetchRaw(url, proxyAuth, { accept = '*/*', timeo
 }
 
 // Fetch JSON from a FRED URL, routing through proxy when available.
+// Proxy-first: FRED consistently blocks/throttles Railway datacenter IPs,
+// so try proxy first to avoid 20s timeout on every direct attempt.
 export async function fredFetchJson(url, proxyAuth) {
-  try {
-    const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
-    if (r.ok) return r.json();
-    throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
-  } catch (directErr) {
-    if (!proxyAuth) throw directErr;
-    console.warn(`  [fredFetch] direct failed (${directErr.message}) — retrying via proxy`);
+  if (proxyAuth) {
+    // Decodo proxy flaps on 5xx/522 — retry up to 3 times with backoff before falling back direct.
+    let lastProxyErr;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await httpsProxyFetchJson(url, proxyAuth);
+      } catch (proxyErr) {
+        lastProxyErr = proxyErr;
+        const transient = /HTTP 5\d{2}|522|timeout|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(proxyErr.message || '');
+        if (attempt < 3 && transient) {
+          await new Promise((r) => setTimeout(r, 400 * attempt + Math.random() * 300));
+          continue;
+        }
+        break;
+      }
+    }
+    console.warn(`  [fredFetch] proxy failed after retries (${lastProxyErr?.message}) — retrying direct`);
     try {
-      return await httpsProxyFetchJson(url, proxyAuth);
-    } catch (proxyErr) {
-      throw Object.assign(new Error(`proxy: ${proxyErr.message}`), { cause: proxyErr });
+      const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
+      if (r.ok) return r.json();
+      throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+    } catch (directErr) {
+      throw Object.assign(new Error(`direct: ${directErr.message}`), { cause: directErr });
     }
   }
+  const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
+  if (r.ok) return r.json();
+  throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+}
+
+// Fetch JSON from an IMF DataMapper URL, direct-first with proxy fallback.
+// Direct timeout is short (10s) since IMF blocks Railway IPs with 403 quickly.
+export async function imfFetchJson(url, proxyAuth) {
+  try {
+    const r = await fetch(url, {
+      headers: { 'User-Agent': CHROME_UA, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } catch (directErr) {
+    if (!proxyAuth) throw directErr;
+    console.warn(`  [IMF] Direct fetch failed (${directErr.message}); retrying via proxy`);
+    return httpsProxyFetchJson(url, proxyAuth);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IMF SDMX 3.0 API (api.imf.org) — replaces blocked DataMapper API
+// ---------------------------------------------------------------------------
+const IMF_SDMX_BASE = 'https://api.imf.org/external/sdmx/3.0';
+
+export async function imfSdmxFetchIndicator(indicator, { database = 'WEO', years } = {}) {
+  const agencyMap = { WEO: 'IMF.RES', FM: 'IMF.FAD' };
+  const agency = agencyMap[database] || 'IMF.RES';
+  const url = `${IMF_SDMX_BASE}/data/dataflow/${agency}/${database}/+/*.${indicator}.A?dimensionAtObservation=TIME_PERIOD&attributes=dsd&measures=all`;
+
+  const json = await withRetry(async () => {
+    const r = await fetch(url, {
+      headers: { 'User-Agent': CHROME_UA, Accept: 'application/json' },
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!r.ok) throw new Error(`IMF SDMX ${indicator}: HTTP ${r.status}`);
+    return r.json();
+  }, 2, 2000);
+
+  const struct = json?.data?.structures?.[0];
+  const ds = json?.data?.dataSets?.[0];
+  if (!struct || !ds?.series) return {};
+
+  const countryDim = struct.dimensions.series.find(d => d.id === 'COUNTRY');
+  const countryDimPos = struct.dimensions.series.findIndex(d => d.id === 'COUNTRY');
+  const timeDim = struct.dimensions.observation.find(d => d.id === 'TIME_PERIOD');
+  if (!countryDim || countryDimPos === -1 || !timeDim) return {};
+
+  const countryValues = countryDim.values.map(v => v.id);
+  const timeValues = timeDim.values.map(v => v.value || v.id);
+  const yearSet = years ? new Set(years.map(String)) : null;
+
+  const result = {};
+  for (const [seriesKey, seriesData] of Object.entries(ds.series)) {
+    const keyParts = seriesKey.split(':');
+    const countryIdx = parseInt(keyParts[countryDimPos], 10);
+    const iso3 = countryValues[countryIdx];
+    if (!iso3) continue;
+
+    const byYear = {};
+    for (const [obsKey, obsVal] of Object.entries(seriesData.observations || {})) {
+      const year = timeValues[parseInt(obsKey, 10)];
+      if (!year || (yearSet && !yearSet.has(year))) continue;
+      const v = obsVal?.[0];
+      if (v != null) byYear[year] = parseFloat(v);
+    }
+    if (Object.keys(byYear).length > 0) result[iso3] = byYear;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +634,42 @@ export async function readSeedSnapshot(canonicalKey) {
   }
 }
 
+/**
+ * Resolve recordCount for runSeed's freshness metadata write.
+ *
+ * Resolution order:
+ *   1. opts.recordCount (function or number) — the seeder declared it explicitly
+ *   2. Auto-detect from a known shape (Array.isArray, .predictions, .events, ...)
+ *   3. payloadBytes > 0 → 1 (proven-payload fallback) + warn so the seeder author
+ *      adds an explicit opts.recordCount
+ *   4. 0
+ *
+ * The fallback exists because seeders publishing custom shapes would otherwise
+ * trigger phantom EMPTY_DATA in /api/health even though the payload is fully
+ * populated. See ~/.claude/skills/seed-recordcount-autodetect-phantom-empty.
+ *
+ * Pure function — extracted from runSeed for unit testing.
+ */
+export function computeRecordCount({ opts = {}, data, payloadBytes = 0, topicArticleCount, onPhantomFallback }) {
+  if (opts.recordCount != null) {
+    return typeof opts.recordCount === 'function' ? opts.recordCount(data) : opts.recordCount;
+  }
+  const detectedFromShape = Array.isArray(data)
+    ? data.length
+    : (topicArticleCount
+      ?? data?.predictions?.length
+      ?? data?.events?.length ?? data?.earthquakes?.length ?? data?.outages?.length
+      ?? data?.fireDetections?.length ?? data?.anomalies?.length ?? data?.threats?.length
+      ?? data?.quotes?.length ?? data?.stablecoins?.length
+      ?? data?.cables?.length);
+  if (detectedFromShape != null) return detectedFromShape;
+  if (payloadBytes > 0) {
+    if (typeof onPhantomFallback === 'function') onPhantomFallback();
+    return 1;
+  }
+  return 0;
+}
+
 export function parseYahooChart(data, symbol) {
   const result = data?.chart?.result?.[0];
   const meta = result?.meta;
@@ -579,26 +708,38 @@ export async function runSeed(domain, resource, canonicalKey, fetchFn, opts = {}
       const keys = [canonicalKey, `seed-meta:${domain}:${resource}`];
       if (extraKeys) keys.push(...extraKeys.map(ek => ek.key));
       await extendExistingTtl(keys, ttlSeconds || 600);
-      // Always write seed-meta even when data is empty so health checks can
-      // distinguish "seeder ran but nothing to publish" from "seeder stopped".
-      await writeFreshnessMetadata(domain, resource, 0, opts.sourceVersion, ttlSeconds);
-      console.log(`  SKIPPED: validation failed (empty data) — seed-meta refreshed, existing cache TTL extended`);
+      const strictFailure = Boolean(opts.emptyDataIsFailure);
+      if (strictFailure) {
+        // Strict-floor seeders (e.g. IMF-External, floor=180 countries) treat
+        // empty data as a real upstream failure. Do NOT refresh seed-meta —
+        // letting fetchedAt stay stale lets bundles retry on their next cron
+        // fire and lets health flip to STALE_SEED. Writing fresh meta here
+        // caused imf-external to skip for the full 30-day interval after a
+        // single transient failure (Railway log 2026-04-13).
+        console.error(`  FAILURE: validation failed (empty data) — seed-meta NOT refreshed; bundle will retry next cycle`);
+      } else {
+        // Write seed-meta even when data is empty so health can distinguish
+        // "seeder ran but nothing to publish" from "seeder stopped" (quiet-
+        // period feeds: news, events, sparse indicators).
+        await writeFreshnessMetadata(domain, resource, 0, opts.sourceVersion, ttlSeconds);
+        console.log(`  SKIPPED: validation failed (empty data) — seed-meta refreshed, existing cache TTL extended`);
+      }
       console.log(`\n=== Done (${Math.round(durationMs)}ms, no write) ===`);
       await releaseLock(`${domain}:${resource}`, runId);
-      process.exit(0);
+      // Strict path exits non-zero so _bundle-runner counts it as failed++
+      // (otherwise the bundle summary hides upstream outages behind ran++).
+      process.exit(strictFailure ? 1 : 0);
     }
     const { payloadBytes } = publishResult;
     const topicArticleCount = Array.isArray(data?.topics)
       ? data.topics.reduce((n, t) => n + (t?.articles?.length || t?.events?.length || 0), 0)
       : undefined;
-    const recordCount = opts.recordCount != null
-      ? (typeof opts.recordCount === 'function' ? opts.recordCount(data) : opts.recordCount)
-      : Array.isArray(data) ? data.length
-      : (topicArticleCount
-        ?? data?.events?.length ?? data?.earthquakes?.length ?? data?.outages?.length
-        ?? data?.fireDetections?.length ?? data?.anomalies?.length ?? data?.threats?.length
-        ?? data?.quotes?.length ?? data?.stablecoins?.length
-        ?? data?.cables?.length ?? 0);
+    const recordCount = computeRecordCount({
+      opts, data, payloadBytes, topicArticleCount,
+      onPhantomFallback: () => console.warn(
+        `  [recordCount] auto-detect did not match a known shape (payloadBytes=${payloadBytes}); falling back to 1. Add opts.recordCount to ${domain}:${resource} for accurate health metrics.`
+      ),
+    });
 
     // Write extra keys (e.g., bootstrap hydration keys)
     if (extraKeys) {

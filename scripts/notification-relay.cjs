@@ -5,6 +5,8 @@ const dns = require('node:dns').promises;
 const { ConvexHttpClient } = require('convex/browser');
 const { Resend } = require('resend');
 const { decrypt } = require('./lib/crypto.cjs');
+const { callLLM } = require('./lib/llm-chain.cjs');
+const { fetchUserPreferences, extractUserContext, formatUserProfile } = require('./lib/user-context.cjs');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -20,6 +22,8 @@ const RESEND_FROM = process.env.RESEND_FROM_EMAIL ?? 'WorldMonitor <alerts@world
 // When QUIET_HOURS_BATCH_ENABLED=0, treat batch_on_wake as critical_only.
 // Useful during relay rollout to disable queued batching before drainBatchOnWake is fully tested.
 const QUIET_HOURS_BATCH_ENABLED = process.env.QUIET_HOURS_BATCH_ENABLED !== '0';
+const AI_IMPACT_ENABLED = process.env.AI_IMPACT_ENABLED === '1';
+const AI_IMPACT_CACHE_TTL = 1800; // 30 min, matches dedup window
 
 if (!UPSTASH_URL || !UPSTASH_TOKEN) { console.error('[relay] UPSTASH_REDIS_REST_URL/TOKEN not set'); process.exit(1); }
 if (!CONVEX_URL) { console.error('[relay] CONVEX_URL not set'); process.exit(1); }
@@ -76,6 +80,32 @@ async function deactivateChannel(userId, channelType) {
   }
 }
 
+// ── Entitlement check (PRO gate for delivery) ───────────────────────────────
+
+const ENTITLEMENT_CACHE_TTL = 900; // 15 min
+
+async function isUserPro(userId) {
+  const cacheKey = `relay:entitlement:${userId}`;
+  try {
+    const cached = await upstashRest('GET', cacheKey);
+    if (cached !== null) return Number(cached) >= 1;
+  } catch { /* miss */ }
+  try {
+    const res = await fetch(`${CONVEX_SITE_URL}/relay/entitlement`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RELAY_SECRET}`, 'User-Agent': 'worldmonitor-relay/1.0' },
+      body: JSON.stringify({ userId }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return true; // fail-open: don't block delivery on entitlement service failure
+    const { tier } = await res.json();
+    await upstashRest('SET', cacheKey, String(tier ?? 0), 'EX', String(ENTITLEMENT_CACHE_TTL));
+    return (tier ?? 0) >= 1;
+  } catch {
+    return true; // fail-open
+  }
+}
+
 // ── Private IP guard ─────────────────────────────────────────────────────────
 
 function isPrivateIP(ip) {
@@ -84,32 +114,7 @@ function isPrivateIP(ip) {
 
 // ── Quiet hours ───────────────────────────────────────────────────────────────
 
-function toLocalHour(nowMs, timezone) {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      hour: 'numeric',
-      hour12: false,
-    }).formatToParts(new Date(nowMs));
-    const h = parts.find(p => p.type === 'hour');
-    return h ? parseInt(h.value, 10) : -1;
-  } catch {
-    return -1;
-  }
-}
-
-function isInQuietHours(rule) {
-  if (!rule.quietHoursEnabled) return false;
-  const start = rule.quietHoursStart ?? 22;
-  const end = rule.quietHoursEnd ?? 7;
-  const tz = rule.quietHoursTimezone ?? 'UTC';
-  const localHour = toLocalHour(Date.now(), tz);
-  if (localHour === -1) return false;
-  // spans midnight when start >= end (e.g. 23:00-07:00)
-  return start < end
-    ? localHour >= start && localHour < end
-    : localHour >= start || localHour < end;
-}
+const { toLocalHour, isInQuietHours } = require('./lib/quiet-hours.cjs');
 
 // Returns 'deliver' | 'suppress' | 'hold'
 function resolveQuietAction(rule, severity) {
@@ -178,6 +183,15 @@ async function drainHeldForUser(userId, variant, allowedChannelTypes) {
       else if (ch.channelType === 'slack' && ch.webhookEnvelope) ok = await sendSlack(userId, ch.webhookEnvelope, text);
       else if (ch.channelType === 'discord' && ch.webhookEnvelope) ok = await sendDiscord(userId, ch.webhookEnvelope, text);
       else if (ch.channelType === 'email' && ch.email) ok = await sendEmail(ch.email, subject, text);
+      else if (ch.channelType === 'webhook' && ch.webhookEnvelope) ok = await sendWebhook(userId, ch.webhookEnvelope, {
+        eventType: 'quiet_hours_batch',
+        severity: 'info',
+        payload: {
+          title: subject,
+          alertCount: events.length,
+          alerts: events.map(ev => ({ eventType: ev.eventType, severity: ev.severity ?? 'high', title: ev.payload?.title ?? ev.eventType })),
+        },
+      });
       if (ok) anyDelivered = true;
     } catch (err) {
       console.warn(`[relay] drainHeldForUser: delivery error for ${userId}/${ch.channelType}:`, err.message);
@@ -397,6 +411,79 @@ async function sendEmail(email, subject, text) {
   }
 }
 
+async function sendWebhook(userId, webhookEnvelope, event) {
+  let url;
+  try {
+    url = decrypt(webhookEnvelope);
+  } catch (err) {
+    console.warn(`[relay] Webhook decrypt failed for ${userId}:`, err.message);
+    return false;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    console.warn(`[relay] Webhook invalid URL for ${userId}`);
+    await deactivateChannel(userId, 'webhook');
+    return false;
+  }
+
+  if (parsed.protocol !== 'https:') {
+    console.warn(`[relay] Webhook rejected non-HTTPS for ${userId}`);
+    return false;
+  }
+
+  try {
+    const addrs = await dns.resolve4(parsed.hostname);
+    if (addrs.some(isPrivateIP)) {
+      console.warn(`[relay] Webhook SSRF blocked (private IP) for ${userId}`);
+      return false;
+    }
+  } catch (err) {
+    console.warn(`[relay] Webhook DNS resolve failed for ${userId}:`, err.message);
+    return false;
+  }
+
+  // Envelope version stays at '1'. Payload gained optional `corroborationCount`
+  // on rss_alert (PR #3069) — this is an additive field, backwards-compatible
+  // for consumers that don't enforce `additionalProperties: false`. Bumping
+  // version here would have broken parity with the other webhook producers
+  // (scripts/proactive-intelligence.mjs, scripts/seed-digest-notifications.mjs)
+  // which still emit v1, causing the same endpoint to receive mixed envelope
+  // versions per event type.
+  const payload = JSON.stringify({
+    version: '1',
+    eventType: event.eventType,
+    severity: event.severity ?? 'high',
+    timestamp: event.publishedAt ?? Date.now(),
+    payload: event.payload ?? {},
+    variant: event.variant ?? null,
+  });
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-relay/1.0' },
+      body: payload,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (resp.status === 404 || resp.status === 410 || resp.status === 403) {
+      console.warn(`[relay] Webhook ${resp.status} for ${userId} — deactivating`);
+      await deactivateChannel(userId, 'webhook');
+      return false;
+    }
+    if (!resp.ok) {
+      console.warn(`[relay] Webhook delivery failed for ${userId}: HTTP ${resp.status}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn(`[relay] Webhook delivery error for ${userId}:`, err.message);
+    return false;
+  }
+}
+
 // ── Event processing ──────────────────────────────────────────────────────────
 
 function matchesSensitivity(ruleSensitivity, eventSeverity) {
@@ -469,21 +556,125 @@ async function processWelcome(event) {
 
 const IMPORTANCE_SCORE_LIVE = process.env.IMPORTANCE_SCORE_LIVE === '1';
 const IMPORTANCE_SCORE_MIN = Number(process.env.IMPORTANCE_SCORE_MIN ?? 40);
-const SHADOW_SCORE_LOG_KEY = 'shadow:score-log:v1';
+// v2 key: JSON-encoded members, used after the stale-score fix (PR #TBD).
+// The old v1 key (compact string format) is retained by consumers for
+// backward-compat reading but is no longer written. See
+// docs/internal/scoringDiagnostic.md §5 and §9 Step 4.
+const SHADOW_SCORE_LOG_KEY = 'shadow:score-log:v2';
 const SHADOW_LOG_TTL = 7 * 24 * 3600; // 7 days
 
 async function shadowLogScore(event) {
   const importanceScore = event.payload?.importanceScore ?? 0;
   if (!UPSTASH_URL || !UPSTASH_TOKEN || importanceScore === 0) return;
   const now = Date.now();
-  // Use timestamp as the sorted-set score so entries are time-sortable for analysis.
-  // Member encodes importanceScore + context for review.
-  const member = `${now}:score=${importanceScore}:${event.eventType}:${String(event.payload?.title ?? '').slice(0, 60)}`;
+  const record = {
+    ts: now,
+    importanceScore,
+    severity: event.severity ?? 'high',
+    eventType: event.eventType,
+    title: String(event.payload?.title ?? '').slice(0, 160),
+    source: event.payload?.source ?? '',
+    publishedAt: event.payload?.publishedAt ?? null,
+    corroborationCount: event.payload?.corroborationCount ?? null,
+    variant: event.variant ?? '',
+  };
+  const member = JSON.stringify(record);
   const cutoff = String(now - SHADOW_LOG_TTL * 1000); // prune entries older than 7 days
+  // One pipelined HTTP request: ZADD + ZREMRANGEBYSCORE prune + 30-day
+  // belt-and-suspenders EXPIRE. Saves ~50% round-trips vs sequential calls
+  // and bounds growth even if writes stop and the rolling prune stalls.
   try {
-    await upstashRest('ZADD', SHADOW_SCORE_LOG_KEY, String(now), member);
-    await upstashRest('ZREMRANGEBYSCORE', SHADOW_SCORE_LOG_KEY, '-inf', cutoff);
-  } catch {}
+    const res = await fetch(`${UPSTASH_URL}/pipeline`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${UPSTASH_TOKEN}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'worldmonitor-relay/1.0',
+      },
+      body: JSON.stringify([
+        ['ZADD', SHADOW_SCORE_LOG_KEY, String(now), member],
+        ['ZREMRANGEBYSCORE', SHADOW_SCORE_LOG_KEY, '-inf', cutoff],
+        ['EXPIRE', SHADOW_SCORE_LOG_KEY, '2592000'],
+      ]),
+    });
+    // Surface HTTP failures and per-command errors. Activation depends on v2
+    // filling with clean data; a silent write-failure would leave operators
+    // staring at an empty ZSET with no signal.
+    if (!res.ok) {
+      console.warn(`[relay] shadow-log pipeline HTTP ${res.status}`);
+      return;
+    }
+    const body = await res.json().catch(() => null);
+    if (Array.isArray(body)) {
+      const failures = body.map((cmd, i) => (cmd?.error ? `cmd[${i}] ${cmd.error}` : null)).filter(Boolean);
+      if (failures.length > 0) console.warn(`[relay] shadow-log pipeline partial failure: ${failures.join('; ')}`);
+    }
+  } catch (err) {
+    console.warn(`[relay] shadow-log pipeline threw: ${err?.message ?? err}`);
+  }
+}
+
+// ── AI impact analysis ───────────────────────────────────────────────────────
+
+async function generateEventImpact(event, rule) {
+  if (!AI_IMPACT_ENABLED) return null;
+
+  // fetchUserPreferences returns { data, error } — must destructure `data`.
+  // Without this the wrapper object was passed to extractUserContext, which
+  // read no keys, so ctx was always empty and the gate below returned null
+  // for every user, silently disabling AI impact analysis entirely.
+  const { data: prefs, error: prefsFetchError } = await fetchUserPreferences(rule.userId, rule.variant ?? 'full');
+  if (!prefs) {
+    if (prefsFetchError) {
+      console.warn(`[relay] Prefs fetch failed for ${rule.userId} — skipping AI impact`);
+    }
+    return null;
+  }
+
+  const ctx = extractUserContext(prefs);
+  if (ctx.tickers.length === 0 && ctx.airports.length === 0 && !ctx.frameworkName) return null;
+
+  const variant = rule.variant ?? 'full';
+  const eventHash = sha256Hex(`${event.eventType}:${event.payload?.title ?? ''}`);
+  const ctxHash = sha256Hex(JSON.stringify({ ...ctx, variant })).slice(0, 16);
+  const cacheKey = `impact:ai:v1:${eventHash.slice(0, 16)}:${ctxHash}`;
+
+  try {
+    const cached = await upstashRest('GET', cacheKey);
+    if (cached) return cached;
+  } catch { /* miss */ }
+
+  const profile = formatUserProfile(ctx, variant);
+  const safeTitle = String(event.payload?.title ?? event.eventType).replace(/[\r\n]/g, ' ').slice(0, 300);
+  const safeSource = event.payload?.source ? String(event.payload.source).replace(/[\r\n]/g, ' ').slice(0, 100) : '';
+  const systemPrompt = `Assess how this event impacts a specific investor/analyst.
+Return 1-2 sentences: (1) direct impact on their assets/regions, (2) action implication.
+If no clear impact: "Low direct impact on your portfolio."
+Be specific about tickers and regions. No preamble.`;
+
+  const userPrompt = `Event: [${(event.severity ?? 'high').toUpperCase()}] ${safeTitle}
+${safeSource ? `Source: ${safeSource}` : ''}
+
+${profile}`;
+
+  let impact;
+  try {
+    impact = await Promise.race([
+      callLLM(systemPrompt, userPrompt, { maxTokens: 200, temperature: 0.2, timeoutMs: 8000 }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('global timeout')), 10000)),
+    ]);
+  } catch {
+    console.warn(`[relay] AI impact global timeout for ${rule.userId}`);
+    return null;
+  }
+  if (!impact) return null;
+
+  try {
+    await upstashRest('SET', cacheKey, impact, 'EX', String(AI_IMPACT_CACHE_TTL));
+  } catch { /* best-effort */ }
+
+  console.log(`[relay] AI impact generated for ${rule.userId} (${impact.length} chars)`);
+  return impact;
 }
 
 async function processEvent(event) {
@@ -491,8 +682,10 @@ async function processEvent(event) {
   if (event.eventType === 'flush_quiet_held') { await processFlushQuietHeld(event); return; }
   console.log(`[relay] Processing event: ${event.eventType} (${event.severity ?? 'high'})`);
 
-  // Shadow log importanceScore for comparison (always runs when score is present)
-  shadowLogScore(event).catch(() => {});
+  // Shadow log importanceScore for comparison. Gate at caller: only rss_alert
+  // events carry importanceScore; for everything else shadowLogScore would
+  // short-circuit, but we still pay the promise/microtask cost unless gated here.
+  if (event.eventType === 'rss_alert') shadowLogScore(event).catch(() => {});
 
   // Score gate — only for rss_alert; other event types (oref_siren, conflict_escalation,
   // notam_closure, etc.) never attach importanceScore so they must never be gated here.
@@ -512,9 +705,6 @@ async function processEvent(event) {
     return;
   }
 
-  // Shadow log the score on every rss_alert event (fire-and-forget, no await needed)
-  if (event.eventType === 'rss_alert') shadowLogScore(event).catch(() => {});
-
   const matching = enabledRules.filter(r =>
     (!r.digestMode || r.digestMode === 'realtime') &&   // skip digest-mode rules — handled by seed-digest-notifications cron
     (r.eventTypes.length === 0 || r.eventTypes.includes(event.eventType)) &&
@@ -524,11 +714,21 @@ async function processEvent(event) {
 
   if (matching.length === 0) return;
 
+  // Batch PRO check: resolve all unique userIds in parallel instead of one-by-one.
+  // isUserPro() has a 15-min Redis cache, so this is cheap after the first call.
+  const uniqueUserIds = [...new Set(matching.map(r => r.userId))];
+  const proResults = await Promise.all(uniqueUserIds.map(async uid => [uid, await isUserPro(uid)]));
+  const proSet = new Set(proResults.filter(([, isPro]) => isPro).map(([uid]) => uid));
+  const skippedCount = uniqueUserIds.length - proSet.size;
+  if (skippedCount > 0) console.log(`[relay] Skipping ${skippedCount} non-PRO user(s)`);
+
   const text = formatMessage(event);
   const subject = `WorldMonitor Alert: ${event.payload?.title ?? event.eventType}`;
   const eventSeverity = event.severity ?? 'high';
 
   for (const rule of matching) {
+    if (!proSet.has(rule.userId)) continue;
+
     const quietAction = resolveQuietAction(rule, eventSeverity);
 
     if (quietAction === 'suppress') {
@@ -567,17 +767,26 @@ async function processEvent(event) {
     }
 
     const verifiedChannels = channels.filter(c => c.verified && rule.channels.includes(c.channelType));
+    if (verifiedChannels.length === 0) continue;
+
+    let deliveryText = text;
+    if (AI_IMPACT_ENABLED) {
+      const impact = await generateEventImpact(event, rule);
+      if (impact) deliveryText = `${text}\n\n— Impact —\n${impact}`;
+    }
 
     for (const ch of verifiedChannels) {
       try {
         if (ch.channelType === 'telegram' && ch.chatId) {
-          await sendTelegram(rule.userId, ch.chatId, text);
+          await sendTelegram(rule.userId, ch.chatId, deliveryText);
         } else if (ch.channelType === 'slack' && ch.webhookEnvelope) {
-          await sendSlack(rule.userId, ch.webhookEnvelope, text);
+          await sendSlack(rule.userId, ch.webhookEnvelope, deliveryText);
         } else if (ch.channelType === 'discord' && ch.webhookEnvelope) {
-          await sendDiscord(rule.userId, ch.webhookEnvelope, text);
+          await sendDiscord(rule.userId, ch.webhookEnvelope, deliveryText);
         } else if (ch.channelType === 'email' && ch.email) {
-          await sendEmail(ch.email, subject, text);
+          await sendEmail(ch.email, subject, deliveryText);
+        } else if (ch.channelType === 'webhook' && ch.webhookEnvelope) {
+          await sendWebhook(rule.userId, ch.webhookEnvelope, event);
         }
       } catch (err) {
         console.warn(`[relay] Delivery error for ${rule.userId}/${ch.channelType}:`, err instanceof Error ? err.message : String(err));

@@ -504,6 +504,25 @@ export class SearchManager implements AppModule {
           this.ctx.unifiedSettings?.open();
         } else if (action === 'refresh') {
           window.location.reload();
+        } else if (action === 'resilience') {
+          const layerKey = 'resilienceScore' as keyof MapLayers;
+          const variantAllowed = getAllowedLayerKeys((SITE_VARIANT || 'full') as MapVariant);
+          if (!variantAllowed.has(layerKey)) break;
+          let newValue = !this.ctx.mapLayers[layerKey];
+          if (newValue && !this.ctx.map?.isDeckGLActive?.()) newValue = false;
+          this.ctx.mapLayers[layerKey] = newValue;
+          saveToStorage(STORAGE_KEYS.mapLayers, this.ctx.mapLayers);
+          if (newValue) {
+            this.ctx.map?.enableLayer(layerKey);
+          } else {
+            this.ctx.map?.setLayers(this.ctx.mapLayers);
+          }
+        } else if (action === 'route-explorer') {
+          void import('@/components/RouteExplorer/RouteExplorer').then((m) => {
+            const explorer = m.getRouteExplorer();
+            explorer.setMap(this.ctx.map);
+            explorer.open();
+          });
         }
         break;
 

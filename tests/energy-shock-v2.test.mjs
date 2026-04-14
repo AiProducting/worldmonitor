@@ -13,6 +13,14 @@ import {
   buildAssessment,
   computeGulfShare,
   CHOKEPOINT_EXPOSURE,
+  parseFuelMode,
+  CHOKEPOINT_LNG_EXPOSURE,
+  EU_GAS_STORAGE_COUNTRIES,
+  computeGasDisruption,
+  computeGasBufferDays,
+  buildGasAssessment,
+  REFINERY_YIELD,
+  REFINERY_YIELD_BASIS,
 } from '../server/worldmonitor/intelligence/v1/_shock-compute.js';
 
 import { ISO2_TO_COMTRADE } from '../server/worldmonitor/intelligence/v1/_comtrade-reporters.js';
@@ -65,7 +73,8 @@ describe('buildAssessment — unsupported country', () => {
   it('returns structured insufficient data message for unsupported country', () => {
     const msg = buildAssessment('ZZ', 'hormuz', false, 0, 0, 0, 50, [], 'unsupported', false);
     assert.ok(msg.includes('Insufficient import data'));
-    assert.ok(msg.includes('ZZ'));
+    // ZZ resolves to "Unknown Region" via Intl.DisplayNames; hormuz falls back to "hormuz" (no underscore)
+    assert.ok(msg.includes('Unknown Region') || msg.includes('ZZ'));
     assert.ok(msg.includes('hormuz'));
   });
 
@@ -133,11 +142,12 @@ describe('buildAssessment — degraded mode', () => {
 
 describe('mock: degraded mode falls back to CHOKEPOINT_EXPOSURE', () => {
   it('CHOKEPOINT_EXPOSURE values are used as fallback when portwatch absent', () => {
-    const chokepointId = 'hormuz';
+    const chokepointId = 'hormuz_strait';
     const degraded = true;
     const liveFlowRatio = null;
 
-    const exposureMult = liveFlowRatio !== null ? liveFlowRatio : (CHOKEPOINT_EXPOSURE[chokepointId] ?? 1.0);
+    const baseExposure = CHOKEPOINT_EXPOSURE[chokepointId] ?? 1.0;
+    const exposureMult = liveFlowRatio !== null ? baseExposure * liveFlowRatio : baseExposure;
     assert.equal(exposureMult, 1.0);
 
     const confidence = deriveChokepointConfidence(liveFlowRatio, degraded);
@@ -152,8 +162,8 @@ describe('mock: degraded mode falls back to CHOKEPOINT_EXPOSURE', () => {
     assert.equal(exposureMult, 0.6);
   });
 
-  it('malacca uses CHOKEPOINT_EXPOSURE[malacca]=0.7 when portwatch absent', () => {
-    const exposureMult = CHOKEPOINT_EXPOSURE['malacca'] ?? 1.0;
+  it('malacca uses CHOKEPOINT_EXPOSURE[malacca_strait]=0.7 when portwatch absent', () => {
+    const exposureMult = CHOKEPOINT_EXPOSURE['malacca_strait'] ?? 1.0;
     assert.equal(exposureMult, 0.7);
   });
 });
@@ -173,7 +183,7 @@ describe('mock: partial coverage limitations', () => {
     if (coverageLevel === 'partial') {
       limitations.push('Gulf crude share proxied at 40% (no Comtrade data)');
     }
-    limitations.push('refinery yield: 80% crude-to-product heuristic');
+    limitations.push(REFINERY_YIELD_BASIS);
 
     assert.ok(limitations.some((l) => l.includes('proxied at 40%')));
     assert.ok(limitations.some((l) => l.includes('refinery yield')));
@@ -185,7 +195,7 @@ describe('mock: partial coverage limitations', () => {
     if (coverageLevel === 'partial') {
       limitations.push('Gulf crude share proxied at 40% (no Comtrade data)');
     }
-    limitations.push('refinery yield: 80% crude-to-product heuristic');
+    limitations.push(REFINERY_YIELD_BASIS);
     assert.ok(!limitations.some((l) => l.includes('proxied at 40%')));
   });
 });
@@ -202,12 +212,12 @@ describe('mock: full coverage with live PortWatch data', () => {
     assert.equal(confidence, 'high');
   });
 
-  it('live flow ratio replaces CHOKEPOINT_EXPOSURE multiplier', () => {
+  it('live flow ratio composes with CHOKEPOINT_EXPOSURE multiplier', () => {
     const chokepointId = 'suez';
     const liveFlowRatio = 0.85;
-    const exposureMult = liveFlowRatio !== null ? liveFlowRatio : (CHOKEPOINT_EXPOSURE[chokepointId] ?? 1.0);
-    assert.equal(exposureMult, 0.85);
-    assert.notEqual(exposureMult, CHOKEPOINT_EXPOSURE[chokepointId]);
+    const baseExposure = CHOKEPOINT_EXPOSURE[chokepointId]; // 0.6
+    const exposureMult = liveFlowRatio !== null ? baseExposure * liveFlowRatio : baseExposure;
+    assert.equal(Math.round(exposureMult * 1000) / 1000, 0.51);
   });
 
   it('full coverage returns "full" level with both jodiOil and comtrade true', () => {
@@ -528,17 +538,482 @@ describe('liveFlowRatio clamped to 0..1.5', () => {
 // cache key includes degraded state
 // ---------------------------------------------------------------------------
 
-describe('cache key includes degraded state', () => {
+describe('cache key includes degraded state and fuelMode', () => {
   it('degraded and non-degraded produce different cache keys', () => {
     const code = 'US';
     const chokepointId = 'hormuz';
     const disruptionPct = 50;
+    const fuelMode = 'oil';
 
-    const keyDegraded = `energy:shock:v2:${code}:${chokepointId}:${disruptionPct}:d`;
-    const keyLive = `energy:shock:v2:${code}:${chokepointId}:${disruptionPct}:l`;
+    const keyDegraded = `energy:shock:v2:${code}:${chokepointId}:${disruptionPct}:d:${fuelMode}`;
+    const keyLive = `energy:shock:v2:${code}:${chokepointId}:${disruptionPct}:l:${fuelMode}`;
 
     assert.notEqual(keyDegraded, keyLive, 'cache keys must differ by degraded state');
-    assert.ok(keyDegraded.endsWith(':d'));
-    assert.ok(keyLive.endsWith(':l'));
+    assert.ok(keyDegraded.endsWith(':d:oil'));
+    assert.ok(keyLive.endsWith(':l:oil'));
+  });
+
+  it('different fuelMode values produce different cache keys', () => {
+    const base = 'energy:shock:v2:US:hormuz:50:l';
+    const keyOil = `${base}:oil`;
+    const keyGas = `${base}:gas`;
+    const keyBoth = `${base}:both`;
+
+    assert.notEqual(keyOil, keyGas);
+    assert.notEqual(keyOil, keyBoth);
+    assert.notEqual(keyGas, keyBoth);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseFuelMode
+// ---------------------------------------------------------------------------
+
+describe('parseFuelMode', () => {
+  it('defaults to "oil" for empty string', () => assert.equal(parseFuelMode(''), 'oil'));
+  it('defaults to "oil" for null', () => assert.equal(parseFuelMode(null), 'oil'));
+  it('defaults to "oil" for undefined', () => assert.equal(parseFuelMode(undefined), 'oil'));
+  it('parses "gas"', () => assert.equal(parseFuelMode('gas'), 'gas'));
+  it('parses "both"', () => assert.equal(parseFuelMode('both'), 'both'));
+  it('parses "GAS" case-insensitive', () => assert.equal(parseFuelMode('GAS'), 'gas'));
+  it('returns "oil" for invalid value', () => assert.equal(parseFuelMode('nuclear'), 'oil'));
+});
+
+// ---------------------------------------------------------------------------
+// CHOKEPOINT_LNG_EXPOSURE
+// ---------------------------------------------------------------------------
+
+describe('CHOKEPOINT_LNG_EXPOSURE', () => {
+  it('has all 4 chokepoints', () => {
+    for (const cp of ['hormuz_strait', 'malacca_strait', 'suez', 'bab_el_mandeb']) {
+      assert.ok(cp in CHOKEPOINT_LNG_EXPOSURE, `missing ${cp}`);
+      assert.ok(CHOKEPOINT_LNG_EXPOSURE[cp] > 0 && CHOKEPOINT_LNG_EXPOSURE[cp] <= 1);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EU_GAS_STORAGE_COUNTRIES
+// ---------------------------------------------------------------------------
+
+describe('EU_GAS_STORAGE_COUNTRIES', () => {
+  it('includes DE, FR, IT', () => {
+    for (const c of ['DE', 'FR', 'IT']) assert.ok(EU_GAS_STORAGE_COUNTRIES.has(c));
+  });
+  it('excludes JP, KR, TW', () => {
+    for (const c of ['JP', 'KR', 'TW']) assert.ok(!EU_GAS_STORAGE_COUNTRIES.has(c));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeGasDisruption
+// ---------------------------------------------------------------------------
+
+describe('computeGasDisruption', () => {
+  it('computes hormuz LNG disruption correctly', () => {
+    const { lngDisruptionTj, deficitPct } = computeGasDisruption(1000, 5000, 'hormuz_strait', 100);
+    assert.equal(lngDisruptionTj, 300);
+    assert.equal(deficitPct, 6);
+  });
+
+  it('computes malacca at 50% disruption', () => {
+    const { lngDisruptionTj } = computeGasDisruption(2000, 10000, 'malacca_strait', 50);
+    assert.equal(lngDisruptionTj, 500);
+  });
+
+  it('returns zero for zero lngImportsTj', () => {
+    const { lngDisruptionTj, deficitPct } = computeGasDisruption(0, 5000, 'hormuz_strait', 100);
+    assert.equal(lngDisruptionTj, 0);
+    assert.equal(deficitPct, 0);
+  });
+
+  it('returns zero deficit for zero totalDemandTj', () => {
+    const { deficitPct } = computeGasDisruption(1000, 0, 'hormuz_strait', 100);
+    assert.equal(deficitPct, 0);
+  });
+
+  it('clamps deficit to 100%', () => {
+    const { deficitPct } = computeGasDisruption(10000, 100, 'malacca_strait', 100);
+    assert.equal(deficitPct, 100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeGasBufferDays
+// ---------------------------------------------------------------------------
+
+describe('computeGasBufferDays', () => {
+  it('computes buffer from TWh and monthly disruption', () => {
+    const days = computeGasBufferDays(10, 300);
+    assert.equal(days, 3600);
+  });
+
+  it('returns 0 for zero disruption', () => {
+    assert.equal(computeGasBufferDays(100, 0), 0);
+  });
+
+  it('returns 0 for zero storage', () => {
+    assert.equal(computeGasBufferDays(0, 300), 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildGasAssessment
+// ---------------------------------------------------------------------------
+
+describe('buildGasAssessment', () => {
+  it('returns insufficient data message when not available', () => {
+    const msg = buildGasAssessment('JP', 'hormuz', false, 0, 0, 0, 0, 50, false);
+    assert.ok(msg.includes('Insufficient gas import data'));
+  });
+
+  it('returns low dependence for lngShare < 10%', () => {
+    const msg = buildGasAssessment('US', 'hormuz', true, 100, 0.05, 1.0, 0, 50, false);
+    assert.ok(msg.includes('low LNG dependence'));
+  });
+
+  it('returns buffer message for EU with >90 days', () => {
+    const msg = buildGasAssessment('DE', 'hormuz', true, 500, 0.3, 5.0, 200, 50, true);
+    assert.ok(msg.includes('200 days of gas storage buffer'));
+  });
+
+  it('returns deficit message for high exposure', () => {
+    const msg = buildGasAssessment('JP', 'malacca', true, 1000, 0.9, 25.0, 0, 50, false);
+    assert.ok(msg.includes('25.0% gas supply deficit'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// exposureMult composes baseExposure with liveFlowRatio
+// ---------------------------------------------------------------------------
+
+describe('exposureMult composes baseExposure with liveFlowRatio', () => {
+  it('suez with flowRatio 0.85 yields 0.6 * 0.85 = 0.51', () => {
+    const baseExposure = CHOKEPOINT_EXPOSURE['suez']; // 0.6
+    const liveFlowRatio = 0.85;
+    const exposureMult = baseExposure * liveFlowRatio;
+    assert.equal(Math.round(exposureMult * 1000) / 1000, 0.51);
+  });
+
+  it('hormuz with flowRatio 1.0 yields 1.0 * 1.0 = 1.0', () => {
+    const baseExposure = CHOKEPOINT_EXPOSURE['hormuz_strait'];
+    const liveFlowRatio = 1.0;
+    assert.equal(baseExposure * liveFlowRatio, 1.0);
+  });
+
+  it('malacca degraded uses baseExposure only (0.7)', () => {
+    const baseExposure = CHOKEPOINT_EXPOSURE['malacca_strait'];
+    const liveFlowRatio = null;
+    const exposureMult = liveFlowRatio !== null ? baseExposure * liveFlowRatio : baseExposure;
+    assert.equal(exposureMult, 0.7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gasDataAvailable distinguishes zero-LNG from missing data
+// ---------------------------------------------------------------------------
+
+describe('gasDataAvailable distinguishes zero-LNG from missing data', () => {
+  it('pipeline-only country (lngImportsTj=0) has dataAvailable=true', () => {
+    const jodiGas = { lngImportsTj: 0, totalDemandTj: 5000, lngShareOfImports: 0 };
+    const gasDataAvailable = jodiGas != null;
+    assert.equal(gasDataAvailable, true, 'JODI gas exists, so data is available');
+  });
+
+  it('missing JODI gas (null) has dataAvailable=false', () => {
+    const jodiGas = null;
+    const gasDataAvailable = jodiGas != null;
+    assert.equal(gasDataAvailable, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildAssessment skips low-dependence dismissal when proxied
+// ---------------------------------------------------------------------------
+
+describe('buildAssessment skips low-dependence dismissal when proxied', () => {
+  it('does NOT dismiss low gulfCrudeShare when comtradeCoverage is false (proxied)', () => {
+    const products = [{ product: 'Diesel', deficitPct: 5.0 }];
+    const msg = buildAssessment('XX', 'suez', true, 0.06, 60, 30, 50, products, 'partial', false, true, false);
+    assert.ok(!msg.includes('low Gulf crude dependence'), 'should not dismiss when proxied');
+    assert.ok(msg.includes('deficit') || msg.includes('disruption'), 'should show deficit info instead');
+  });
+
+  it('DOES dismiss low gulfCrudeShare when comtradeCoverage is true (measured)', () => {
+    const products = [{ product: 'Diesel', deficitPct: 5.0 }];
+    const msg = buildAssessment('XX', 'suez', true, 0.06, 60, 30, 50, products, 'full', false, true, true);
+    assert.ok(msg.includes('low Gulf crude dependence'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildGasAssessment pipeline-only branch
+// ---------------------------------------------------------------------------
+
+describe('buildGasAssessment pipeline-only branch', () => {
+  it('returns pipeline-only message for zero lngImportsTj', () => {
+    const msg = buildGasAssessment('DE', 'hormuz', true, 0, 0, 0, 0, 50, false);
+    assert.ok(msg.includes('pipeline only'));
+  });
+
+  it('returns insufficient data when dataAvailable=false', () => {
+    const msg = buildGasAssessment('XX', 'hormuz', false, 0, 0, 0, 0, 50, false);
+    assert.ok(msg.includes('Insufficient'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// grid-tightness limitation from Ember fossilShare
+// ---------------------------------------------------------------------------
+
+describe('grid-tightness limitation from Ember fossilShare', () => {
+  it('appends limitation when fossilShare > 70', () => {
+    const limitations = [];
+    const fossilShare = 75.3;
+    if (fossilShare !== null && fossilShare > 70) {
+      limitations.push('high fossil grid dependency: limited electricity substitution capacity');
+    }
+    assert.equal(limitations.length, 1);
+    assert.ok(limitations[0].includes('fossil grid dependency'));
+  });
+
+  it('does not append when fossilShare <= 70', () => {
+    const limitations = [];
+    const fossilShare = 55.0;
+    if (fossilShare !== null && fossilShare > 70) {
+      limitations.push('high fossil grid dependency: limited electricity substitution capacity');
+    }
+    assert.equal(limitations.length, 0);
+  });
+
+  it('does not append when fossilShare is null (no Ember data)', () => {
+    const limitations = [];
+    const fossilShare = null;
+    if (fossilShare !== null && fossilShare > 70) {
+      limitations.push('high fossil grid dependency: limited electricity substitution capacity');
+    }
+    assert.equal(limitations.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeGasDisruption uses liveFlowRatio when available
+// ---------------------------------------------------------------------------
+
+describe('computeGasDisruption uses liveFlowRatio when available', () => {
+  it('scales static exposure by liveFlowRatio', () => {
+    const { lngDisruptionTj } = computeGasDisruption(1000, 5000, 'hormuz_strait', 100, 0.5);
+    assert.equal(lngDisruptionTj, 150);
+  });
+
+  it('uses static exposure when liveFlowRatio is null (degraded)', () => {
+    const { lngDisruptionTj } = computeGasDisruption(1000, 5000, 'hormuz_strait', 100, null);
+    assert.equal(lngDisruptionTj, 300);
+  });
+
+  it('uses static exposure when liveFlowRatio is undefined', () => {
+    const { lngDisruptionTj } = computeGasDisruption(1000, 5000, 'hormuz_strait', 100);
+    assert.equal(lngDisruptionTj, 300);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gas-only mode coverage override
+// ---------------------------------------------------------------------------
+
+describe('gas-only mode coverage override', () => {
+  it('gas-only with valid gas data (not degraded) should be full', () => {
+    const needsOil = false;
+    const gasImpact = { dataAvailable: true };
+    const degraded = false;
+    let coverageLevel = 'unsupported';
+    if (!needsOil && gasImpact?.dataAvailable) {
+      coverageLevel = degraded ? 'partial' : 'full';
+    }
+    assert.equal(coverageLevel, 'full');
+  });
+
+  it('gas-only with valid gas data (degraded) should be partial', () => {
+    const needsOil = false;
+    const gasImpact = { dataAvailable: true };
+    const degraded = true;
+    let coverageLevel = 'unsupported';
+    if (!needsOil && gasImpact?.dataAvailable) {
+      coverageLevel = degraded ? 'partial' : 'full';
+    }
+    assert.equal(coverageLevel, 'partial');
+  });
+
+  it('gas-only limitations exclude oil-specific strings', () => {
+    const limitations = [
+      REFINERY_YIELD_BASIS,
+      'Gulf crude share proxied at 40% (no Comtrade data)',
+      'IEA strategic stock data unavailable',
+      'LNG chokepoint exposure estimates based on global trade route shares',
+    ];
+    const filtered = limitations.filter(l =>
+      !l.includes('refinery yield') &&
+      !l.includes('Gulf crude share') &&
+      !l.includes('IEA strategic stock')
+    );
+    assert.equal(filtered.length, 1);
+    assert.ok(filtered[0].includes('LNG'));
+  });
+});
+
+describe('gas-only coverageLevel respects degraded state', () => {
+  it('gas-only with degraded=true should be partial, not full', () => {
+    const gasImpact = { dataAvailable: true };
+    const degraded = true;
+    const needsOil = false;
+    let coverageLevel = 'unsupported';
+    if (!needsOil && gasImpact?.dataAvailable) {
+      coverageLevel = degraded ? 'partial' : 'full';
+    }
+    assert.equal(coverageLevel, 'partial');
+  });
+
+  it('gas-only with degraded=false should be full', () => {
+    const gasImpact = { dataAvailable: true };
+    const degraded = false;
+    const needsOil = false;
+    let coverageLevel = 'unsupported';
+    if (!needsOil && gasImpact?.dataAvailable) {
+      coverageLevel = degraded ? 'partial' : 'full';
+    }
+    assert.equal(coverageLevel, 'full');
+  });
+
+  it('gas-only with no gas data should be unsupported', () => {
+    const gasImpact = { dataAvailable: false };
+    const degraded = false;
+    const needsOil = false;
+    let coverageLevel = 'unsupported';
+    if (!needsOil && gasImpact?.dataAvailable) {
+      coverageLevel = degraded ? 'partial' : 'full';
+    }
+    assert.equal(coverageLevel, 'unsupported');
+  });
+});
+
+describe('gas-only mode zeros oil fields', () => {
+  it('products should be empty array in gas-only mode', () => {
+    const needsOil = false;
+    const gasImpact = { dataAvailable: true };
+    const response = {
+      products: [{ product: 'Diesel', outputLossKbd: 5, demandKbd: 100, deficitPct: 4 }],
+      gulfCrudeShare: 0.35,
+      crudeLossKbd: 50,
+      effectiveCoverDays: 90,
+      jodiOilCoverage: true,
+      comtradeCoverage: true,
+      ieaStocksCoverage: true,
+    };
+    if (!needsOil && gasImpact) {
+      response.products = [];
+      response.gulfCrudeShare = 0;
+      response.crudeLossKbd = 0;
+      response.effectiveCoverDays = 0;
+      response.jodiOilCoverage = false;
+      response.comtradeCoverage = false;
+      response.ieaStocksCoverage = false;
+    }
+    assert.equal(response.products.length, 0);
+    assert.equal(response.gulfCrudeShare, 0);
+    assert.equal(response.crudeLossKbd, 0);
+    assert.equal(response.effectiveCoverDays, 0);
+    assert.equal(response.jodiOilCoverage, false);
+    assert.equal(response.comtradeCoverage, false);
+    assert.equal(response.ieaStocksCoverage, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REFINERY_YIELD coefficients
+// ---------------------------------------------------------------------------
+
+describe('REFINERY_YIELD coefficients', () => {
+  it('has entries for all four products', () => {
+    for (const p of ['Gasoline', 'Diesel', 'Jet fuel', 'LPG']) {
+      assert.ok(p in REFINERY_YIELD, `missing ${p}`);
+      assert.ok(REFINERY_YIELD[p] > 0 && REFINERY_YIELD[p] < 1, `${p} yield out of range`);
+    }
+  });
+
+  it('yields sum to < 1.0 (crude has residuals)', () => {
+    const total = Object.values(REFINERY_YIELD).reduce((s, v) => s + v, 0);
+    assert.ok(total < 1.0, `total yield ${total} should be < 1.0`);
+    assert.ok(total > 0.8, `total yield ${total} should be > 0.8 (sanity check)`);
+  });
+
+  it('gasoline has highest yield', () => {
+    assert.ok(REFINERY_YIELD['Gasoline'] > REFINERY_YIELD['Diesel']);
+    assert.ok(REFINERY_YIELD['Gasoline'] > REFINERY_YIELD['Jet fuel']);
+    assert.ok(REFINERY_YIELD['Gasoline'] > REFINERY_YIELD['LPG']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// per-product deficit divergence with named yields
+// ---------------------------------------------------------------------------
+
+describe('per-product deficit with correct yield formula', () => {
+  it('outputLossKbd = crudeLossKbd * yieldFactor (not demand * ratio * yield)', () => {
+    const crudeLossKbd = 100;
+    const gasolineLoss = crudeLossKbd * REFINERY_YIELD['Gasoline']; // 100 * 0.44 = 44
+    const dieselLoss = crudeLossKbd * REFINERY_YIELD['Diesel'];     // 100 * 0.30 = 30
+    assert.equal(gasolineLoss, 44);
+    assert.equal(dieselLoss, 30);
+  });
+
+  it('deficit depends on demand, not on yield alone', () => {
+    const crudeLossKbd = 100;
+    const gasolineDemand = 500;
+    const jetDemand = 20;
+    const gasolineLoss = crudeLossKbd * REFINERY_YIELD['Gasoline']; // 44
+    const jetLoss = crudeLossKbd * REFINERY_YIELD['Jet fuel'];       // 10
+    const gasolineDeficit = (gasolineLoss / gasolineDemand) * 100;   // 8.8%
+    const jetDeficit = (jetLoss / jetDemand) * 100;                  // 50%
+    assert.ok(jetDeficit > gasolineDeficit, 'low-demand product has higher deficit even with lower yield');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REFINERY_YIELD_BASIS string
+// ---------------------------------------------------------------------------
+
+describe('REFINERY_YIELD_BASIS string', () => {
+  it('mentions all four products with percentages', () => {
+    assert.ok(REFINERY_YIELD_BASIS.includes('gasoline 44%'));
+    assert.ok(REFINERY_YIELD_BASIS.includes('diesel 30%'));
+    assert.ok(REFINERY_YIELD_BASIS.includes('jet 10%'));
+    assert.ok(REFINERY_YIELD_BASIS.includes('LPG 5%'));
+    assert.ok(REFINERY_YIELD_BASIS.includes('EIA'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildAssessment picks actual worst product
+// ---------------------------------------------------------------------------
+
+describe('buildAssessment picks actual worst product', () => {
+  it('names gasoline when it has highest deficit', () => {
+    const products = [
+      { product: 'Gasoline', deficitPct: 25.0 },
+      { product: 'Diesel', deficitPct: 15.0 },
+      { product: 'Jet fuel', deficitPct: 10.0 },
+    ];
+    const msg = buildAssessment('US', 'hormuz', true, 0.4, 60, 30, 50, products, 'full', false, true, true);
+    assert.ok(msg.includes('25.0% gasoline deficit'), `expected gasoline deficit in: ${msg}`);
+  });
+
+  it('names jet fuel when it has highest deficit', () => {
+    const products = [
+      { product: 'Gasoline', deficitPct: 5.0 },
+      { product: 'Diesel', deficitPct: 8.0 },
+      { product: 'Jet fuel', deficitPct: 40.0 },
+    ];
+    const msg = buildAssessment('JP', 'malacca', true, 0.5, 60, 30, 50, products, 'full', false, true, true);
+    assert.ok(msg.includes('40.0% jet fuel deficit'), `expected jet fuel deficit in: ${msg}`);
   });
 });

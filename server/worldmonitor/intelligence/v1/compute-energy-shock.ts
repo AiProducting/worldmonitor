@@ -3,9 +3,12 @@ import type {
   ComputeEnergyShockScenarioRequest,
   ComputeEnergyShockScenarioResponse,
   ProductImpact,
+  GasImpact,
+  GasStorageBuffer,
 } from '../../../../src/generated/server/worldmonitor/intelligence/v1/service_server';
 
 import { getCachedJson, setCachedJson } from '../../../_shared/redis';
+import { SPR_POLICIES_KEY } from '../../../_shared/cache-keys';
 import {
   clamp,
   CHOKEPOINT_EXPOSURE,
@@ -15,16 +18,23 @@ import {
   buildAssessment,
   deriveCoverageLevel,
   deriveChokepointConfidence,
+  parseFuelMode,
+  EU_GAS_STORAGE_COUNTRIES,
+  computeGasDisruption,
+  computeGasBufferDays,
+  buildGasAssessment,
+  REFINERY_YIELD,
+  REFINERY_YIELD_BASIS,
 } from './_shock-compute';
 import { ISO2_TO_COMTRADE } from './_comtrade-reporters';
 
 const SHOCK_CACHE_TTL = 300;
 
 const CP_TO_PORTWATCH: Record<string, string> = {
-  hormuz: 'hormuz_strait',
-  babelm: 'bab_el_mandeb',
+  hormuz_strait: 'hormuz_strait',
+  bab_el_mandeb: 'bab_el_mandeb',
   suez: 'suez',
-  malacca: 'malacca_strait',
+  malacca_strait: 'malacca_strait',
 };
 
 const PROXIED_GULF_SHARE = 0.40;
@@ -49,6 +59,22 @@ interface IeaStocks {
   netExporter?: boolean | null;
   belowObligation?: boolean | null;
   anomaly?: boolean | null;
+}
+
+interface JodiGas {
+  dataMonth?: string | null;
+  lngImportsTj?: number | null;
+  pipeImportsTj?: number | null;
+  totalDemandTj?: number | null;
+  lngShareOfImports?: number | null;
+  closingStockTj?: number | null;
+}
+
+interface GasStorageData {
+  fillPct?: number | null;
+  gasTwh?: number | null;
+  trend?: string | null;
+  date?: string | null;
 }
 
 interface ComtradeFlowRecord {
@@ -103,6 +129,9 @@ export async function computeEnergyShockScenario(
   const code = req.countryCode?.trim().toUpperCase() ?? '';
   const chokepointId = req.chokepointId?.trim().toLowerCase() ?? '';
   const disruptionPct = clamp(Math.round(req.disruptionPct ?? 0), 10, 100);
+  const fuelMode = parseFuelMode(req.fuelMode);
+  const needsOil = fuelMode === 'oil' || fuelMode === 'both';
+  const needsGas = fuelMode === 'gas' || fuelMode === 'both';
 
   const EMPTY: ComputeEnergyShockScenarioResponse = {
     countryCode: code,
@@ -123,13 +152,14 @@ export async function computeEnergyShockScenario(
     degraded: false,
     chokepointConfidence: 'none',
     liveFlowRatio: undefined,
+    gasImpact: undefined,
   };
 
   if (!code || code.length !== 2) return EMPTY;
   if (!VALID_CHOKEPOINTS.has(chokepointId)) {
     return {
       ...EMPTY,
-      assessment: `Unknown chokepoint: ${chokepointId}. Valid chokepoints: hormuz, malacca, suez, babelm.`,
+      assessment: `Unknown chokepoint: ${chokepointId}. Valid chokepoints: hormuz_strait, malacca_strait, suez, bab_el_mandeb.`,
     };
   }
 
@@ -147,14 +177,19 @@ export async function computeEnergyShockScenario(
     : null;
   const liveFlowRatio: number | null = rawFlowRatio !== null ? clamp(rawFlowRatio, 0, 1.5) : null;
 
-  const cacheKey = `energy:shock:v2:${code}:${chokepointId}:${disruptionPct}:${degraded ? 'd' : 'l'}`;
+  const cacheKey = `energy:shock:v2:${code}:${chokepointId}:${disruptionPct}:${degraded ? 'd' : 'l'}:${fuelMode}`;
   const cached = await getCachedJson(cacheKey);
   if (cached) return cached as ComputeEnergyShockScenarioResponse;
 
-  const [jodiOilResult, ieaStocksResult, gulfShareResult] = await Promise.allSettled([
+  const [jodiOilResult, ieaStocksResult, gulfShareResult, emberResult, jodiGasResult, gasStorageResult] = await Promise.allSettled([
     getCachedJson(`energy:jodi-oil:v1:${code}`, true),
     getCachedJson(`energy:iea-oil-stocks:v1:${code}`, true),
     getGulfCrudeShare(code),
+    getCachedJson(`energy:ember:v1:${code}`, true),
+    needsGas ? getCachedJson(`energy:jodi-gas:v1:${code}`, true) : Promise.resolve(null),
+    needsGas && EU_GAS_STORAGE_COUNTRIES.has(code)
+      ? getCachedJson(`energy:gas-storage:v1:${code}`, true)
+      : Promise.resolve(null),
   ]);
 
   const jodiOil = jodiOilResult.status === 'fulfilled' ? (jodiOilResult.value as JodiOil | null) : null;
@@ -163,7 +198,12 @@ export async function computeEnergyShockScenario(
     ? gulfShareResult.value
     : { share: 0, hasData: false };
 
-  const exposureMult = liveFlowRatio !== null ? liveFlowRatio : (CHOKEPOINT_EXPOSURE[chokepointId] ?? 1.0);
+  const emberData = emberResult.status === 'fulfilled' ? (emberResult.value as { fossilShare?: number } | null) : null;
+  const jodiGas = jodiGasResult.status === 'fulfilled' ? (jodiGasResult.value as JodiGas | null) : null;
+  const gasStorageData = gasStorageResult.status === 'fulfilled' ? (gasStorageResult.value as GasStorageData | null) : null;
+
+  const baseExposure = CHOKEPOINT_EXPOSURE[chokepointId] ?? 1.0;
+  const exposureMult = liveFlowRatio !== null ? baseExposure * liveFlowRatio : baseExposure;
 
   const jodiOilCoverage = jodiOil != null;
   const comtradeCoverage = comtradeHasData;
@@ -180,9 +220,27 @@ export async function computeEnergyShockScenario(
   if (!ieaStocksCoverage) {
     limitations.push('IEA strategic stock data unavailable');
   }
-  limitations.push('refinery yield: 80% crude-to-product heuristic');
+  limitations.push(REFINERY_YIELD_BASIS);
   if (degraded) {
     limitations.push('PortWatch flow data unavailable, using historical baseline multipliers');
+  }
+
+  const fossilShare = typeof emberData?.fossilShare === 'number' ? emberData.fossilShare : null;
+  if (fossilShare !== null && fossilShare > 70) {
+    limitations.push('high fossil grid dependency: limited electricity substitution capacity');
+  }
+
+  if (needsOil) {
+    const sprRegistryRaw = await getCachedJson(SPR_POLICIES_KEY, true).catch(() => null) as Record<string, unknown> | null;
+    const sprPolicies = (sprRegistryRaw as { policies?: Record<string, { regime?: string; ieaMember?: boolean; operator?: string; capacityMb?: number }> } | null)?.policies;
+    const sprPolicy = sprPolicies?.[code];
+    if (sprPolicy) {
+      if (sprPolicy.regime === 'government_spr' && !sprPolicy.ieaMember) {
+        limitations.push(`strategic reserves: ${sprPolicy.regime} (${sprPolicy.operator ?? 'state-run'}, ${sprPolicy.capacityMb ?? '?'}Mb capacity)`);
+      }
+    } else {
+      limitations.push('strategic reserve policy: not classified for this country');
+    }
   }
 
   const effectiveGulfShare = !comtradeCoverage ? PROXIED_GULF_SHARE : rawGulfShare;
@@ -190,8 +248,6 @@ export async function computeEnergyShockScenario(
 
   const crudeImportsKbd = n(jodiOil?.crude?.importsKbd);
   const crudeLossKbd = crudeImportsKbd * gulfCrudeShare * (disruptionPct / 100);
-
-  const ratio = crudeImportsKbd > 0 ? crudeLossKbd / crudeImportsKbd : 0;
 
   const productDefs: Array<{ name: string; demand: number }> = [
     { name: 'Gasoline', demand: n(jodiOil?.gasoline?.demandKbd) },
@@ -203,12 +259,15 @@ export async function computeEnergyShockScenario(
   const products: ProductImpact[] = productDefs
     .filter((p) => p.demand > 0)
     .map((p) => {
-      const outputLossKbd = p.demand * ratio * 0.8;
+      const yieldFactor = REFINERY_YIELD[p.name] ?? 0.20;
+      const outputLossKbd = crudeLossKbd * yieldFactor;
       const deficitPct = clamp((outputLossKbd / p.demand) * 100, 0, 100);
       return {
         product: p.name,
         outputLossKbd: Math.round(outputLossKbd * 10) / 10,
-        demandKbd: p.demand,
+        // Round to 1 decimal to match outputLossKbd precision; raw JODI values like
+        // 136.5629 kbd wasted display space with fake precision (see #2971).
+        demandKbd: Math.round(p.demand * 10) / 10,
         deficitPct: Math.round(deficitPct * 10) / 10,
       };
     });
@@ -237,6 +296,56 @@ export async function computeEnergyShockScenario(
     comtradeCoverage,
   );
 
+  let gasImpact: GasImpact | undefined;
+
+  if (needsGas && jodiGas) {
+    const lngImportsTj = n(jodiGas.lngImportsTj);
+    const lngShareOfImports = n(jodiGas.lngShareOfImports);
+    const totalDemandTj = n(jodiGas.totalDemandTj);
+
+    const { lngDisruptionTj, deficitPct: gasDeficitPct } = computeGasDisruption(
+      lngImportsTj, totalDemandTj, chokepointId, disruptionPct, liveFlowRatio,
+    );
+
+    let storage: GasStorageBuffer | undefined;
+    let bufferDays = 0;
+    const isEu = EU_GAS_STORAGE_COUNTRIES.has(code);
+
+    if (isEu && gasStorageData) {
+      const gasTwh = n(gasStorageData.gasTwh);
+      bufferDays = computeGasBufferDays(gasTwh, lngDisruptionTj);
+      storage = {
+        fillPct: n(gasStorageData.fillPct),
+        gasTwh,
+        bufferDays,
+        trend: gasStorageData.trend ?? '',
+        date: gasStorageData.date ?? '',
+        scope: 'europe',
+      };
+    }
+
+    const gasDataAvailable = jodiGas != null;
+
+    gasImpact = {
+      lngShareOfImports: Math.round(lngShareOfImports * 1000) / 1000,
+      lngImportsTj,
+      lngDisruptionTj,
+      totalDemandTj,
+      deficitPct: gasDeficitPct,
+      dataAvailable: gasDataAvailable,
+      assessment: buildGasAssessment(
+        code, chokepointId, gasDataAvailable, lngImportsTj, lngShareOfImports,
+        gasDeficitPct, bufferDays, disruptionPct, storage != null,
+      ),
+      storage,
+      dataSource: isEu && gasStorageData ? 'gie_daily' : 'jodi_monthly',
+    };
+
+    if (gasDataAvailable) {
+      limitations.push('LNG chokepoint exposure estimates based on global trade route shares');
+    }
+  }
+
   const response: ComputeEnergyShockScenarioResponse = {
     countryCode: code,
     chokepointId,
@@ -256,7 +365,34 @@ export async function computeEnergyShockScenario(
     degraded,
     chokepointConfidence,
     liveFlowRatio: liveFlowRatio !== null ? Math.round(liveFlowRatio * 1000) / 1000 : undefined,
+    gasImpact,
   };
+
+  if (!needsOil && gasImpact) {
+    response.assessment = gasImpact.assessment;
+    response.dataAvailable = gasImpact.dataAvailable;
+    response.coverageLevel = gasImpact.dataAvailable
+      ? (degraded ? 'partial' : 'full')
+      : 'unsupported';
+    response.limitations = response.limitations.filter(l =>
+      !l.includes('refinery yield') &&
+      !l.includes('Gulf crude share') &&
+      !l.includes('IEA strategic stock')
+    );
+    // Zero out oil-specific fields for gas-only mode
+    response.gulfCrudeShare = 0;
+    response.crudeLossKbd = 0;
+    response.products = [];
+    response.effectiveCoverDays = 0;
+    response.jodiOilCoverage = false;
+    response.comtradeCoverage = false;
+    response.ieaStocksCoverage = false;
+  }
+
+  if (needsOil && needsGas && gasImpact?.dataAvailable && !jodiOilCoverage) {
+    response.coverageLevel = 'partial';
+    response.dataAvailable = true;
+  }
 
   const cacheTtl = degraded ? 300 : SHOCK_CACHE_TTL;
   await setCachedJson(cacheKey, response, cacheTtl);

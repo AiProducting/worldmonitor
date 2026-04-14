@@ -99,6 +99,7 @@ interface ParsedItem {
   importanceScore: number;
   corroborationCount: number;
   titleHash?: string;
+  lang: string;
 }
 
 function computeImportanceScore(
@@ -247,6 +248,7 @@ function parseRssXml(xml: string, feed: ServerFeed, variant: string): ParsedItem
       classSource: 'keyword',
       importanceScore: 0,
       corroborationCount: 1,
+      lang: feed.lang ?? 'en',
     });
   }
 
@@ -473,6 +475,54 @@ async function writeStoryTracking(items: ParsedItem[], variant: string, hashes: 
   await runRedisPipeline([['EXPIRE', accKey, DIGEST_ACCUMULATOR_TTL]]);
 }
 
+const STORY_BATCH_SIZE = 80; // keeps each pipeline call well under Upstash's 1000-command cap
+
+async function writeStoryTracking(items: ParsedItem[], variant: string, lang: string, hashes: string[]): Promise<void> {
+  if (items.length === 0) return;
+  const now = Date.now();
+  const accKey = DIGEST_ACCUMULATOR_KEY(variant, lang);
+
+  for (let batchStart = 0; batchStart < items.length; batchStart += STORY_BATCH_SIZE) {
+    const batch = items.slice(batchStart, batchStart + STORY_BATCH_SIZE);
+    const commands: Array<Array<string | number>> = [];
+
+    for (let i = 0; i < batch.length; i++) {
+      const item = batch[i]!;
+      const hash = hashes[batchStart + i]!;
+      const trackKey = STORY_TRACK_KEY(hash);
+      const sourcesKey = STORY_SOURCES_KEY(hash);
+      const peakKey = STORY_PEAK_KEY(hash);
+      const score = item.importanceScore;
+      const nowStr = String(now);
+      const ttl = STORY_TTL;
+
+      commands.push(
+        ['HINCRBY', trackKey, 'mentionCount', '1'],
+        ['HSET', trackKey,
+          'lastSeen', nowStr,
+          'currentScore', score,
+          'title', item.title,
+          'link', item.link,
+          'severity', item.level,
+          'lang', item.lang,
+        ],
+        ['HSETNX', trackKey, 'firstSeen', nowStr],
+        ['ZADD', peakKey, 'GT', score, 'peak'],
+        ['SADD', sourcesKey, item.source],
+        ['EXPIRE', trackKey, ttl],
+        ['EXPIRE', sourcesKey, ttl],
+        ['EXPIRE', peakKey, ttl],
+        ['ZADD', accKey, nowStr, hash],
+      );
+    }
+
+    await runRedisPipeline(commands);
+  }
+
+  // Refresh accumulator TTL once per build — 48h, shorter than STORY_TTL since digest cron only needs ~24h lookback.
+  await runRedisPipeline([['EXPIRE', accKey, DIGEST_ACCUMULATOR_TTL]]);
+}
+
 async function buildDigest(variant: string, lang: string): Promise<ListFeedDigestResponse> {
   const feedsByCategory = VARIANT_FEEDS[variant] ?? {};
   const feedStatuses: Record<string, string> = {};
@@ -580,7 +630,7 @@ async function buildDigest(variant: string, lang: string): Promise<ListFeedDiges
     const storyTracks = await readStoryTracks(uniqueHashes).catch(() => new Map<string, StoryTrack>());
 
     // Write story tracking. Errors never fail the digest build.
-    await writeStoryTracking(allSliced, variant, titleHashes).catch((err: unknown) =>
+    await writeStoryTracking(allSliced, variant, lang, titleHashes).catch((err: unknown) =>
       console.warn('[digest] story tracking write failed:', err),
     );
 

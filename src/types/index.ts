@@ -27,6 +27,15 @@ export interface StoryMeta {
   phase: StoryPhase;
 }
 
+export type StoryPhase = 'breaking' | 'developing' | 'sustained' | 'fading';
+
+export interface StoryMeta {
+  firstSeen: number;        // epoch ms
+  mentionCount: number;
+  sourceCount: number;
+  phase: StoryPhase;
+}
+
 
 export interface NewsItem {
   source: string;
@@ -179,6 +188,8 @@ export interface Hotspot {
 
 export interface StrategicWaterway {
   id: string;
+  /** Canonical chokepoint ID from chokepoint-registry.ts — same as id. */
+  chokepointId: string;
   name: string;
   lat: number;
   lon: number;
@@ -1379,6 +1390,8 @@ export interface CountryBriefSignals {
   protests: number;
   militaryFlights: number;
   militaryVessels: number;
+  militaryFlightsInCountry: number;
+  militaryVesselsInCountry: number;
   outages: number;
   aisDisruptions: number;
   satelliteFires: number;

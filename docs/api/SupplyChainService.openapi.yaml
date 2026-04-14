@@ -104,6 +104,266 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+    /api/supply-chain/v1/get-country-chokepoint-index:
+        get:
+            tags:
+                - SupplyChainService
+            summary: GetCountryChokepointIndex
+            description: GetCountryChokepointIndex returns per-chokepoint exposure scores for a country. PRO-gated.
+            operationId: GetCountryChokepointIndex
+            parameters:
+                - name: iso2
+                  in: query
+                  description: ISO 3166-1 alpha-2 country code (uppercase).
+                  required: false
+                  schema:
+                    type: string
+                - name: hs2
+                  in: query
+                  description: HS2 chapter (2-digit string). Defaults to "27" (energy/mineral fuels) when absent.
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetCountryChokepointIndexResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/supply-chain/v1/get-bypass-options:
+        get:
+            tags:
+                - SupplyChainService
+            summary: GetBypassOptions
+            description: GetBypassOptions returns ranked bypass corridors for a chokepoint. PRO-gated.
+            operationId: GetBypassOptions
+            parameters:
+                - name: chokepointId
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: cargoType
+                  in: query
+                  description: 'container | tanker | bulk | roro  (default: "container")'
+                  required: false
+                  schema:
+                    type: string
+                - name: closurePct
+                  in: query
+                  description: '0-100, percent of capacity blocked (default: 100)'
+                  required: false
+                  schema:
+                    type: integer
+                    format: int32
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetBypassOptionsResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/supply-chain/v1/get-country-cost-shock:
+        get:
+            tags:
+                - SupplyChainService
+            summary: GetCountryCostShock
+            description: GetCountryCostShock returns cost shock and war risk data for a country+chokepoint. PRO-gated.
+            operationId: GetCountryCostShock
+            parameters:
+                - name: iso2
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: chokepointId
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: hs2
+                  in: query
+                  description: 'HS2 chapter (default: "27")'
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetCountryCostShockResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/supply-chain/v1/get-sector-dependency:
+        get:
+            tags:
+                - SupplyChainService
+            summary: GetSectorDependency
+            description: GetSectorDependency returns dependency flags and risk profile for a country+HS2 sector. PRO-gated.
+            operationId: GetSectorDependency
+            parameters:
+                - name: iso2
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: hs2
+                  in: query
+                  description: HS2 chapter code, e.g. "27" (mineral fuels), "85" (electronics)
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetSectorDependencyResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/supply-chain/v1/get-route-explorer-lane:
+        get:
+            tags:
+                - SupplyChainService
+            summary: GetRouteExplorerLane
+            description: |-
+                GetRouteExplorerLane returns the primary maritime route, chokepoint exposures,
+                 bypass options with geometry, war risk, and static transit/freight estimates for
+                 a country pair + HS2 + cargo type. PRO-gated. Wraps the route-intelligence vendor
+                 endpoint's compute with browser-callable auth and adds fields needed by the
+                 Route Explorer UI.
+            operationId: GetRouteExplorerLane
+            parameters:
+                - name: fromIso2
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: toIso2
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: hs2
+                  in: query
+                  description: HS2 chapter code, e.g. "27", "85"
+                  required: false
+                  schema:
+                    type: string
+                - name: cargoType
+                  in: query
+                  description: 'One of: container, tanker, bulk, roro'
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetRouteExplorerLaneResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/supply-chain/v1/get-route-impact:
+        get:
+            tags:
+                - SupplyChainService
+            summary: GetRouteImpact
+            operationId: GetRouteImpact
+            parameters:
+                - name: fromIso2
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: toIso2
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: hs2
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetRouteImpactResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
 components:
     schemas:
         Error:
@@ -240,6 +500,21 @@ components:
                     $ref: '#/components/schemas/TransitSummary'
                 flowEstimate:
                     $ref: '#/components/schemas/FlowEstimate'
+                warRiskTier:
+                    type: string
+                    enum:
+                        - WAR_RISK_TIER_UNSPECIFIED
+                        - WAR_RISK_TIER_NORMAL
+                        - WAR_RISK_TIER_ELEVATED
+                        - WAR_RISK_TIER_HIGH
+                        - WAR_RISK_TIER_CRITICAL
+                        - WAR_RISK_TIER_WAR_ZONE
+                    description: |-
+                        *
+                         War risk tier derived from Lloyd's JWC Listed Areas + OSINT threat classification.
+                         This is a FREE field (no PRO gate) — it exposes the existing server-internal
+                         threatLevel from ChokepointConfig, making it available to clients for badges
+                         and bypass corridor scoring.
         DirectionalDwt:
             type: object
             properties:
@@ -461,3 +736,458 @@ components:
                         format: double
                         description: 30-day price sparkline.
             description: ShippingStressCarrier represents market stress data for a carrier or shipping index.
+        GetCountryChokepointIndexRequest:
+            type: object
+            properties:
+                iso2:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                    description: ISO 3166-1 alpha-2 country code (uppercase).
+                hs2:
+                    type: string
+                    description: HS2 chapter (2-digit string). Defaults to "27" (energy/mineral fuels) when absent.
+            required:
+                - iso2
+            description: GetCountryChokepointIndexRequest specifies the country and optional HS2 chapter.
+        GetCountryChokepointIndexResponse:
+            type: object
+            properties:
+                iso2:
+                    type: string
+                    description: ISO 3166-1 alpha-2 country code echoed from the request.
+                hs2:
+                    type: string
+                    description: HS2 chapter used for the computation.
+                exposures:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/ChokepointExposureEntry'
+                primaryChokepointId:
+                    type: string
+                    description: Canonical ID of the chokepoint with the highest exposure score.
+                vulnerabilityIndex:
+                    type: number
+                    format: double
+                    description: Composite vulnerability index 0–100 (weighted sum of top-3 exposures).
+                fetchedAt:
+                    type: string
+                    description: ISO timestamp of when this data was last seeded.
+            description: GetCountryChokepointIndexResponse returns exposure scores for all relevant chokepoints.
+        ChokepointExposureEntry:
+            type: object
+            properties:
+                chokepointId:
+                    type: string
+                    description: Canonical chokepoint ID from the chokepoint registry.
+                chokepointName:
+                    type: string
+                    description: Human-readable chokepoint name.
+                exposureScore:
+                    type: number
+                    format: double
+                    description: Exposure score 0–100; higher = more dependent on this chokepoint.
+                coastSide:
+                    type: string
+                    description: Which ocean/basin side the country's ports face (atlantic, pacific, indian, med, multi, landlocked).
+                shockSupported:
+                    type: boolean
+                    description: Whether the shock model is supported for this chokepoint + hs2 combination.
+            description: ChokepointExposureEntry holds per-chokepoint exposure data for a country.
+        GetBypassOptionsRequest:
+            type: object
+            properties:
+                chokepointId:
+                    type: string
+                cargoType:
+                    type: string
+                    description: 'container | tanker | bulk | roro  (default: "container")'
+                closurePct:
+                    type: integer
+                    format: int32
+                    description: '0-100, percent of capacity blocked (default: 100)'
+            required:
+                - chokepointId
+        GetBypassOptionsResponse:
+            type: object
+            properties:
+                chokepointId:
+                    type: string
+                cargoType:
+                    type: string
+                closurePct:
+                    type: integer
+                    format: int32
+                options:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/BypassOption'
+                fetchedAt:
+                    type: string
+                primaryChokepointWarRiskTier:
+                    type: string
+                    enum:
+                        - WAR_RISK_TIER_UNSPECIFIED
+                        - WAR_RISK_TIER_NORMAL
+                        - WAR_RISK_TIER_ELEVATED
+                        - WAR_RISK_TIER_HIGH
+                        - WAR_RISK_TIER_CRITICAL
+                        - WAR_RISK_TIER_WAR_ZONE
+                    description: |-
+                        *
+                         War risk tier derived from Lloyd's JWC Listed Areas + OSINT threat classification.
+                         This is a FREE field (no PRO gate) — it exposes the existing server-internal
+                         threatLevel from ChokepointConfig, making it available to clients for badges
+                         and bypass corridor scoring.
+        BypassOption:
+            type: object
+            properties:
+                id:
+                    type: string
+                name:
+                    type: string
+                type:
+                    type: string
+                addedTransitDays:
+                    type: integer
+                    format: int32
+                addedCostMultiplier:
+                    type: number
+                    format: double
+                capacityConstraintTonnage:
+                    type: string
+                    format: int64
+                suitableCargoTypes:
+                    type: array
+                    items:
+                        type: string
+                activationThreshold:
+                    type: string
+                waypointChokepointIds:
+                    type: array
+                    items:
+                        type: string
+                liveScore:
+                    type: number
+                    format: double
+                bypassWarRiskTier:
+                    type: string
+                    enum:
+                        - WAR_RISK_TIER_UNSPECIFIED
+                        - WAR_RISK_TIER_NORMAL
+                        - WAR_RISK_TIER_ELEVATED
+                        - WAR_RISK_TIER_HIGH
+                        - WAR_RISK_TIER_CRITICAL
+                        - WAR_RISK_TIER_WAR_ZONE
+                    description: |-
+                        *
+                         War risk tier derived from Lloyd's JWC Listed Areas + OSINT threat classification.
+                         This is a FREE field (no PRO gate) — it exposes the existing server-internal
+                         threatLevel from ChokepointConfig, making it available to clients for badges
+                         and bypass corridor scoring.
+                notes:
+                    type: string
+        GetCountryCostShockRequest:
+            type: object
+            properties:
+                iso2:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                chokepointId:
+                    type: string
+                hs2:
+                    type: string
+                    description: 'HS2 chapter (default: "27")'
+            required:
+                - iso2
+                - chokepointId
+        GetCountryCostShockResponse:
+            type: object
+            properties:
+                iso2:
+                    type: string
+                chokepointId:
+                    type: string
+                hs2:
+                    type: string
+                supplyDeficitPct:
+                    type: number
+                    format: double
+                    description: Average refined-product supply deficit % under full closure (Gasoline/Diesel/Jet fuel/LPG average; HS 27 only)
+                coverageDays:
+                    type: integer
+                    format: int32
+                    description: Energy stockpile coverage in days (IEA data, HS 27 only; 0 for non-energy sectors or net exporters)
+                warRiskPremiumBps:
+                    type: integer
+                    format: int32
+                    description: War risk insurance premium in basis points for this chokepoint
+                warRiskTier:
+                    type: string
+                    enum:
+                        - WAR_RISK_TIER_UNSPECIFIED
+                        - WAR_RISK_TIER_NORMAL
+                        - WAR_RISK_TIER_ELEVATED
+                        - WAR_RISK_TIER_HIGH
+                        - WAR_RISK_TIER_CRITICAL
+                        - WAR_RISK_TIER_WAR_ZONE
+                    description: |-
+                        *
+                         War risk tier derived from Lloyd's JWC Listed Areas + OSINT threat classification.
+                         This is a FREE field (no PRO gate) — it exposes the existing server-internal
+                         threatLevel from ChokepointConfig, making it available to clients for badges
+                         and bypass corridor scoring.
+                hasEnergyModel:
+                    type: boolean
+                    description: Whether supply_deficit_pct and coverage_days are modelled (true) or unavailable (false)
+                unavailableReason:
+                    type: string
+                    description: Null/unavailable explanation for non-energy sectors
+                fetchedAt:
+                    type: string
+        GetSectorDependencyRequest:
+            type: object
+            properties:
+                iso2:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                hs2:
+                    type: string
+                    description: HS2 chapter code, e.g. "27" (mineral fuels), "85" (electronics)
+            required:
+                - iso2
+                - hs2
+        GetSectorDependencyResponse:
+            type: object
+            properties:
+                iso2:
+                    type: string
+                hs2:
+                    type: string
+                hs2Label:
+                    type: string
+                    description: Human-readable HS2 chapter name.
+                flags:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - DEPENDENCY_FLAG_UNSPECIFIED
+                            - DEPENDENCY_FLAG_SINGLE_SOURCE_CRITICAL
+                            - DEPENDENCY_FLAG_SINGLE_CORRIDOR_CRITICAL
+                            - DEPENDENCY_FLAG_COMPOUND_RISK
+                            - DEPENDENCY_FLAG_DIVERSIFIABLE
+                        description: DependencyFlag classifies how a country+sector dependency can fail.
+                primaryExporterIso2:
+                    type: string
+                    description: ISO2 of the country supplying the largest share of this sector's imports.
+                primaryExporterShare:
+                    type: number
+                    format: double
+                    description: Share of imports from the primary exporter (0–1). 0 = no Comtrade data available.
+                primaryChokepointId:
+                    type: string
+                    description: Chokepoint ID with the highest exposure score for this country+sector.
+                primaryChokepointExposure:
+                    type: number
+                    format: double
+                    description: Exposure score for the primary chokepoint (0–100).
+                hasViableBypass:
+                    type: boolean
+                    description: Whether at least one viable bypass corridor exists for the primary chokepoint.
+                fetchedAt:
+                    type: string
+        GetRouteExplorerLaneRequest:
+            type: object
+            properties:
+                fromIso2:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                toIso2:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                hs2:
+                    type: string
+                    description: HS2 chapter code, e.g. "27", "85"
+                cargoType:
+                    type: string
+                    description: 'One of: container, tanker, bulk, roro'
+            required:
+                - fromIso2
+                - toIso2
+                - hs2
+                - cargoType
+        GetRouteExplorerLaneResponse:
+            type: object
+            properties:
+                fromIso2:
+                    type: string
+                toIso2:
+                    type: string
+                hs2:
+                    type: string
+                cargoType:
+                    type: string
+                primaryRouteId:
+                    type: string
+                    description: Primary trade route ID from TRADE_ROUTES config. Empty when no modeled lane.
+                primaryRouteGeometry:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/GeoPoint'
+                chokepointExposures:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/ChokepointExposureSummary'
+                bypassOptions:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/BypassCorridorOption'
+                warRiskTier:
+                    type: string
+                disruptionScore:
+                    type: number
+                    format: double
+                estTransitDaysRange:
+                    $ref: '#/components/schemas/NumberRange'
+                estFreightUsdPerTeuRange:
+                    $ref: '#/components/schemas/NumberRange'
+                noModeledLane:
+                    type: boolean
+                    description: |-
+                        True when the wrapper fell back to the origin's first route (no shared route
+                         between origin and destination clusters). Signals "no modeled lane" to the UI.
+                fetchedAt:
+                    type: string
+        GeoPoint:
+            type: object
+            properties:
+                lon:
+                    type: number
+                    format: double
+                lat:
+                    type: number
+                    format: double
+            description: GeoPoint is a [longitude, latitude] pair.
+        ChokepointExposureSummary:
+            type: object
+            properties:
+                chokepointId:
+                    type: string
+                chokepointName:
+                    type: string
+                exposurePct:
+                    type: integer
+                    format: int32
+        BypassCorridorOption:
+            type: object
+            properties:
+                id:
+                    type: string
+                name:
+                    type: string
+                type:
+                    type: string
+                addedTransitDays:
+                    type: integer
+                    format: int32
+                addedCostMultiplier:
+                    type: number
+                    format: double
+                warRiskTier:
+                    type: string
+                status:
+                    type: string
+                    enum:
+                        - CORRIDOR_STATUS_UNSPECIFIED
+                        - CORRIDOR_STATUS_ACTIVE
+                        - CORRIDOR_STATUS_PROPOSED
+                        - CORRIDOR_STATUS_UNAVAILABLE
+                    description: |-
+                        Status of a bypass corridor for UI labeling. "active" means usable today;
+                         "proposed" means documented but not yet built/operational; "unavailable"
+                         means blockaded or otherwise blocked from use.
+                fromPort:
+                    $ref: '#/components/schemas/GeoPoint'
+                toPort:
+                    $ref: '#/components/schemas/GeoPoint'
+            description: |-
+                BypassCorridorOption is a single enriched bypass corridor for the Route Explorer UI.
+                 Includes coordinate endpoints so the client can call MapContainer.setBypassRoutes
+                 directly without any client-side geometry lookup.
+        NumberRange:
+            type: object
+            properties:
+                min:
+                    type: integer
+                    format: int32
+                max:
+                    type: integer
+                    format: int32
+            description: Inclusive integer range for transit days / freight USD estimates.
+        GetRouteImpactRequest:
+            type: object
+            properties:
+                fromIso2:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                toIso2:
+                    type: string
+                    pattern: ^[A-Z]{2}$
+                hs2:
+                    type: string
+            required:
+                - fromIso2
+                - toIso2
+                - hs2
+        GetRouteImpactResponse:
+            type: object
+            properties:
+                laneValueUsd:
+                    type: number
+                    format: double
+                primaryExporterIso2:
+                    type: string
+                primaryExporterShare:
+                    type: number
+                    format: double
+                topStrategicProducts:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/StrategicProduct'
+                resilienceScore:
+                    type: number
+                    format: double
+                dependencyFlags:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - DEPENDENCY_FLAG_UNSPECIFIED
+                            - DEPENDENCY_FLAG_SINGLE_SOURCE_CRITICAL
+                            - DEPENDENCY_FLAG_SINGLE_CORRIDOR_CRITICAL
+                            - DEPENDENCY_FLAG_COMPOUND_RISK
+                            - DEPENDENCY_FLAG_DIVERSIFIABLE
+                        description: DependencyFlag classifies how a country+sector dependency can fail.
+                hs2InSeededUniverse:
+                    type: boolean
+                comtradeSource:
+                    type: string
+                fetchedAt:
+                    type: string
+        StrategicProduct:
+            type: object
+            properties:
+                hs4:
+                    type: string
+                label:
+                    type: string
+                totalValueUsd:
+                    type: number
+                    format: double
+                topExporterIso2:
+                    type: string
+                topExporterShare:
+                    type: number
+                    format: double
+                primaryChokepointId:
+                    type: string

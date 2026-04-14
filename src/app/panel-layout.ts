@@ -17,6 +17,9 @@ import {
   PredictionPanel,
   MonitorPanel,
   EconomicPanel,
+  ConsumerPricesPanel,
+  EnergyComplexPanel,
+  OilInventoriesPanel,
   GdeltIntelPanel,
   LiveNewsPanel,
   LiveWebcamsPanel,
@@ -31,6 +34,7 @@ import {
   InsightsPanel,
   MacroSignalsPanel,
   FearGreedPanel,
+  MarketBreadthPanel,
   ETFFlowsPanel,
   StablecoinPanel,
   UcdpEventsPanel,
@@ -58,8 +62,13 @@ import {
   EarningsCalendarPanel,
   EconomicCalendarPanel,
   CotPositioningPanel,
+  LiquidityShiftsPanel,
+  GoldIntelligencePanel,
   DiseaseOutbreaksPanel,
   SocialVelocityPanel,
+  WsbTickerScannerPanel,
+  AAIISentimentPanel,
+  EnergyCrisisPanel,
 } from '@/components';
 import { SatelliteFiresPanel } from '@/components/SatelliteFiresPanel';
 import { focusInvestmentOnMap } from '@/services/investments-focus';
@@ -94,6 +103,17 @@ import { getAuthState, subscribeAuthState } from '@/services/auth-state';
 import type { AuthSession } from '@/services/auth-state';
 import { PanelGateReason, getPanelGateReason, hasPremiumAccess } from '@/services/panel-gating';
 import type { Panel } from '@/components/Panel';
+
+/** Panels that require premium access on web. Auth-based gating applies to these. */
+const WEB_PREMIUM_PANELS = new Set([
+  'stock-analysis',
+  'stock-backtest',
+  'daily-market-brief',
+  'market-implications',
+  'deduction',
+  'chat-analyst',
+  'wsb-ticker-scanner',
+]);
 
 /** Panels that require premium access on web. Auth-based gating applies to these. */
 const WEB_PREMIUM_PANELS = new Set([
@@ -709,6 +729,9 @@ export class PanelLayoutManager implements AppModule {
     });
 
     this.createPanel('commodities', () => new CommoditiesPanel());
+    this.createPanel('energy-complex', () => new EnergyComplexPanel());
+    this.createPanel('oil-inventories', () => new OilInventoriesPanel());
+    this.createPanel('energy-crisis', () => new EnergyCrisisPanel());
     this.createPanel('polymarket', () => new PredictionPanel());
 
     this.createNewsPanel('gov', 'panels.gov');
@@ -736,7 +759,17 @@ export class PanelLayoutManager implements AppModule {
     this.createPanel('economic', () => new EconomicPanel());
 
     this.createPanel('trade-policy', () => new TradePolicyPanel());
-    this.createPanel('supply-chain', () => new SupplyChainPanel());
+    this.createPanel('sanctions-pressure', () => new SanctionsPressurePanel());
+    const supplyChainPanel = this.createPanel('supply-chain', () => new SupplyChainPanel());
+    if (supplyChainPanel) {
+      supplyChainPanel.setOnScenarioActivate((id, result) => {
+        this.ctx.map?.activateScenario(id, result);
+      });
+      supplyChainPanel.setOnDismissScenario(() => {
+        this.ctx.map?.deactivateScenario();
+      });
+      this.ctx.map?.setSupplyChainPanel(supplyChainPanel);
+    }
 
     this.createNewsPanel('africa', 'panels.africa');
     this.createNewsPanel('latam', 'panels.latam');
@@ -770,6 +803,24 @@ export class PanelLayoutManager implements AppModule {
         const gdeltEl = this.ctx.panels['gdelt-intel']?.getElement();
         if (gdeltEl?.parentNode === grid && gdeltEl.nextSibling) {
           grid.insertBefore(el, gdeltEl.nextSibling);
+        } else {
+          grid.appendChild(el);
+        }
+      }
+      this.applyPanelSettings();
+      this.updatePanelGating(getAuthState());
+    });
+
+    import('@/components/RegionalIntelligenceBoard').then(({ RegionalIntelligenceBoard }) => {
+      const regionalBoard = new RegionalIntelligenceBoard();
+      this.ctx.panels['regional-intelligence'] = regionalBoard;
+      const el = regionalBoard.getElement();
+      this.makeDraggable(el, 'regional-intelligence');
+      const grid = document.getElementById('panelsGrid');
+      if (grid) {
+        const deductionEl = this.ctx.panels['deduction']?.getElement();
+        if (deductionEl?.parentNode === grid && deductionEl.nextSibling) {
+          grid.insertBefore(el, deductionEl.nextSibling);
         } else {
           grid.appendChild(el);
         }
@@ -843,6 +894,7 @@ export class PanelLayoutManager implements AppModule {
 
     this.createPanel('disease-outbreaks', () => new DiseaseOutbreaksPanel());
     this.createPanel('social-velocity', () => new SocialVelocityPanel());
+    this.createPanel('wsb-ticker-scanner', () => new WsbTickerScannerPanel());
 
     this.lazyPanel('displacement', () =>
       import('@/components/DisplacementPanel').then(m => {
@@ -1020,12 +1072,16 @@ export class PanelLayoutManager implements AppModule {
 
     this.createPanel('macro-signals', () => new MacroSignalsPanel());
     this.createPanel('fear-greed', () => new FearGreedPanel());
+    this.createPanel('aaii-sentiment', () => new AAIISentimentPanel());
+    this.createPanel('market-breadth', () => new MarketBreadthPanel());
     this.createPanel('macro-tiles', () => new MacroTilesPanel());
     this.createPanel('fsi', () => new FSIPanel());
     this.createPanel('yield-curve', () => new YieldCurvePanel());
     this.createPanel('earnings-calendar', () => new EarningsCalendarPanel());
     this.createPanel('economic-calendar', () => new EconomicCalendarPanel());
     this.createPanel('cot-positioning', () => new CotPositioningPanel());
+    this.createPanel('liquidity-shifts', () => new LiquidityShiftsPanel());
+    this.createPanel('gold-intelligence', () => new GoldIntelligencePanel());
     this.createPanel('hormuz-tracker', () => new HormuzPanel());
     this.createPanel('etf-flows', () => new ETFFlowsPanel());
     this.createPanel('stablecoins', () => new StablecoinPanel());

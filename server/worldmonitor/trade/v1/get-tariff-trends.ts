@@ -11,6 +11,8 @@ import type {
   GetTariffTrendsResponse,
   TariffDataPoint,
 } from '../../../../src/generated/server/worldmonitor/trade/v1/service_server';
+import { getCachedJson } from '../../../_shared/redis';
+import { isCallerPremium } from '../../../_shared/premium-check';
 
 import { cachedFetchJson } from '../../../_shared/redis';
 import { wtoFetch, WTO_MEMBER_CODES, TP_A_0010 } from './_shared';
@@ -78,9 +80,12 @@ async function fetchTariffTrends(
 }
 
 export async function getTariffTrends(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   req: GetTariffTrendsRequest,
 ): Promise<GetTariffTrendsResponse> {
+  const isPro = await isCallerPremium(ctx.request);
+  if (!isPro) return { datapoints: [], fetchedAt: '', upstreamUnavailable: true };
+
   try {
     // Input validation
     const reporter = isValidCode(req.reportingCountry) ? req.reportingCountry : '840';

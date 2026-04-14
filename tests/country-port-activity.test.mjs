@@ -55,11 +55,11 @@ describe('get-country-port-activity handler: unavailable country', () => {
   });
 });
 
-// ── handler: top 5 slice ──────────────────────────────────────────────────────
+// ── handler: top 25 slice ─────────────────────────────────────────────────────
 
-describe('get-country-port-activity handler: top 5 ports', () => {
-  it('slices top 5 ports', () => {
-    assert.match(handlerSrc, /\.slice\(0,\s*5\)/);
+describe('get-country-port-activity handler: port limit', () => {
+  it('slices top 25 ports', () => {
+    assert.match(handlerSrc, /\.slice\(0,\s*25\)/);
   });
 });
 
@@ -117,7 +117,7 @@ describe('CountryDeepDivePanel: updateMaritimeActivity', () => {
   });
 
   it('renders Maritime Activity sectionCard', () => {
-    assert.match(panelSrc, /sectionCard\(['"]Maritime Activity['"]\)/);
+    assert.match(panelSrc, /sectionCard\(['"]Maritime Activity['"],/);
   });
 
   it('removes card from DOM when data is unavailable', () => {

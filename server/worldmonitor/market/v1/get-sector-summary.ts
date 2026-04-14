@@ -12,10 +12,7 @@ import { fetchFinnhubQuote, fetchYahooQuotesBatch } from './_shared';
 import { cachedFetchJson } from '../../../_shared/redis';
 import sectorConfig from '../../../../shared/sectors.json';
 
-const REDIS_CACHE_KEY = 'market:sectors:v1';
-const REDIS_CACHE_TTL = 600; // 10 min — Finnhub rate-limited
-
-let fallbackSectorCache: { data: GetSectorSummaryResponse; ts: number } | null = null;
+const SEED_CACHE_KEY = 'market:sectors:v2';
 
 export async function getSectorSummary(
   _ctx: ServerContext,

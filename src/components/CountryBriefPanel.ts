@@ -2,6 +2,7 @@ import type { CountryBriefSignals } from '@/app/app-context';
 import type { CountryScore } from '@/services/country-instability';
 import type { PredictionMarket } from '@/services/prediction';
 import type { NewsItem } from '@/types';
+import type { GetCountryChokepointIndexResponse, SectorExposureSummary, CountryProductsResponse, MultiSectorShockResponse } from '@/services/supply-chain';
 
 export interface CountryIntelData {
   brief: string;
@@ -122,6 +123,23 @@ export interface CountryEnergyProfileData {
   ieaDaysOfCover: number;
   ieaNetExporter: boolean;
   ieaBelowObligation: boolean;
+  emberFossilShare: number;
+  emberRenewShare: number;
+  emberNuclearShare: number;
+  emberCoalShare: number;
+  emberGasShare: number;
+  emberDemandTwh: number;
+  emberDataMonth: string;
+  emberAvailable: boolean;
+  sprRegime: string;
+  sprCapacityMb: number;
+  sprOperator: string;
+  sprIeaMember: boolean;
+  sprStockholdingModel: string;
+  sprNote: string;
+  sprSource: string;
+  sprAsOf: string;
+  sprAvailable: boolean;
 }
 
 export interface CountryPortActivityData {
@@ -165,8 +183,20 @@ export interface CountryBriefPanel {
   updateCountryFacts?(data: CountryFactsData): void;
   updateEnergyProfile?(data: CountryEnergyProfileData): void;
   updateMaritimeActivity?(data: CountryPortActivityData): void;
+  updateTradeExposure?(data: GetCountryChokepointIndexResponse | null, sectors?: SectorExposureSummary[]): void;
   maximize?(): void;
   minimize?(): void;
   getIsMaximized?(): boolean;
   onStateChange?(cb: (state: { visible: boolean; maximized: boolean }) => void): void;
+  updateNationalDebt?(entry: { debtToGdp: number; debtUsd: number; annualGrowth: number; source: string } | null): void;
+  updateSanctionsPressure?(data: { entryCount: number; sanctionsActive?: boolean } | null): void;
+  updateComtradeFlows?(flows: Array<{ partnerName: string; cmdDesc: string; tradeValueUsd: number; yoyChange: number }> | null): void;
+  updateTariffTrends?(data: { currentRate: number; trend: string; datapoints: Array<{ year: number; tariffRate: number }> } | null): void;
+  updateMultiSectorCostShock?(data: MultiSectorShockResponse | null): void;
+  updateProductImports?(data: CountryProductsResponse | null): void;
+  updateHousingCycle?(data: {
+    residential?: { indexValue: number; qoqChange: number | null; yoyChange: number | null; period: string } | null;
+    commercial?: { indexValue: number; qoqChange: number | null; yoyChange: number | null; period: string } | null;
+    dsr?: { dsrPct: number; change: number | null; period: string } | null;
+  } | null): void;
 }

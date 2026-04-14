@@ -337,12 +337,30 @@ export interface GetCountryEnergyProfileResponse {
   ieaDaysOfCover: number;
   ieaNetExporter: boolean;
   ieaBelowObligation: boolean;
+  emberFossilShare: number;
+  emberRenewShare: number;
+  emberNuclearShare: number;
+  emberCoalShare: number;
+  emberGasShare: number;
+  emberDemandTwh: number;
+  emberDataMonth: string;
+  emberAvailable: boolean;
+  sprRegime: string;
+  sprCapacityMb: number;
+  sprOperator: string;
+  sprIeaMember: boolean;
+  sprStockholdingModel: string;
+  sprNote: string;
+  sprSource: string;
+  sprAsOf: string;
+  sprAvailable: boolean;
 }
 
 export interface ComputeEnergyShockScenarioRequest {
   countryCode: string;
   chokepointId: string;
   disruptionPct: number;
+  fuelMode: string;
 }
 
 export interface ComputeEnergyShockScenarioResponse {
@@ -364,6 +382,7 @@ export interface ComputeEnergyShockScenarioResponse {
   degraded: boolean;
   chokepointConfidence: string;
   liveFlowRatio?: number;
+  gasImpact?: GasImpact;
 }
 
 export interface ProductImpact {
@@ -371,6 +390,27 @@ export interface ProductImpact {
   outputLossKbd: number;
   demandKbd: number;
   deficitPct: number;
+}
+
+export interface GasImpact {
+  lngShareOfImports: number;
+  lngImportsTj: number;
+  lngDisruptionTj: number;
+  totalDemandTj: number;
+  deficitPct: number;
+  dataAvailable: boolean;
+  assessment: string;
+  storage?: GasStorageBuffer;
+  dataSource: string;
+}
+
+export interface GasStorageBuffer {
+  fillPct: number;
+  gasTwh: number;
+  bufferDays: number;
+  trend: string;
+  date: string;
+  scope: string;
 }
 
 export interface GetCountryPortActivityRequest {
@@ -393,6 +433,235 @@ export interface PortActivityEntry {
   importTankerDwt: number;
   exportTankerDwt: number;
   anomalySignal: boolean;
+}
+
+export interface GetRegionalSnapshotRequest {
+  regionId: string;
+}
+
+export interface GetRegionalSnapshotResponse {
+  snapshot?: RegionalSnapshot;
+}
+
+export interface RegionalSnapshot {
+  regionId: string;
+  generatedAt: number;
+  meta?: SnapshotMeta;
+  regime?: RegimeState;
+  balance?: BalanceVector;
+  actors: ActorState[];
+  leverageEdges: LeverageEdge[];
+  scenarioSets: ScenarioSet[];
+  transmissionPaths: TransmissionPath[];
+  triggers?: TriggerLadder;
+  mobility?: MobilityState;
+  evidence: EvidenceItem[];
+  narrative?: RegionalNarrative;
+}
+
+export interface SnapshotMeta {
+  snapshotId: string;
+  modelVersion: string;
+  scoringVersion: string;
+  geographyVersion: string;
+  snapshotConfidence: number;
+  missingInputs: string[];
+  staleInputs: string[];
+  validUntil: number;
+  triggerReason: string;
+  narrativeProvider: string;
+  narrativeModel: string;
+}
+
+export interface RegimeState {
+  label: string;
+  previousLabel: string;
+  transitionedAt: number;
+  transitionDriver: string;
+}
+
+export interface BalanceVector {
+  coercivePressure: number;
+  domesticFragility: number;
+  capitalStress: number;
+  energyVulnerability: number;
+  allianceCohesion: number;
+  maritimeAccess: number;
+  energyLeverage: number;
+  netBalance: number;
+  pressures: BalanceDriver[];
+  buffers: BalanceDriver[];
+}
+
+export interface BalanceDriver {
+  axis: string;
+  description: string;
+  magnitude: number;
+  evidenceIds: string[];
+  orientation: string;
+}
+
+export interface ActorState {
+  actorId: string;
+  name: string;
+  role: string;
+  leverageDomains: string[];
+  leverageScore: number;
+  delta: number;
+  evidenceIds: string[];
+}
+
+export interface LeverageEdge {
+  fromActorId: string;
+  toActorId: string;
+  mechanism: string;
+  strength: number;
+  evidenceIds: string[];
+}
+
+export interface ScenarioSet {
+  horizon: string;
+  lanes: ScenarioLane[];
+}
+
+export interface ScenarioLane {
+  name: string;
+  probability: number;
+  triggerIds: string[];
+  consequences: string[];
+  transmissions: TransmissionPath[];
+}
+
+export interface TransmissionPath {
+  start: string;
+  mechanism: string;
+  end: string;
+  severity: string;
+  corridorId: string;
+  confidence: number;
+  latencyHours: number;
+  impactedAssetClass: string;
+  impactedRegions: string[];
+  magnitudeLow: number;
+  magnitudeHigh: number;
+  magnitudeUnit: string;
+  templateId: string;
+  templateVersion: string;
+}
+
+export interface TriggerLadder {
+  active: Trigger[];
+  watching: Trigger[];
+  dormant: Trigger[];
+}
+
+export interface Trigger {
+  id: string;
+  description: string;
+  threshold?: TriggerThreshold;
+  activated: boolean;
+  activatedAt: number;
+  scenarioLane: string;
+  evidenceIds: string[];
+}
+
+export interface TriggerThreshold {
+  metric: string;
+  operator: string;
+  value: number;
+  windowMinutes: number;
+  baseline: string;
+}
+
+export interface MobilityState {
+  airspace: AirspaceStatus[];
+  flightCorridors: FlightCorridorStress[];
+  airports: AirportNodeStatus[];
+  rerouteIntensity: number;
+  notamClosures: string[];
+}
+
+export interface AirspaceStatus {
+  airspaceId: string;
+  status: string;
+  reason: string;
+}
+
+export interface FlightCorridorStress {
+  corridor: string;
+  stressLevel: number;
+  reroutedFlights24h: number;
+}
+
+export interface AirportNodeStatus {
+  icao: string;
+  name: string;
+  status: string;
+  disruptionReason: string;
+}
+
+export interface EvidenceItem {
+  id: string;
+  type: string;
+  source: string;
+  summary: string;
+  confidence: number;
+  observedAt: number;
+  theater: string;
+  corridor: string;
+}
+
+export interface RegionalNarrative {
+  situation?: NarrativeSection;
+  balanceAssessment?: NarrativeSection;
+  outlook24h?: NarrativeSection;
+  outlook7d?: NarrativeSection;
+  outlook30d?: NarrativeSection;
+  watchItems: NarrativeSection[];
+}
+
+export interface NarrativeSection {
+  text: string;
+  evidenceIds: string[];
+}
+
+export interface GetRegimeHistoryRequest {
+  regionId: string;
+  limit: number;
+}
+
+export interface GetRegimeHistoryResponse {
+  transitions: RegimeTransition[];
+}
+
+export interface RegimeTransition {
+  regionId: string;
+  label: string;
+  previousLabel: string;
+  transitionedAt: number;
+  transitionDriver: string;
+  snapshotId: string;
+}
+
+export interface GetRegionalBriefRequest {
+  regionId: string;
+}
+
+export interface GetRegionalBriefResponse {
+  brief?: RegionalBrief;
+}
+
+export interface RegionalBrief {
+  regionId: string;
+  generatedAt: number;
+  periodStart: number;
+  periodEnd: number;
+  situationRecap: string;
+  regimeTrajectory: string;
+  keyDevelopments: string[];
+  riskOutlook: string;
+  provider: string;
+  model: string;
 }
 
 export type SeverityLevel = "SEVERITY_LEVEL_UNSPECIFIED" | "SEVERITY_LEVEL_LOW" | "SEVERITY_LEVEL_MEDIUM" | "SEVERITY_LEVEL_HIGH";
@@ -810,6 +1079,7 @@ export class IntelligenceServiceClient {
     if (req.countryCode != null && req.countryCode !== "") params.set("country_code", String(req.countryCode));
     if (req.chokepointId != null && req.chokepointId !== "") params.set("chokepoint_id", String(req.chokepointId));
     if (req.disruptionPct != null && req.disruptionPct !== 0) params.set("disruption_pct", String(req.disruptionPct));
+    if (req.fuelMode != null && req.fuelMode !== "") params.set("fuel_mode", String(req.fuelMode));
     const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
 
     const headers: Record<string, string> = {
@@ -854,6 +1124,82 @@ export class IntelligenceServiceClient {
     }
 
     return await resp.json() as CountryPortActivityResponse;
+  }
+
+  async getRegionalSnapshot(req: GetRegionalSnapshotRequest, options?: IntelligenceServiceCallOptions): Promise<GetRegionalSnapshotResponse> {
+    let path = "/api/intelligence/v1/get-regional-snapshot";
+    const params = new URLSearchParams();
+    if (req.regionId != null && req.regionId !== "") params.set("region_id", String(req.regionId));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetRegionalSnapshotResponse;
+  }
+
+  async getRegimeHistory(req: GetRegimeHistoryRequest, options?: IntelligenceServiceCallOptions): Promise<GetRegimeHistoryResponse> {
+    let path = "/api/intelligence/v1/get-regime-history";
+    const params = new URLSearchParams();
+    if (req.regionId != null && req.regionId !== "") params.set("region_id", String(req.regionId));
+    if (req.limit != null && req.limit !== 0) params.set("limit", String(req.limit));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetRegimeHistoryResponse;
+  }
+
+  async getRegionalBrief(req: GetRegionalBriefRequest, options?: IntelligenceServiceCallOptions): Promise<GetRegionalBriefResponse> {
+    let path = "/api/intelligence/v1/get-regional-brief";
+    const params = new URLSearchParams();
+    if (req.regionId != null && req.regionId !== "") params.set("region_id", String(req.regionId));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetRegionalBriefResponse;
   }
 
   private async handleError(resp: Response): Promise<never> {

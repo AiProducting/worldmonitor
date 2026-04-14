@@ -96,16 +96,16 @@ describe('buildSpineEntry — full data', () => {
     assert.equal(spine.coverage.hasIeaStocks, true);
   });
 
-  it('does not include electricity or gasStorage in the spine', () => {
+  it('electricity is null when no ember data provided, gasStorage excluded from spine', () => {
     const spine = buildSpineEntry('DE', {
       mix: makeMix(),
       jodiOil: makeJodiOil(),
       jodiGas: makeJodiGas(),
       ieaStocks: makeIeaStocks(),
     });
-    assert.equal(spine.electricity, undefined);
+    assert.equal(spine.electricity, null);
     assert.equal(spine.gasStorage, undefined);
-    assert.equal(spine.coverage.hasElectricity, undefined);
+    assert.equal(spine.coverage.hasEmber, false);
     assert.equal(spine.coverage.hasGasStorage, undefined);
   });
 
@@ -351,5 +351,92 @@ describe('count-drop guard math', () => {
     // Guard should not activate on first run (prevCount <= 0)
     const guardActive = prevCount > 0;
     assert.equal(guardActive, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSpineEntry with Ember data
+// ---------------------------------------------------------------------------
+
+describe('buildSpineEntry with Ember data', () => {
+  it('includes electricity block when ember data is present', () => {
+    const ember = { dataMonth: '2025-12', fossilShare: 71.2, renewShare: 24.1, nuclearShare: 4.7, coalShare: 31.1, gasShare: 33.0, demandTwh: 78.4 };
+    const entry = buildSpineEntry('JP', { mix: makeMix(), jodiOil: makeJodiOil(), jodiGas: null, ieaStocks: null, ember });
+    assert.ok(entry.electricity != null, 'should have electricity block');
+    assert.equal(entry.electricity.fossilShare, 71.2);
+    assert.equal(entry.electricity.renewShare, 24.1);
+    assert.equal(entry.coverage.hasEmber, true);
+    assert.equal(entry.sources.emberMonth, '2025-12');
+  });
+
+  it('electricity is null when ember data is absent', () => {
+    const entry = buildSpineEntry('US', { mix: makeMix(), jodiOil: makeJodiOil(), jodiGas: null, ieaStocks: null, ember: null });
+    assert.equal(entry.electricity, null);
+    assert.equal(entry.coverage.hasEmber, false);
+    assert.equal(entry.sources.emberMonth, null);
+  });
+
+  it('hasEmber is false when ember has no fossilShare', () => {
+    const entry = buildSpineEntry('US', { mix: makeMix(), jodiOil: makeJodiOil(), jodiGas: null, ieaStocks: null, ember: { dataMonth: '2025-12' } });
+    assert.equal(entry.coverage.hasEmber, false);
+    assert.equal(entry.electricity, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSpineEntry with SPR policy data
+// ---------------------------------------------------------------------------
+
+describe('buildSpineEntry with SPR policy data', () => {
+  it('includes SPR fields in shockInputs when policy is provided', () => {
+    const sprPolicy = { regime: 'government_spr', operator: 'CNPC/Sinopec', capacityMb: 476, ieaMember: false };
+    const entry = buildSpineEntry('CN', { mix: makeMix(), jodiOil: makeJodiOil(), jodiGas: null, ieaStocks: null, sprPolicy });
+    assert.equal(entry.shockInputs.sprRegime, 'government_spr');
+    assert.equal(entry.shockInputs.sprCapacityMb, 476);
+    assert.equal(entry.shockInputs.sprOperator, 'CNPC/Sinopec');
+    assert.equal(entry.shockInputs.sprIeaMember, false);
+    assert.equal(entry.coverage.hasSprPolicy, true);
+  });
+
+  it('defaults SPR fields to unknown when no policy provided', () => {
+    const entry = buildSpineEntry('AF', { mix: null, jodiOil: null, jodiGas: null, ieaStocks: null, sprPolicy: null });
+    assert.equal(entry.shockInputs.sprRegime, 'unknown');
+    assert.equal(entry.shockInputs.sprCapacityMb, null);
+    assert.equal(entry.shockInputs.sprOperator, null);
+    assert.equal(entry.shockInputs.sprIeaMember, false);
+    assert.equal(entry.coverage.hasSprPolicy, false);
+  });
+
+  it('hasSprPolicy is false for unknown regime', () => {
+    const entry = buildSpineEntry('XX', { mix: null, jodiOil: null, jodiGas: null, ieaStocks: null, sprPolicy: { regime: 'unknown' } });
+    assert.equal(entry.coverage.hasSprPolicy, false);
+  });
+
+  it('hasSprPolicy is true for mandatory_stockholding regime', () => {
+    const sprPolicy = { regime: 'mandatory_stockholding', ieaMember: true };
+    const entry = buildSpineEntry('DE', { mix: makeMix(), jodiOil: makeJodiOil(), jodiGas: null, ieaStocks: null, sprPolicy });
+    assert.equal(entry.coverage.hasSprPolicy, true);
+    assert.equal(entry.shockInputs.sprRegime, 'mandatory_stockholding');
+    assert.equal(entry.shockInputs.sprIeaMember, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Core-source guard when JODI and OWID are empty
+// ---------------------------------------------------------------------------
+
+describe('core-source guard when JODI and OWID are empty', () => {
+  it('assembleCountryList returns jodiCount and owidCount', () => {
+    const jodiCount = 0;
+    const owidCount = 0;
+    const shouldAbort = jodiCount === 0 && owidCount === 0;
+    assert.ok(shouldAbort, 'should abort when both core sources are empty');
+  });
+
+  it('does not abort when at least one core source has data', () => {
+    const jodiCount = 100;
+    const owidCount = 0;
+    const shouldAbort = jodiCount === 0 && owidCount === 0;
+    assert.ok(!shouldAbort, 'should not abort when JODI has data');
   });
 });

@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   parseEmberCsv,
   buildAllCountriesMap,
@@ -8,6 +11,9 @@ import {
   EMBER_META_KEY,
   EMBER_TTL_SECONDS,
 } from '../scripts/seed-ember-electricity.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FIXTURE_DIR = resolve(__dirname, 'fixtures');
 
 // ─── Fixture builders ──────────────────────────────────────────────────────
 
@@ -252,27 +258,25 @@ describe('pipeline failure detection logic (non-transactional, e.g. Phase B meta
   });
 });
 
-describe('MULTI/EXEC transaction pipeline shape', () => {
-  it('wraps data commands between MULTI and EXEC', () => {
+describe('pipeline shape (plain pipeline, no MULTI/EXEC)', () => {
+  it('builds SET commands for each country plus _all', () => {
     const countries = new Map([['US', { foo: 1 }], ['DE', { foo: 2 }]]);
-    const cmds = [['MULTI']];
+    const cmds = [];
     for (const [iso2, payload] of countries) {
       cmds.push(['SET', `${EMBER_KEY_PREFIX}${iso2}`, JSON.stringify(payload), 'EX', EMBER_TTL_SECONDS]);
     }
     cmds.push(['SET', EMBER_ALL_KEY, '{}', 'EX', EMBER_TTL_SECONDS]);
-    cmds.push(['EXEC']);
 
-    assert.equal(cmds[0][0], 'MULTI', 'first command is MULTI');
-    assert.equal(cmds[cmds.length - 1][0], 'EXEC', 'last command is EXEC');
-    assert.equal(cmds.length, 5, 'MULTI + 2 country SET + 1 _all SET + EXEC');
+    assert.equal(cmds.length, 3, '2 country SET + 1 _all SET');
+    assert.ok(cmds.every(c => c[0] === 'SET'), 'all commands are SET');
   });
 
-  it('includes DEL for obsolete keys inside the transaction', () => {
+  it('includes DEL for obsolete keys in the pipeline', () => {
     const oldAllMap = { US: {}, DE: {}, JP: {} };
     const newCountryKeys = new Set(['US', 'DE']);
     const oldIso2Set = new Set(Object.keys(oldAllMap));
 
-    const cmds = [['MULTI']];
+    const cmds = [];
     cmds.push(['SET', `${EMBER_KEY_PREFIX}US`, '{}', 'EX', EMBER_TTL_SECONDS]);
     cmds.push(['SET', `${EMBER_KEY_PREFIX}DE`, '{}', 'EX', EMBER_TTL_SECONDS]);
     cmds.push(['SET', EMBER_ALL_KEY, '{}', 'EX', EMBER_TTL_SECONDS]);
@@ -281,54 +285,10 @@ describe('MULTI/EXEC transaction pipeline shape', () => {
         cmds.push(['DEL', `${EMBER_KEY_PREFIX}${iso2}`]);
       }
     }
-    cmds.push(['EXEC']);
 
     const delCmds = cmds.filter(c => c[0] === 'DEL');
     assert.equal(delCmds.length, 1);
     assert.equal(delCmds[0][1], `${EMBER_KEY_PREFIX}JP`);
-    assert.equal(cmds[cmds.length - 1][0], 'EXEC', 'EXEC is still last');
-  });
-});
-
-describe('EXEC result validation', () => {
-  it('detects null EXEC result as transaction abort', () => {
-    const execResult = { result: null };
-    const isAborted = !execResult?.result || !Array.isArray(execResult.result);
-    assert.ok(isAborted, 'null EXEC result means transaction aborted');
-  });
-
-  it('accepts array EXEC result as success', () => {
-    const execResult = { result: ['OK', 'OK', 'OK', 1] };
-    const isAborted = !execResult?.result || !Array.isArray(execResult.result);
-    assert.ok(!isAborted, 'array EXEC result means success');
-  });
-
-  it('detects ERR within EXEC result array', () => {
-    const execResults = ['OK', 'OK', 'ERR', 'OK'];
-    const failures = execResults.filter((r) => {
-      if (typeof r === 'string') return r === 'ERR';
-      if (r && typeof r === 'object') return !!r.error;
-      return false;
-    });
-    assert.equal(failures.length, 1);
-  });
-
-  it('detects error object within EXEC result array', () => {
-    const execResults = ['OK', { error: 'WRONGTYPE' }, 'OK'];
-    const failures = execResults.filter((r) => {
-      if (typeof r === 'string') return r === 'ERR';
-      if (r && typeof r === 'object') return !!r.error;
-      return false;
-    });
-    assert.equal(failures.length, 1);
-  });
-});
-
-describe('MULTI/EXEC eliminates need for JS-side rollback', () => {
-  it('EXEC failure means no data was written (no rollback needed)', () => {
-    const execResult = { result: null };
-    const transactionAborted = !execResult?.result || !Array.isArray(execResult.result);
-    assert.ok(transactionAborted, 'aborted EXEC means no partial writes exist');
   });
 });
 
@@ -548,7 +508,7 @@ describe('preservePreviousSnapshot recordCount fallback', () => {
   });
 });
 
-describe('dataWritten flag prevents stash restore after successful EXEC', () => {
+describe('dataWritten flag prevents stash restore after successful pipeline', () => {
   it('skips restore when dataWritten=true (data is correct, only meta failed)', () => {
     const stashedAllMap = { US: {}, DE: {} };
     const dataWritten = true;
@@ -556,7 +516,7 @@ describe('dataWritten flag prevents stash restore after successful EXEC', () => 
     assert.equal(shouldRestore, false, 'should not restore stash when data was written successfully');
   });
 
-  it('allows restore when dataWritten=false (EXEC failed or never ran)', () => {
+  it('allows restore when dataWritten=false (pipeline failed or never ran)', () => {
     const stashedAllMap = { US: {}, DE: {} };
     const dataWritten = false;
     const shouldRestore = stashedAllMap && typeof stashedAllMap === 'object' && !dataWritten;
@@ -568,5 +528,58 @@ describe('dataWritten flag prevents stash restore after successful EXEC', () => 
     const dataWritten = true;
     const shouldExtendTtl = !dataWritten;
     assert.equal(shouldExtendTtl, false, 'should not extend TTL when data is already correct');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Golden fixture: upstream CSV format regression guard
+// ---------------------------------------------------------------------------
+
+describe('golden fixture (Ember monthly CSV)', () => {
+  const csv = readFileSync(resolve(FIXTURE_DIR, 'ember-monthly-sample.csv'), 'utf-8');
+
+  it('parseEmberCsv returns at least 1 country from the fixture', () => {
+    const countries = parseEmberCsv(csv);
+    assert.ok(countries.size >= 1, `expected >=1 country, got ${countries.size}`);
+  });
+
+  it('fixture contains US and DE', () => {
+    const countries = parseEmberCsv(csv);
+    assert.ok(countries.has('US'), 'US missing');
+    assert.ok(countries.has('DE'), 'DE missing');
+  });
+
+  it('each entry has expected share fields', () => {
+    const expected = ['fossilShare', 'renewShare', 'nuclearShare', 'coalShare', 'gasShare', 'demandTwh', 'dataMonth'];
+    const countries = parseEmberCsv(csv);
+    for (const [iso2, entry] of countries) {
+      for (const field of expected) {
+        assert.ok(field in entry, `${iso2} missing field ${field}`);
+      }
+    }
+  });
+
+  it('share values are numbers or null', () => {
+    const countries = parseEmberCsv(csv);
+    for (const [iso2, entry] of countries) {
+      for (const key of ['fossilShare', 'renewShare', 'coalShare', 'gasShare']) {
+        const val = entry[key];
+        assert.ok(val === null || typeof val === 'number', `${iso2}.${key} should be number|null, got ${typeof val}`);
+      }
+    }
+  });
+
+  it('dataMonth is YYYY-MM format', () => {
+    const countries = parseEmberCsv(csv);
+    for (const [iso2, entry] of countries) {
+      assert.match(entry.dataMonth, /^\d{4}-\d{2}$/, `${iso2} dataMonth format wrong: ${entry.dataMonth}`);
+    }
+  });
+
+  it('US fossilShare is 50% (400/800)', () => {
+    const countries = parseEmberCsv(csv);
+    const us = countries.get('US');
+    assert.ok(us != null);
+    assert.ok(Math.abs(us.fossilShare - 50) < 0.01, `US fossilShare should be 50, got ${us.fossilShare}`);
   });
 });

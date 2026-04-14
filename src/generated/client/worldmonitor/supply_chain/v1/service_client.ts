@@ -52,6 +52,7 @@ export interface ChokepointInfo {
   directionalDwt: DirectionalDwt[];
   transitSummary?: TransitSummary;
   flowEstimate?: FlowEstimate;
+  warRiskTier: WarRiskTier;
 }
 
 export interface DirectionalDwt {
@@ -153,6 +154,180 @@ export interface ShippingStressCarrier {
   carrierType: string;
   sparkline: number[];
 }
+
+export interface GetCountryChokepointIndexRequest {
+  iso2: string;
+  hs2: string;
+}
+
+export interface GetCountryChokepointIndexResponse {
+  iso2: string;
+  hs2: string;
+  exposures: ChokepointExposureEntry[];
+  primaryChokepointId: string;
+  vulnerabilityIndex: number;
+  fetchedAt: string;
+}
+
+export interface ChokepointExposureEntry {
+  chokepointId: string;
+  chokepointName: string;
+  exposureScore: number;
+  coastSide: string;
+  shockSupported: boolean;
+}
+
+export interface GetBypassOptionsRequest {
+  chokepointId: string;
+  cargoType: string;
+  closurePct: number;
+}
+
+export interface GetBypassOptionsResponse {
+  chokepointId: string;
+  cargoType: string;
+  closurePct: number;
+  options: BypassOption[];
+  fetchedAt: string;
+  primaryChokepointWarRiskTier: WarRiskTier;
+}
+
+export interface BypassOption {
+  id: string;
+  name: string;
+  type: string;
+  addedTransitDays: number;
+  addedCostMultiplier: number;
+  capacityConstraintTonnage: string;
+  suitableCargoTypes: string[];
+  activationThreshold: string;
+  waypointChokepointIds: string[];
+  liveScore: number;
+  bypassWarRiskTier: WarRiskTier;
+  notes: string;
+}
+
+export interface GetCountryCostShockRequest {
+  iso2: string;
+  chokepointId: string;
+  hs2: string;
+}
+
+export interface GetCountryCostShockResponse {
+  iso2: string;
+  chokepointId: string;
+  hs2: string;
+  supplyDeficitPct: number;
+  coverageDays: number;
+  warRiskPremiumBps: number;
+  warRiskTier: WarRiskTier;
+  hasEnergyModel: boolean;
+  unavailableReason: string;
+  fetchedAt: string;
+}
+
+export interface GetSectorDependencyRequest {
+  iso2: string;
+  hs2: string;
+}
+
+export interface GetSectorDependencyResponse {
+  iso2: string;
+  hs2: string;
+  hs2Label: string;
+  flags: DependencyFlag[];
+  primaryExporterIso2: string;
+  primaryExporterShare: number;
+  primaryChokepointId: string;
+  primaryChokepointExposure: number;
+  hasViableBypass: boolean;
+  fetchedAt: string;
+}
+
+export interface GetRouteExplorerLaneRequest {
+  fromIso2: string;
+  toIso2: string;
+  hs2: string;
+  cargoType: string;
+}
+
+export interface GetRouteExplorerLaneResponse {
+  fromIso2: string;
+  toIso2: string;
+  hs2: string;
+  cargoType: string;
+  primaryRouteId: string;
+  primaryRouteGeometry: GeoPoint[];
+  chokepointExposures: ChokepointExposureSummary[];
+  bypassOptions: BypassCorridorOption[];
+  warRiskTier: string;
+  disruptionScore: number;
+  estTransitDaysRange?: NumberRange;
+  estFreightUsdPerTeuRange?: NumberRange;
+  noModeledLane: boolean;
+  fetchedAt: string;
+}
+
+export interface GeoPoint {
+  lon: number;
+  lat: number;
+}
+
+export interface ChokepointExposureSummary {
+  chokepointId: string;
+  chokepointName: string;
+  exposurePct: number;
+}
+
+export interface BypassCorridorOption {
+  id: string;
+  name: string;
+  type: string;
+  addedTransitDays: number;
+  addedCostMultiplier: number;
+  warRiskTier: string;
+  status: CorridorStatus;
+  fromPort?: GeoPoint;
+  toPort?: GeoPoint;
+}
+
+export interface NumberRange {
+  min: number;
+  max: number;
+}
+
+export interface GetRouteImpactRequest {
+  fromIso2: string;
+  toIso2: string;
+  hs2: string;
+}
+
+export interface GetRouteImpactResponse {
+  laneValueUsd: number;
+  primaryExporterIso2: string;
+  primaryExporterShare: number;
+  topStrategicProducts: StrategicProduct[];
+  resilienceScore: number;
+  dependencyFlags: DependencyFlag[];
+  hs2InSeededUniverse: boolean;
+  comtradeSource: string;
+  fetchedAt: string;
+}
+
+export interface StrategicProduct {
+  hs4: string;
+  label: string;
+  totalValueUsd: number;
+  topExporterIso2: string;
+  topExporterShare: number;
+  primaryChokepointId: string;
+}
+
+export type CorridorStatus = "CORRIDOR_STATUS_UNSPECIFIED" | "CORRIDOR_STATUS_ACTIVE" | "CORRIDOR_STATUS_PROPOSED" | "CORRIDOR_STATUS_UNAVAILABLE";
+
+export type DependencyFlag = "DEPENDENCY_FLAG_UNSPECIFIED" | "DEPENDENCY_FLAG_SINGLE_SOURCE_CRITICAL" | "DEPENDENCY_FLAG_SINGLE_CORRIDOR_CRITICAL" | "DEPENDENCY_FLAG_COMPOUND_RISK" | "DEPENDENCY_FLAG_DIVERSIFIABLE";
+
+export type WarRiskTier = "WAR_RISK_TIER_UNSPECIFIED" | "WAR_RISK_TIER_NORMAL" | "WAR_RISK_TIER_ELEVATED" | "WAR_RISK_TIER_HIGH" | "WAR_RISK_TIER_CRITICAL" | "WAR_RISK_TIER_WAR_ZONE";
 
 export interface FieldViolation {
   field: string;
@@ -292,6 +467,167 @@ export class SupplyChainServiceClient {
     }
 
     return await resp.json() as GetShippingStressResponse;
+  }
+
+  async getCountryChokepointIndex(req: GetCountryChokepointIndexRequest, options?: SupplyChainServiceCallOptions): Promise<GetCountryChokepointIndexResponse> {
+    let path = "/api/supply-chain/v1/get-country-chokepoint-index";
+    const params = new URLSearchParams();
+    if (req.iso2 != null && req.iso2 !== "") params.set("iso2", String(req.iso2));
+    if (req.hs2 != null && req.hs2 !== "") params.set("hs2", String(req.hs2));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetCountryChokepointIndexResponse;
+  }
+
+  async getBypassOptions(req: GetBypassOptionsRequest, options?: SupplyChainServiceCallOptions): Promise<GetBypassOptionsResponse> {
+    let path = "/api/supply-chain/v1/get-bypass-options";
+    const params = new URLSearchParams();
+    if (req.chokepointId != null && req.chokepointId !== "") params.set("chokepointId", String(req.chokepointId));
+    if (req.cargoType != null && req.cargoType !== "") params.set("cargoType", String(req.cargoType));
+    if (req.closurePct != null && req.closurePct !== 0) params.set("closurePct", String(req.closurePct));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetBypassOptionsResponse;
+  }
+
+  async getCountryCostShock(req: GetCountryCostShockRequest, options?: SupplyChainServiceCallOptions): Promise<GetCountryCostShockResponse> {
+    let path = "/api/supply-chain/v1/get-country-cost-shock";
+    const params = new URLSearchParams();
+    if (req.iso2 != null && req.iso2 !== "") params.set("iso2", String(req.iso2));
+    if (req.chokepointId != null && req.chokepointId !== "") params.set("chokepointId", String(req.chokepointId));
+    if (req.hs2 != null && req.hs2 !== "") params.set("hs2", String(req.hs2));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetCountryCostShockResponse;
+  }
+
+  async getSectorDependency(req: GetSectorDependencyRequest, options?: SupplyChainServiceCallOptions): Promise<GetSectorDependencyResponse> {
+    let path = "/api/supply-chain/v1/get-sector-dependency";
+    const params = new URLSearchParams();
+    if (req.iso2 != null && req.iso2 !== "") params.set("iso2", String(req.iso2));
+    if (req.hs2 != null && req.hs2 !== "") params.set("hs2", String(req.hs2));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetSectorDependencyResponse;
+  }
+
+  async getRouteExplorerLane(req: GetRouteExplorerLaneRequest, options?: SupplyChainServiceCallOptions): Promise<GetRouteExplorerLaneResponse> {
+    let path = "/api/supply-chain/v1/get-route-explorer-lane";
+    const params = new URLSearchParams();
+    if (req.fromIso2 != null && req.fromIso2 !== "") params.set("fromIso2", String(req.fromIso2));
+    if (req.toIso2 != null && req.toIso2 !== "") params.set("toIso2", String(req.toIso2));
+    if (req.hs2 != null && req.hs2 !== "") params.set("hs2", String(req.hs2));
+    if (req.cargoType != null && req.cargoType !== "") params.set("cargoType", String(req.cargoType));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetRouteExplorerLaneResponse;
+  }
+
+  async getRouteImpact(req: GetRouteImpactRequest, options?: SupplyChainServiceCallOptions): Promise<GetRouteImpactResponse> {
+    let path = "/api/supply-chain/v1/get-route-impact";
+    const params = new URLSearchParams();
+    if (req.fromIso2 != null && req.fromIso2 !== "") params.set("fromIso2", String(req.fromIso2));
+    if (req.toIso2 != null && req.toIso2 !== "") params.set("toIso2", String(req.toIso2));
+    if (req.hs2 != null && req.hs2 !== "") params.set("hs2", String(req.hs2));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetRouteImpactResponse;
   }
 
   private async handleError(resp: Response): Promise<never> {

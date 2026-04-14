@@ -282,6 +282,11 @@ export default async function handler(req) {
     return jsonResponse({ error: emailCheck.reason }, 400, cors);
   }
 
+  const emailCheck = await validateEmail(email);
+  if (!emailCheck.valid) {
+    return jsonResponse({ error: emailCheck.reason }, 400, cors);
+  }
+
   const safeSource = typeof source === 'string'
     ? source.slice(0, MAX_META_LENGTH)
     : 'unknown';

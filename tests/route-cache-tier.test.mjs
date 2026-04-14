@@ -84,4 +84,14 @@ describe('RPC_CACHE_TIER route parity', () => {
       'Gateway still has medium default fallback — ensure all routes are explicit',
     );
   });
+
+  it('slow tier includes public s-maxage for CF edge caching, slow-browser does not', () => {
+    const gatewaySrc = readFileSync(join(root, 'server', 'gateway.ts'), 'utf-8');
+    const slowLine = gatewaySrc.match(/^\s+slow: '.*'/m)?.[0] ?? '';
+    assert.ok(slowLine.includes('public'), 'slow tier must include public for CF caching');
+    assert.ok(slowLine.includes('s-maxage'), 'slow tier must include s-maxage for CF edge TTL');
+    const slowBrowserLine = gatewaySrc.match(/^\s+'slow-browser': '.*'/m)?.[0] ?? '';
+    assert.ok(!slowBrowserLine.includes('public'), 'slow-browser tier must NOT include public');
+    assert.ok(!slowBrowserLine.includes('s-maxage'), 'slow-browser tier must NOT include s-maxage');
+  });
 });

@@ -195,7 +195,7 @@ function buildStaticRecord(descriptor: CountryDescriptor) {
       },
     },
     gpi: { score: round(clamp(4.1 - quality * 0.03, 1.2, 4.2), 2), rank: Math.round(190 - quality * 1.5), year: 2025 },
-    rsf: { score: round(clamp(8 + quality * 0.92, 10, 95), 1), rank: Math.round(180 - quality * 1.6), year: 2025 },
+    rsf: { score: round(clamp(97 - quality, 5, 90), 1), rank: Math.round(180 - quality * 1.6), year: 2025 },
     who: {
       indicators: {
         hospitalBeds: { value: round(clamp(0.2 + quality * 0.045, 0.3, 8), 1), year: 2024 },
@@ -408,6 +408,46 @@ export function buildReleaseGateFixtures(): ReleaseGateFixtureMap {
   fixtures[`displacement:summary:v1:${new Date().getFullYear()}`] = { summary: { countries: displacementCountries } };
   fixtures['intelligence:social:reddit:v1'] = { posts: socialPosts };
   fixtures['news:threat:summary:v1'] = threatSummary;
+
+  const recoveryFiscalCountries: Record<string, Record<string, unknown>> = {};
+  const recoveryReserveCountries: Record<string, Record<string, unknown>> = {};
+  const recoveryDebtCountries: Record<string, Record<string, unknown>> = {};
+  const recoveryImportCountries: Record<string, Record<string, unknown>> = {};
+  const recoveryFuelCountries: Record<string, Record<string, unknown>> = {};
+
+  for (const descriptor of descriptors) {
+    const quality = qualityFor(descriptor.profile);
+    recoveryFiscalCountries[descriptor.code] = {
+      govRevenuePct: round(clamp(quality * 0.4 + 5, 5, 45), 1),
+      fiscalBalancePct: round(clamp(quality * 0.2 - 12, -15, 5), 1),
+      debtToGdpPct: round(clamp(200 - quality * 1.7, 15, 180), 1),
+      year: 2025,
+    };
+    recoveryReserveCountries[descriptor.code] = {
+      reserveMonths: round(clamp(quality * 0.16 + 0.5, 0.5, 18), 1),
+      year: 2024,
+    };
+    recoveryDebtCountries[descriptor.code] = {
+      debtToReservesRatio: round(clamp(5 - quality * 0.045, 0.1, 5), 3),
+      year: 2024,
+    };
+    recoveryImportCountries[descriptor.code] = {
+      hhi: Math.round(clamp(5500 - quality * 50, 100, 5000)),
+      year: 2024,
+    };
+    if (quality > 60) {
+      recoveryFuelCountries[descriptor.code] = {
+        stockDays: Math.round(clamp(quality * 1.1 + 10, 20, 120)),
+        year: 2025,
+      };
+    }
+  }
+
+  fixtures['resilience:recovery:fiscal-space:v1'] = { countries: recoveryFiscalCountries, seededAt: '2026-04-04T00:00:00.000Z' };
+  fixtures['resilience:recovery:reserve-adequacy:v1'] = { countries: recoveryReserveCountries, seededAt: '2026-04-04T00:00:00.000Z' };
+  fixtures['resilience:recovery:external-debt:v1'] = { countries: recoveryDebtCountries, seededAt: '2026-04-04T00:00:00.000Z' };
+  fixtures['resilience:recovery:import-hhi:v1'] = { countries: recoveryImportCountries, seededAt: '2026-04-04T00:00:00.000Z' };
+  fixtures['resilience:recovery:fuel-stocks:v1'] = { countries: recoveryFuelCountries, seededAt: '2026-04-04T00:00:00.000Z' };
 
   return fixtures;
 }

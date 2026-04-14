@@ -14,6 +14,7 @@ import {
   getChannelsData,
   createPairingToken,
   setEmailChannel,
+  setWebhookChannel,
   startSlackOAuth,
   startDiscordOAuth,
   deleteChannel,
@@ -26,7 +27,18 @@ import {
   type DigestMode,
 } from '@/services/notification-channels';
 import { getCurrentClerkUser } from '@/services/clerk';
+import { hasTier } from '@/services/entitlements';
 import { SITE_VARIANT } from '@/config/variant';
+import { getSyncState, getLastSyncAt, syncNow, isCloudSyncEnabled } from '@/utils/cloud-prefs-sync';
+
+const SYNC_STATE_LABELS: Record<string, string> = {
+  synced: 'Synced', pending: 'Pending', syncing: 'Syncing\u2026',
+  conflict: 'Conflict', offline: 'Offline', 'signed-out': 'Signed out', error: 'Error',
+};
+const SYNC_STATE_COLORS: Record<string, string> = {
+  synced: 'var(--color-ok, #34d399)', pending: 'var(--color-warn, #fbbf24)', syncing: 'var(--color-warn, #fbbf24)',
+  conflict: 'var(--color-error, #f87171)', offline: 'var(--text-faint, #888)', 'signed-out': 'var(--text-faint, #888)', error: 'var(--color-error, #f87171)',
+};
 // When VITE_QUIET_HOURS_BATCH_ENABLED=0 the relay does not honour batch_on_wake.
 // Hide that option so users cannot select a mode that silently behaves as critical_only.
 const QUIET_HOURS_BATCH_ENABLED = import.meta.env.VITE_QUIET_HOURS_BATCH_ENABLED !== '0';
@@ -78,6 +90,20 @@ function renderMapThemeDropdown(container: HTMLElement, provider: MapProvider): 
   select.innerHTML = MAP_THEME_OPTIONS[provider]
     .map(opt => `<option value="${opt.value}"${opt.value === currentTheme ? ' selected' : ''}>${escapeHtml(opt.label)}</option>`)
     .join('');
+}
+
+function updateSyncStatusUI(container: HTMLElement): void {
+  const dot = container.querySelector<HTMLElement>('#usSyncDot');
+  const label = container.querySelector<HTMLElement>('#usSyncLabel');
+  const time = container.querySelector<HTMLElement>('#usSyncTime');
+  if (!dot || !label || !time) return;
+
+  const state = getSyncState();
+  const lastSync = getLastSyncAt();
+
+  dot.style.background = (SYNC_STATE_COLORS[state] ?? SYNC_STATE_COLORS.error) as string;
+  label.textContent = SYNC_STATE_LABELS[state] ?? 'Unknown';
+  time.textContent = `Last synced: ${lastSync ? new Date(lastSync).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : 'Never'}`;
 }
 
 function updateAiStatus(container: HTMLElement): void {
@@ -338,6 +364,28 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
   html += toggleRowHtml('us-badge-anim', t('components.insights.badgeAnimLabel'), t('components.insights.badgeAnimDesc'), settings.badgeAnimation);
   html += `</div></details>`;
 
+  // ── Cloud Sync group (web-only, signed-in, feature flag on) ──
+  if (!host.isDesktopApp && host.isSignedIn && isCloudSyncEnabled()) {
+    const syncState = getSyncState();
+    const lastSync = getLastSyncAt();
+    const lastSyncStr = lastSync
+      ? new Date(lastSync).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+      : 'Never';
+
+    html += `<details class="wm-pref-group">`;
+    html += `<summary>Cloud Sync</summary>`;
+    html += `<div class="wm-pref-group-content">`;
+    html += `<div class="wm-sync-status-row">
+      <div class="wm-sync-status-info">
+        <span class="wm-sync-status-dot" id="usSyncDot" style="background:${SYNC_STATE_COLORS[syncState] ?? SYNC_STATE_COLORS.error}"></span>
+        <span class="wm-sync-status-label" id="usSyncLabel">${SYNC_STATE_LABELS[syncState] ?? 'Unknown'}</span>
+        <span class="wm-sync-status-time" id="usSyncTime">Last synced: ${escapeHtml(lastSyncStr)}</span>
+      </div>
+      <button type="button" class="settings-btn settings-btn-secondary wm-sync-now-btn" id="usSyncNowBtn">Sync now</button>
+    </div>`;
+    html += `</div></details>`;
+  }
+
   // ── Data & Community group ──
   html += `<details class="wm-pref-group">`;
   html += `<summary>${t('preferences.dataAndCommunity')}</summary>`;
@@ -356,16 +404,23 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
   </a>`;
   html += `</div></details>`;
 
-  // ── Notifications group (web-only, signed-in) ──
+  // ── Notifications group (web-only) ──
+  // Three states: (a) confirmed PRO → full UI, (b) everything else → locked [PRO] section.
+  // When entitlements haven't loaded yet (null), show locked to avoid flashing full UI to free users.
   if (!host.isDesktopApp) {
-    if (!host.isSignedIn) {
-      html += `<div class="ai-flow-toggle-desc us-notif-signin">Sign in to link notification channels.</div>`;
-    } else {
+    if (host.isSignedIn && hasTier(1)) {
       html += `<details class="wm-pref-group" id="usNotifGroup">`;
       html += `<summary>Notifications</summary>`;
       html += `<div class="wm-pref-group-content">`;
       html += `<div class="us-notif-loading" id="usNotifLoading">Loading...</div>`;
       html += `<div class="us-notif-content" id="usNotifContent" style="display:none"></div>`;
+      html += `</div></details>`;
+    } else {
+      html += `<details class="wm-pref-group">`;
+      html += `<summary>Notifications <span class="panel-toggle-pro-badge">PRO</span></summary>`;
+      html += `<div class="wm-pref-group-content">`;
+      html += `<div class="ai-flow-toggle-desc">Get real-time intelligence alerts delivered to Telegram, Slack, Discord, and Email with configurable sensitivity, quiet hours, and digest scheduling.</div>`;
+      html += `<button type="button" class="panel-locked-cta" id="usNotifUpgradeBtn">Upgrade to Pro</button>`;
       html += `</div></details>`;
     }
   }
@@ -618,8 +673,43 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
 
       if (!host.isDesktopApp) updateAiStatus(container);
 
-      // ── Notifications section ──
-      if (!host.isDesktopApp && host.isSignedIn) {
+      // ── Cloud Sync: wire "Sync now" button + live state updates ──
+      if (!host.isDesktopApp && host.isSignedIn && isCloudSyncEnabled()) {
+        const syncBtn = container.querySelector<HTMLButtonElement>('#usSyncNowBtn');
+        if (syncBtn) {
+          syncBtn.addEventListener('click', () => {
+            syncBtn.disabled = true;
+            syncBtn.textContent = 'Syncing\u2026';
+            syncNow().finally(() => {
+              syncBtn.disabled = false;
+              syncBtn.textContent = 'Sync now';
+              updateSyncStatusUI(container);
+            });
+          }, { signal });
+        }
+        const syncPollId = setInterval(() => updateSyncStatusUI(container), 2000);
+        signal.addEventListener('abort', () => clearInterval(syncPollId));
+      }
+
+      // ── Notifications section: locked [PRO] upgrade button ──
+      if (!host.isDesktopApp && !(host.isSignedIn && hasTier(1))) {
+        const upgradeBtn = container.querySelector<HTMLButtonElement>('#usNotifUpgradeBtn');
+        if (upgradeBtn) {
+          upgradeBtn.addEventListener('click', () => {
+            if (!host.isSignedIn) {
+              import('@/services/clerk').then(m => m.openSignIn()).catch(() => {
+                window.open('https://worldmonitor.app/pro', '_blank');
+              });
+              return;
+            }
+            import('@/services/checkout').then(m => import('@/config/products').then(p => m.startCheckout(p.DEFAULT_UPGRADE_PRODUCT))).catch(() => {
+              window.open('https://worldmonitor.app/pro', '_blank');
+            });
+          }, { signal });
+        }
+      }
+      // ── Notifications section: full PRO UI ──
+      if (!host.isDesktopApp && host.isSignedIn && hasTier(1)) {
         let notifPollInterval: ReturnType<typeof setInterval> | null = null;
 
         function clearNotifPoll(): void {
@@ -634,11 +724,12 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
         function channelIcon(type: ChannelType): string {
           if (type === 'telegram') return `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`;
           if (type === 'email') return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>`;
+          if (type === 'webhook') return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
           if (type === 'discord') return `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>`;
           return `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg>`;
         }
 
-        const CHANNEL_LABELS: Record<ChannelType, string> = { telegram: 'Telegram', email: 'Email', slack: 'Slack', discord: 'Discord' };
+        const CHANNEL_LABELS: Record<ChannelType, string> = { telegram: 'Telegram', email: 'Email', slack: 'Slack', discord: 'Discord', webhook: 'Webhook' };
 
         function renderChannelRow(channel: NotificationChannel | null, type: ChannelType): string {
           const icon = channelIcon(type);
@@ -653,6 +744,8 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
               sub = escapeHtml(channel.email ?? 'connected');
             } else if (type === 'discord') {
               sub = 'Connected';
+            } else if (type === 'webhook') {
+              sub = channel.webhookLabel ? escapeHtml(channel.webhookLabel) : 'Connected';
             } else {
               // Slack: show #channel · team from OAuth metadata
               const rawCh = channel.slackChannelName ?? '';
@@ -735,13 +828,26 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
             </div>`;
           }
 
+          if (type === 'webhook') {
+            return `<div class="us-notif-ch-row" data-channel-type="webhook">
+              <div class="us-notif-ch-icon">${icon}</div>
+              <div class="us-notif-ch-body">
+                <div class="us-notif-ch-name">${name}</div>
+                <div class="us-notif-ch-sub">Send structured JSON to any HTTPS endpoint</div>
+              </div>
+              <div class="us-notif-ch-actions">
+                <button type="button" class="us-notif-ch-btn us-notif-ch-btn-primary" id="usConnectWebhook">Add URL</button>
+              </div>
+            </div>`;
+          }
+
           return '';
         }
 
         const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
         function renderNotifContent(data: Awaited<ReturnType<typeof getChannelsData>>): string {
-          const channelTypes: ChannelType[] = ['telegram', 'email', 'slack', 'discord'];
+          const channelTypes: ChannelType[] = ['telegram', 'email', 'slack', 'discord', 'webhook'];
           const alertRule = data.alertRules?.[0] ?? null;
           const sensitivity = alertRule?.sensitivity ?? 'all';
 
@@ -758,6 +864,7 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
 
           const digestMode = alertRule?.digestMode ?? 'realtime';
           const digestHour = alertRule?.digestHour ?? 8;
+          const aiDigestEnabled = alertRule?.aiDigestEnabled ?? true;
 
           const hourOptions = Array.from({ length: 24 }, (_, h) => {
             const label = h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`;
@@ -865,6 +972,17 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
                 </div>
                 <select class="unified-settings-select" id="usDigestHour" style="width:auto">${hourOptionsDigest}</select>
               </div>
+              <div id="usTwiceDailyHint" class="ai-flow-toggle-desc" style="margin-top:4px;${digestMode === 'twice_daily' ? '' : 'display:none'}">Also sends at ${((digestHour + 12) % 24) === 0 ? '12 AM' : ((digestHour + 12) % 24) < 12 ? `${(digestHour + 12) % 24} AM` : ((digestHour + 12) % 24) === 12 ? '12 PM' : `${((digestHour + 12) % 24) - 12} PM`}</div>
+              <div class="ai-flow-toggle-row" style="margin-top:8px">
+                <div class="ai-flow-toggle-label-wrap">
+                  <div class="ai-flow-toggle-label">AI executive summary</div>
+                  <div class="ai-flow-toggle-desc">Prepend a personalized intelligence brief tailored to your watchlist and interests</div>
+                </div>
+                <label class="ai-flow-switch">
+                  <input type="checkbox" id="usAiDigestEnabled"${aiDigestEnabled ? ' checked' : ''}>
+                  <span class="ai-flow-slider"></span>
+                </label>
+              </div>
             </div>
             <div class="ai-flow-section-label" style="margin-top:8px">Timezone</div>
             <select class="unified-settings-select" id="usSharedTimezone" style="width:100%">${makeTzOptions(sharedTz)}</select>`;
@@ -904,7 +1022,8 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
             .filter(el => el.classList.contains('us-notif-ch-on'))
             .map(el => el.dataset.channelType as ChannelType);
           const channels = [...new Set([...existing, newChannel])];
-          void saveAlertRules({ variant: SITE_VARIANT, enabled, eventTypes: [], sensitivity, channels });
+          const aiEl = container.querySelector<HTMLInputElement>('#usAiDigestEnabled');
+          void saveAlertRules({ variant: SITE_VARIANT, enabled, eventTypes: [], sensitivity, channels, aiDigestEnabled: aiEl?.checked ?? true });
         }
 
         let slackOAuthPopup: Window | null = null;
@@ -977,8 +1096,10 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
             const isRt = target.value === 'realtime';
             const realtimeSection = container.querySelector<HTMLElement>('#usRealtimeSection');
             const digestDetails = container.querySelector<HTMLElement>('#usDigestDetails');
+            const twiceHint = container.querySelector<HTMLElement>('#usTwiceDailyHint');
             if (realtimeSection) realtimeSection.style.display = isRt ? '' : 'none';
             if (digestDetails) digestDetails.style.display = isRt ? 'none' : '';
+            if (twiceHint) twiceHint.style.display = target.value === 'twice_daily' ? '' : 'none';
             saveDigestSettings();
             // Switching to digest mode: auto-enable the alert rule so the
             // backend schedules digests. The enable toggle is hidden in
@@ -993,6 +1114,11 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
             return;
           }
           if (target.id === 'usDigestHour') {
+            const twiceHint = container.querySelector<HTMLElement>('#usTwiceDailyHint');
+            if (twiceHint) {
+              const h = (Number(target.value) + 12) % 24;
+              twiceHint.textContent = `Also sends at ${h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`}`;
+            }
             saveDigestSettings();
             return;
           }
@@ -1001,7 +1127,7 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
             saveDigestSettings();
             return;
           }
-          if (target.id === 'usNotifEnabled' || target.id === 'usNotifSensitivity') {
+          if (target.id === 'usAiDigestEnabled') {
             if (alertRuleDebounceTimer) clearTimeout(alertRuleDebounceTimer);
             alertRuleDebounceTimer = setTimeout(() => {
               const enabledEl = container.querySelector<HTMLInputElement>('#usNotifEnabled');
@@ -1019,6 +1145,31 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
                 eventTypes: [],
                 sensitivity,
                 channels: connectedChannelTypes,
+                aiDigestEnabled: target.checked,
+              });
+            }, 500);
+            return;
+          }
+          if (target.id === 'usNotifEnabled' || target.id === 'usNotifSensitivity') {
+            if (alertRuleDebounceTimer) clearTimeout(alertRuleDebounceTimer);
+            alertRuleDebounceTimer = setTimeout(() => {
+              const enabledEl = container.querySelector<HTMLInputElement>('#usNotifEnabled');
+              const sensitivityEl = container.querySelector<HTMLSelectElement>('#usNotifSensitivity');
+              const enabled = enabledEl?.checked ?? false;
+              const sensitivity = (sensitivityEl?.value ?? 'all') as 'all' | 'high' | 'critical';
+              const connectedChannelTypes = Array.from(
+                container.querySelectorAll<HTMLElement>('[data-channel-type]'),
+              )
+                .filter(el => el.classList.contains('us-notif-ch-on'))
+                .map(el => el.dataset.channelType as ChannelType);
+              const aiDigestEl = container.querySelector<HTMLInputElement>('#usAiDigestEnabled');
+              void saveAlertRules({
+                variant: SITE_VARIANT,
+                enabled,
+                eventTypes: [],
+                sensitivity,
+                channels: connectedChannelTypes,
+                aiDigestEnabled: aiDigestEl?.checked ?? true,
               });
             }, 1000);
           }
@@ -1193,6 +1344,44 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
             }).catch(() => {
               if (btn && !signal.aborted) btn.textContent = 'Connect Discord';
             });
+            return;
+          }
+
+          if (target.closest('#usConnectWebhook')) {
+            const rowEl = target.closest<HTMLElement>('[data-channel-type="webhook"]');
+            if (!rowEl) return;
+            rowEl.querySelector('.us-notif-ch-actions')!.innerHTML = `
+              <div style="display:flex;flex-direction:column;gap:6px;width:100%">
+                <input type="url" id="usWebhookUrl" placeholder="https://hooks.example.com/..." class="unified-settings-input" style="font-size:12px;width:100%">
+                <input type="text" id="usWebhookLabel" placeholder="Label (optional)" class="unified-settings-input" style="font-size:12px;width:100%">
+                <div style="display:flex;gap:6px">
+                  <button type="button" class="us-notif-ch-btn us-notif-ch-btn-primary" id="usWebhookSave">Save</button>
+                  <button type="button" class="us-notif-ch-btn" id="usWebhookCancel">Cancel</button>
+                </div>
+              </div>`;
+            const urlInput = rowEl.querySelector<HTMLInputElement>('#usWebhookUrl');
+            urlInput?.focus();
+            return;
+          }
+          if (target.closest('#usWebhookSave')) {
+            const urlInput = container.querySelector<HTMLInputElement>('#usWebhookUrl');
+            const labelInput = container.querySelector<HTMLInputElement>('#usWebhookLabel');
+            const url = urlInput?.value?.trim() ?? '';
+            if (!url || !url.startsWith('https://')) {
+              urlInput?.classList.add('us-notif-input-error');
+              return;
+            }
+            const saveBtn = target.closest<HTMLButtonElement>('#usWebhookSave');
+            if (saveBtn) saveBtn.textContent = 'Saving...';
+            setWebhookChannel(url, labelInput?.value?.trim() || undefined).then(() => {
+              if (!signal.aborted) { saveRuleWithNewChannel('webhook'); reloadNotifSection(); }
+            }).catch(() => {
+              if (saveBtn && !signal.aborted) saveBtn.textContent = 'Save';
+            });
+            return;
+          }
+          if (target.closest('#usWebhookCancel')) {
+            reloadNotifSection();
             return;
           }
 

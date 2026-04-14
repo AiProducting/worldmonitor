@@ -5,13 +5,22 @@ import type {
   GetCriticalMineralsResponse,
   GetShippingStressResponse,
 } from '@/services/supply-chain';
+import { fetchBypassOptions } from '@/services/supply-chain';
+import type { ScenarioResult } from '@/config/scenario-templates';
+import { SCENARIO_TEMPLATES } from '@/config/scenario-templates';
 import { TransitChart } from '@/utils/transit-chart';
 import { t } from '@/services/i18n';
 import { escapeHtml } from '@/utils/sanitize';
 import { isFeatureAvailable } from '@/services/runtime-config';
 import { isDesktopRuntime } from '@/services/runtime';
+import { getAuthState, subscribeAuthState } from '@/services/auth-state';
+import { hasPremiumAccess } from '@/services/panel-gating';
+import { trackGateHit } from '@/services/analytics';
+import { premiumFetch } from '@/services/premium-fetch';
 
 type TabId = 'chokepoints' | 'shipping' | 'indicators' | 'minerals' | 'stress';
+
+const FLOW_SUPPORTED_IDS = new Set(['hormuz_strait', 'malacca_strait', 'suez', 'bab_el_mandeb']);
 
 export class SupplyChainPanel extends Panel {
   private shippingData: GetShippingRatesResponse | null = null;
@@ -22,6 +31,13 @@ export class SupplyChainPanel extends Panel {
   private expandedChokepoint: string | null = null;
   private transitChart = new TransitChart();
   private chartObserver: MutationObserver | null = null;
+  private chartMountTimer: ReturnType<typeof setTimeout> | null = null;
+  private bypassUnsubscribe: (() => void) | null = null;
+  private bypassGateTracked = false;
+  private onDismissScenario: (() => void) | null = null;
+  private onScenarioActivate: ((scenarioId: string, result: ScenarioResult) => void) | null = null;
+  private activeScenarioState: { scenarioId: string; result: ScenarioResult } | null = null;
+  private scenarioPollController: AbortController | null = null;
 
   constructor() {
     super({ id: 'supply-chain', title: t('panels.supplyChain'), defaultRowSpan: 2, infoTooltip: t('components.supplyChain.infoTooltip') });
@@ -34,6 +50,13 @@ export class SupplyChainPanel extends Panel {
           this.activeTab = tabId;
           this.render();
         }
+        return;
+      }
+      const scenarioTrigger = (e.target as HTMLElement).closest('.sc-scenario-trigger') as HTMLElement | null;
+      if (scenarioTrigger) {
+        e.stopPropagation();
+        const btn = scenarioTrigger.querySelector<HTMLButtonElement>('.sc-scenario-btn');
+        if (btn && !btn.disabled) void this.runScenario(scenarioTrigger, btn);
         return;
       }
       const card = (e.target as HTMLElement).closest('.trade-restriction-card') as HTMLElement | null;
@@ -49,6 +72,8 @@ export class SupplyChainPanel extends Panel {
   private clearTransitChart(): void {
     if (this.chartObserver) { this.chartObserver.disconnect(); this.chartObserver = null; }
     this.transitChart.destroy();
+    if (this.bypassUnsubscribe) { this.bypassUnsubscribe(); this.bypassUnsubscribe = null; }
+    this.bypassGateTracked = false;
   }
 
   public updateShippingRates(data: GetShippingRatesResponse): void {
@@ -123,18 +148,127 @@ export class SupplyChainPanel extends Panel {
     `);
 
     if (this.activeTab === 'chokepoints' && this.expandedChokepoint) {
-      this.chartObserver = new MutationObserver(() => {
-        this.chartObserver?.disconnect();
-        this.chartObserver = null;
-        const el = this.content.querySelector(`[data-chart-cp="${this.expandedChokepoint}"]`) as HTMLElement | null;
-        if (!el) return;
-        const cp = this.chokepointData?.chokepoints?.find(c => c.name === this.expandedChokepoint);
+      const expandedCpName = this.expandedChokepoint;
+      const cp = this.chokepointData?.chokepoints?.find(c => c.name === expandedCpName);
+
+      const mountTransitChart = (): boolean => {
+        const el = this.content.querySelector(`[data-chart-cp="${expandedCpName}"]`) as HTMLElement | null;
+        if (!el) return false;
         if (cp?.transitSummary?.history?.length) {
           this.transitChart.mount(el, cp.transitSummary.history);
         }
+        return true;
+      };
+
+      const mountBypassOptions = (): boolean => {
+        const bypassEl = this.content.querySelector(`[data-bypass-cp="${cp?.id ?? ''}"]`) as HTMLElement | null;
+        if (!bypassEl) return false;
+        this.renderBypassSection(bypassEl, cp?.id ?? '');
+        return true;
+      };
+
+      // Use the bypass element as the "card is in DOM" sentinel — it is always rendered for
+      // expanded cards, unlike the chart placeholder which is conditional on transit history.
+      const mountAfterRender = (): boolean => {
+        if (!mountBypassOptions()) return false;
+        mountTransitChart();
+        return true;
+      };
+
+      this.chartObserver = new MutationObserver(() => {
+        if (!mountAfterRender()) return;
+        if (this.chartMountTimer) { clearTimeout(this.chartMountTimer); this.chartMountTimer = null; }
+        this.chartObserver?.disconnect();
+        this.chartObserver = null;
       });
       this.chartObserver.observe(this.content, { childList: true, subtree: true });
+
+      // Fallback for no-op renders where setContent short-circuits and no mutation fires.
+      this.chartMountTimer = setTimeout(() => {
+        if (!mountAfterRender()) return;
+        if (this.chartObserver) { this.chartObserver.disconnect(); this.chartObserver = null; }
+        this.chartMountTimer = null;
+      }, 220);
     }
+
+    // Re-insert scenario banner after setContent replaces inner content.
+    if (this.activeScenarioState) {
+      this.showScenarioSummary(this.activeScenarioState.scenarioId, this.activeScenarioState.result);
+    }
+  }
+
+  private renderBypassSection(container: HTMLElement, chokepointId: string): void {
+    if (!chokepointId) return;
+
+    const renderGate = (): string => {
+      return `<div class="sc-bypass-gate"><span class="sc-bypass-lock">\uD83D\uDD12</span><span class="sc-bypass-gate-text">Bypass corridors available with PRO</span></div>`;
+    };
+
+    const renderRows = (options: import('@/services/supply-chain').BypassOption[]): string => {
+      const top3 = options.slice(0, 3);
+      if (!top3.length) return `<div class="sc-bypass-error">No bypass options available</div>`;
+      const rows = top3.map(opt => {
+        const days = opt.addedTransitDays > 0 ? `+${opt.addedTransitDays}d` : '-';
+        const cost = opt.addedCostMultiplier > 1 ? `+${((opt.addedCostMultiplier - 1) * 100).toFixed(0)}%` : '-';
+        const riskTierMap: Record<string, string> = {
+          WAR_RISK_TIER_UNSPECIFIED: 'Normal',
+          WAR_RISK_TIER_WAR_ZONE: 'War Zone',
+          WAR_RISK_TIER_CRITICAL: 'Critical',
+          WAR_RISK_TIER_HIGH: 'High',
+          WAR_RISK_TIER_ELEVATED: 'Elevated',
+          WAR_RISK_TIER_NORMAL: 'Normal',
+        };
+        const risk = riskTierMap[opt.bypassWarRiskTier] ?? opt.bypassWarRiskTier;
+        return `<tr><td>${escapeHtml(opt.name)}</td><td>${days}</td><td>${cost}</td><td>${escapeHtml(risk)}</td></tr>`;
+      }).join('');
+      return `<table class="sc-bypass-table">
+        <thead><tr><th>Corridor</th><th>+Days</th><th>+Cost</th><th>Risk</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    };
+
+    const applyAuthState = (isPro: boolean, bypassOptions?: import('@/services/supply-chain').BypassOption[]): void => {
+      if (!isPro) {
+        container.innerHTML = renderGate();
+        if (!this.bypassGateTracked) {
+          trackGateHit('bypass-corridors');
+          this.bypassGateTracked = true;
+        }
+        return;
+      }
+      if (bypassOptions !== undefined) {
+        container.innerHTML = renderRows(bypassOptions);
+      }
+    };
+
+    const isPro = hasPremiumAccess(getAuthState());
+    if (!isPro) {
+      applyAuthState(false);
+      if (this.bypassUnsubscribe) { this.bypassUnsubscribe(); }
+      this.bypassUnsubscribe = subscribeAuthState(state => {
+        if (hasPremiumAccess(state)) {
+          if (this.bypassUnsubscribe) { this.bypassUnsubscribe(); this.bypassUnsubscribe = null; }
+          if (!this.content.contains(container)) return;
+          container.innerHTML = `<div class="sc-bypass-loading">Loading bypass options\u2026</div>`;
+          void fetchBypassOptions(chokepointId, 'container', 100).then(resp => {
+            if (!this.content.contains(container)) return;
+            container.innerHTML = renderRows(resp.options);
+          }).catch(() => {
+            if (!this.content.contains(container)) return;
+            container.innerHTML = `<div class="sc-bypass-error">Bypass data unavailable</div>`;
+          });
+        }
+      });
+      return;
+    }
+
+    void fetchBypassOptions(chokepointId, 'container', 100).then(resp => {
+      if (!this.content.contains(container)) return;
+      applyAuthState(true, resp.options);
+    }).catch(() => {
+      if (!this.content.contains(container)) return;
+      container.innerHTML = `<div class="sc-bypass-error">Bypass data unavailable</div>`;
+    });
   }
 
   private renderChokepoints(): string {
@@ -158,6 +292,42 @@ export class SupplyChainPanel extends Panel {
         const chartPlaceholder = expanded && ts?.history?.length
           ? `<div data-chart-cp="${escapeHtml(cp.name)}" style="margin-top:8px;min-height:200px"></div>`
           : '';
+
+        const tier = cp.warRiskTier ?? 'WAR_RISK_TIER_NORMAL';
+        const tierLabel: Record<string, string> = {
+          WAR_RISK_TIER_WAR_ZONE: 'War Zone',
+          WAR_RISK_TIER_CRITICAL: 'Critical',
+          WAR_RISK_TIER_HIGH: 'High',
+          WAR_RISK_TIER_ELEVATED: 'Elevated',
+          WAR_RISK_TIER_NORMAL: 'Normal',
+        };
+        const tierClass: Record<string, string> = {
+          WAR_RISK_TIER_WAR_ZONE: 'war',
+          WAR_RISK_TIER_CRITICAL: 'critical',
+          WAR_RISK_TIER_HIGH: 'high',
+          WAR_RISK_TIER_ELEVATED: 'elevated',
+          WAR_RISK_TIER_NORMAL: 'normal',
+        };
+        const warRiskBadge = `<span class="sc-war-risk-badge sc-war-risk-badge--${tierClass[tier] ?? 'normal'}">${tierLabel[tier] ?? 'Normal'}</span>`;
+
+        const bypassSection = expanded
+          ? `<div class="sc-bypass-section" data-bypass-cp="${escapeHtml(cp.id)}"><div class="sc-bypass-heading">Bypass Options</div><div class="sc-bypass-loading">Loading bypass options\u2026</div></div>`
+          : '';
+
+        const scenarioSection = expanded ? (() => {
+          const template = SCENARIO_TEMPLATES.find(tmpl =>
+            tmpl.affectedChokepointIds.includes(cp.id) && tmpl.type !== 'tariff_shock'
+          );
+          if (!template) return '';
+          const isPro = hasPremiumAccess(getAuthState());
+          const btnClass = isPro ? 'sc-scenario-btn' : 'sc-scenario-btn sc-scenario-btn--gated';
+          return `<div class="sc-scenario-trigger" data-scenario-id="${escapeHtml(template.id)}" data-chokepoint-id="${escapeHtml(cp.id)}">
+            <button class="${btnClass}" ${!isPro ? 'data-gated="1"' : ''} aria-label="Simulate ${escapeHtml(template.name)}">
+              Simulate Closure
+            </button>
+          </div>`;
+        })() : '';
+
         return `<div class="trade-restriction-card${expanded ? ' expanded' : ''}" data-cp-id="${escapeHtml(cp.name)}" style="cursor:pointer">
           <div class="trade-restriction-header">
             <span class="trade-country">${escapeHtml(cp.name)}</span>
@@ -179,6 +349,7 @@ export class SupplyChainPanel extends Panel {
               <span>${t('components.supplyChain.riskLevel')}: <span class="${riskClass}">${escapeHtml(ts.riskLevel)}</span></span>
               <span>${ts.incidentCount7d} ${t('components.supplyChain.incidents7d')}</span>
             </div>` : ''}
+            <div class="sc-metric-row">${warRiskBadge}</div>
             ${cp.flowEstimate ? (() => {
               const fe = cp.flowEstimate;
               const pct = Math.round(fe.flowRatio * 100);
@@ -189,11 +360,15 @@ export class SupplyChainPanel extends Panel {
               return `<div class="sc-metric-row" style="color:${flowColor}">
                 <span>~${fe.currentMbd} mb/d <span style="opacity:0.7">(${pct}% of ${fe.baselineMbd} baseline)</span>${hazardBadge}</span>
               </div>`;
-            })() : ''}
+            })() : FLOW_SUPPORTED_IDS.has(cp.id) ? `<div class="sc-metric-row" style="color:var(--text-dim,#888);font-size:11px;opacity:0.7">
+                <span>${t('components.supplyChain.flowUnavailable')}</span>
+              </div>` : ''}
             ${cp.description ? `<div class="trade-description">${escapeHtml(cp.description)}</div>` : ''}
             <div class="trade-affected">${cp.affectedRoutes.slice(0, 3).map(r => escapeHtml(r)).join(', ')}</div>
             ${actionRow}
             ${chartPlaceholder}
+            ${bypassSection}
+            ${scenarioSection}
           </div>
         </div>`;
       }).join('')}
@@ -364,5 +539,86 @@ export class SupplyChainPanel extends Panel {
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+  }
+
+  // ─── Scenario banner ─────────────────────────────────────────────────────────
+
+  public showScenarioSummary(scenarioId: string, result: ScenarioResult): void {
+    this.activeScenarioState = { scenarioId, result };
+    this.content.querySelector('.sc-scenario-banner')?.remove();
+    const top5 = result.topImpactCountries.slice(0, 5);
+    const countriesHtml = top5.map(c =>
+      `<span class="sc-scenario-country">${escapeHtml(c.iso2)} <em>${(c.impactPct * 100).toFixed(0)}%</em></span>`
+    ).join(' \u00B7 ');
+    const banner = document.createElement('div');
+    banner.className = 'sc-scenario-banner';
+    const scenarioName = SCENARIO_TEMPLATES.find(tmpl => tmpl.id === scenarioId)?.name ?? scenarioId.replace(/-/g, ' ');
+    banner.innerHTML = `<span class="sc-scenario-icon">\u26A0</span><span class="sc-scenario-name">${escapeHtml(scenarioName)}</span><span class="sc-scenario-countries">${countriesHtml}</span><button class="sc-scenario-dismiss" aria-label="Dismiss scenario">\u00D7</button>`;
+    banner.querySelector('.sc-scenario-dismiss')!.addEventListener('click', () => this.onDismissScenario?.());
+    this.content.prepend(banner);
+  }
+
+  public hideScenarioSummary(): void {
+    this.activeScenarioState = null;
+    this.content.querySelector('.sc-scenario-banner')?.remove();
+    this.content.querySelectorAll<HTMLButtonElement>('.sc-scenario-btn').forEach(btn => {
+      btn.disabled = false;
+      btn.textContent = 'Simulate Closure';
+    });
+  }
+
+  public setOnDismissScenario(cb: () => void): void {
+    this.onDismissScenario = cb;
+  }
+
+  public setOnScenarioActivate(cb: (scenarioId: string, result: ScenarioResult) => void): void {
+    this.onScenarioActivate = cb;
+  }
+
+  private async runScenario(trigger: HTMLElement, btn: HTMLButtonElement): Promise<void> {
+    if (btn.dataset.gated === '1') {
+      trackGateHit('scenario-engine');
+      return;
+    }
+    this.scenarioPollController?.abort();
+    this.scenarioPollController = new AbortController();
+    const { signal } = this.scenarioPollController;
+
+    const scenarioId = trigger.dataset.scenarioId!;
+    btn.disabled = true;
+    btn.textContent = 'Computing\u2026';
+    try {
+      const runResp = await premiumFetch('/api/scenario/v1/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenarioId }),
+        signal,
+      });
+      if (!runResp.ok) throw new Error('Run failed');
+      const { jobId } = await runResp.json() as { jobId: string };
+      let result: ScenarioResult | null = null;
+      for (let i = 0; i < 30; i++) {
+        if (signal.aborted || !this.content.isConnected) return;
+        if (i > 0) await new Promise(r => setTimeout(r, 2000));
+        const statusResp = await premiumFetch(`/api/scenario/v1/status?jobId=${encodeURIComponent(jobId)}`, { signal });
+        if (!statusResp.ok) throw new Error(`Status poll failed: ${statusResp.status}`);
+        const status = await statusResp.json() as { status: string; result?: ScenarioResult };
+        if (status.status === 'done') {
+          const r = status.result;
+          if (!r || !Array.isArray(r.topImpactCountries)) throw new Error('done without valid result');
+          result = r;
+          break;
+        }
+        if (status.status === 'failed') throw new Error('Scenario failed');
+      }
+      if (!result) throw new Error('Timeout');
+      if (signal.aborted || !this.content.isConnected) return;
+      this.onScenarioActivate?.(scenarioId, result);
+      btn.textContent = 'Active';
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      btn.textContent = 'Error \u2014 retry';
+      btn.disabled = false;
+    }
   }
 }

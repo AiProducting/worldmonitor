@@ -80,6 +80,22 @@ describe('premium gateway API key enforcement', () => {
     }));
     assert.equal(resilienceRankingWithKey.status, 200);
 
+    const resilienceScoreWithKey = await handler(new Request('https://worldmonitor.app/api/resilience/v1/get-resilience-score?countryCode=US', {
+      headers: {
+        Origin: 'https://worldmonitor.app',
+        'X-WorldMonitor-Key': 'real-key-123',
+      },
+    }));
+    assert.equal(resilienceScoreWithKey.status, 200);
+
+    const resilienceRankingWithKey = await handler(new Request('https://worldmonitor.app/api/resilience/v1/get-resilience-ranking', {
+      headers: {
+        Origin: 'https://worldmonitor.app',
+        'X-WorldMonitor-Key': 'real-key-123',
+      },
+    }));
+    assert.equal(resilienceRankingWithKey.status, 200);
+
     // Unknown origin — blocked (403 from isDisallowedOrigin before key check)
     const unknownNoKey = await handler(new Request('https://external.example.com/api/market/v1/analyze-stock?symbol=AAPL', {
       headers: { Origin: 'https://external.example.com' },

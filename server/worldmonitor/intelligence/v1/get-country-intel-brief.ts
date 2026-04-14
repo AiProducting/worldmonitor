@@ -13,10 +13,6 @@ import { ENERGY_SPINE_KEY_PREFIX } from '../../../_shared/cache-keys';
 
 const INTEL_CACHE_TTL = 21600;
 
-// ========================================================================
-// RPC handler
-// ========================================================================
-
 export async function getCountryIntelBrief(
   ctx: ServerContext,
   req: GetCountryIntelBriefRequest,

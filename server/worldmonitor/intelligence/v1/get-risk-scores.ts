@@ -406,6 +406,20 @@ export function computeCIIScores(
     }
   }
 
+  // --- News threat summary (from relay seedClassify — all classified headlines) ---
+  if (aux.threatSummaryByCountry) {
+    const SUMMARY_WEIGHT: Record<string, number> = { critical: 4, high: 2, medium: 1, low: 0.5, info: 0 };
+    for (const [code, counts] of Object.entries(aux.threatSummaryByCountry)) {
+      const signals = data[code];
+      if (!signals) continue;
+      let score = 0;
+      for (const [lvl, w] of Object.entries(SUMMARY_WEIGHT)) {
+        score += (counts[lvl as keyof typeof counts] || 0) * w;
+      }
+      signals.threatSummaryScore = Math.min(20, score);
+    }
+  }
+
   // --- Scoring ---
   const scores: CiiScore[] = [];
   for (const code of Object.keys(TIER1_COUNTRIES)) {

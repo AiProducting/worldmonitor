@@ -6,11 +6,19 @@ All notable changes to World Monitor are documented here.
 
 ### Added
 
+- **Route Explorer**: standalone full-screen modal (CMD+K) for planning shipments between any two countries. Includes Current/Alternatives/Land/Impact tabs, keyboard-first navigation, URL state sharing, strategic-product trade data, dependency flags, and free-tier blur with public route highlight (#2980, #2982, #2994, #2996, #2997, #2998)
+- US Treasury customs revenue in Trade Policy panel with monthly data, FYTD year-over-year comparison, and revenue spike highlighting (#1663)
+- Security advisories gold standard migration: Railway cron seed fetches 24 government RSS feeds hourly, Vercel reads Redis only (#1637)
+- CMD+K full panel coverage: all 55 panels now searchable (was 31), including AI forecasts, correlation panels, webcams, displacement, security advisories (#1656)
 - Chokepoint transit intelligence with 3 free data sources: IMF PortWatch (vessel transit counts), CorridorRisk (risk intelligence), AISStream (24h crossing counter) (#1560)
 - 13 monitored chokepoints (was 6): added Cape of Good Hope, Gibraltar, Bosporus Strait (absorbs Dardanelles), Korea, Dover, Kerch, Lombok (#1560, #1572)
 - Expandable chokepoint cards with TradingView lightweight-charts 180-day time-series (tanker vs cargo) (#1560)
 - Real-time transit counting with enter+dwell+exit crossing detection, 30min cooldown (#1560)
 - PortWatch, CorridorRisk, and transit seed loops on Railway relay (#1560)
+
+### Security
+
+- CDN-Cache-Control header now only set for trusted origins (worldmonitor.app, Vercel previews, Tauri); no-origin server-side requests always reach the edge function so `validateApiKey` can run, closing a potential cache-bypass path for external scrapers
 
 ### Security
 

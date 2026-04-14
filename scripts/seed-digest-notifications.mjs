@@ -12,10 +12,22 @@
  *   7. Updates digest:last-sent:v1:${userId}:${variant}
  */
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import dns from 'node:dns/promises';
+import {
+  escapeHtml,
+  escapeTelegramHtml,
+  escapeSlackMrkdwn,
+  markdownToEmailHtml,
+  markdownToTelegramHtml,
+  markdownToSlackMrkdwn,
+  markdownToDiscord,
+} from './_digest-markdown.mjs';
 
 const require = createRequire(import.meta.url);
 const { decrypt } = require('./lib/crypto.cjs');
+const { callLLM } = require('./lib/llm-chain.cjs');
+const { fetchUserPreferences, extractUserContext, formatUserProfile } = require('./lib/user-context.cjs');
 const { Resend } = require('resend');
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -48,6 +60,12 @@ const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
 const DIGEST_MAX_ITEMS = 30;
 const DIGEST_LOOKBACK_MS = 24 * 60 * 60 * 1000; // 24h default lookback on first send
+const DIGEST_CRITICAL_LIMIT = Infinity;
+const DIGEST_HIGH_LIMIT = 15;
+const DIGEST_MEDIUM_LIMIT = 10;
+const AI_SUMMARY_CACHE_TTL = 3600; // 1h
+const AI_DIGEST_ENABLED = process.env.AI_DIGEST_ENABLED !== '0';
+const ENTITLEMENT_CACHE_TTL = 900; // 15 min
 
 // ── Redis helpers ──────────────────────────────────────────────────────────────
 
@@ -214,7 +232,8 @@ function deduplicateStories(stories) {
 
 async function buildDigest(rule, windowStartMs) {
   const variant = rule.variant ?? 'full';
-  const accKey = `digest:accumulator:v1:${variant}`;
+  const lang = rule.lang ?? 'en';
+  const accKey = `digest:accumulator:v1:${variant}:${lang}`;
 
   const hashes = await upstashRest(
     'ZRANGEBYSCORE', accKey, String(windowStartMs), String(Date.now()),
@@ -289,29 +308,24 @@ function formatDigest(stories, nowMs) {
     b.push(s);
   }
 
+  const SEVERITY_LIMITS = { critical: DIGEST_CRITICAL_LIMIT, high: DIGEST_HIGH_LIMIT, medium: DIGEST_MEDIUM_LIMIT };
+
   for (const [level, items] of Object.entries(buckets)) {
     if (items.length === 0) continue;
+    const limit = SEVERITY_LIMITS[level] ?? DIGEST_MEDIUM_LIMIT;
     lines.push(`${level.toUpperCase()} (${items.length} event${items.length !== 1 ? 's' : ''})`);
-    for (const item of items.slice(0, 10)) {
+    for (const item of items.slice(0, limit)) {
       const src = item.sources.length > 0
         ? ` [${item.sources.slice(0, 3).join(', ')}${item.sources.length > 3 ? ` +${item.sources.length - 3}` : ''}]`
         : '';
       lines.push(`  \u2022 ${stripSourceSuffix(item.title)}${src}`);
     }
-    if (items.length > 10) lines.push(`  ... and ${items.length - 10} more`);
+    if (items.length > limit) lines.push(`  ... and ${items.length - limit} more`);
     lines.push('');
   }
 
   lines.push('View full dashboard \u2192 worldmonitor.app');
   return lines.join('\n');
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 function formatDigestHtml(stories, nowMs) {
@@ -351,13 +365,16 @@ function formatDigestHtml(stories, nowMs) {
     return `<div style="background: #111; border: 1px solid #1a1a1a; border-left: 3px solid ${borderColor}; padding: 12px 16px; margin-bottom: 8px;">${titleEl}${meta ? `<div style="margin-top: 6px;">${meta}</div>` : ''}</div>`;
   }
 
+  const SEVERITY_LIMITS = { critical: DIGEST_CRITICAL_LIMIT, high: DIGEST_HIGH_LIMIT, medium: DIGEST_MEDIUM_LIMIT };
+
   function sectionHtml(severity, items) {
     if (items.length === 0) return '';
+    const limit = SEVERITY_LIMITS[severity] ?? DIGEST_MEDIUM_LIMIT;
     const SEVERITY_LABEL = { critical: '&#128308; Critical', high: '&#128992; High', medium: '&#128993; Medium' };
     const label = SEVERITY_LABEL[severity] ?? severity.toUpperCase();
-    const cards = items.slice(0, 10).map(storyCard).join('');
-    const overflow = items.length > 10
-      ? `<p style="font-size: 12px; color: #555; margin: 4px 0 16px; padding-left: 4px;">... and ${items.length - 10} more</p>`
+    const cards = items.slice(0, limit).map(storyCard).join('');
+    const overflow = items.length > limit
+      ? `<p style="font-size: 12px; color: #555; margin: 4px 0 16px; padding-left: 4px;">... and ${items.length - limit} more</p>`
       : '';
     return `<div style="margin-bottom: 24px;"><div style="font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px;">${label} (${items.length})</div>${cards}${overflow}</div>`;
   }
@@ -366,57 +383,155 @@ function formatDigestHtml(stories, nowMs) {
     .map((sev) => sectionHtml(sev, buckets[sev]))
     .join('');
 
-  return `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; background: #0a0a0a; color: #e0e0e0;">
-  <div style="background: #4ade80; height: 4px;"></div>
-  <div style="padding: 40px 32px 0;">
-    <table cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 32px;">
-      <tr>
-        <td style="width: 40px; height: 40px; vertical-align: middle;">
-          <img src="https://www.worldmonitor.app/favico/android-chrome-192x192.png" width="40" height="40" alt="WorldMonitor" style="border-radius: 50%; display: block;" />
-        </td>
-        <td style="padding-left: 12px;">
-          <div style="font-size: 16px; font-weight: 800; color: #fff; letter-spacing: -0.5px;">WORLD MONITOR</div>
-          <div style="font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 2px;">Daily Intelligence Digest</div>
-        </td>
-      </tr>
-    </table>
-    <div style="background: #111; border: 1px solid #1a1a1a; border-left: 3px solid #4ade80; padding: 20px 24px; margin-bottom: 28px;">
-      <p style="font-size: 18px; font-weight: 600; color: #fff; margin: 0 0 8px;">Your Digest &mdash; ${dateStr}</p>
-      <p style="font-size: 14px; color: #999; margin: 0; line-height: 1.5;">${totalCount} event${totalCount !== 1 ? 's' : ''} tracked across monitored regions.</p>
+  return `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111; color: #e0e0e0;">
+  <div style="max-width: 680px; margin: 0 auto;">
+    <div style="background: #4ade80; height: 3px;"></div>
+    <div style="background: #0d0d0d; padding: 32px 36px 0;">
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+        <tr>
+          <td style="vertical-align: middle;">
+            <table cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="width: 36px; height: 36px; vertical-align: middle;">
+                  <img src="https://www.worldmonitor.app/favico/android-chrome-192x192.png" width="36" height="36" alt="WorldMonitor" style="border-radius: 50%; display: block;" />
+                </td>
+                <td style="padding-left: 10px;">
+                  <div style="font-size: 15px; font-weight: 800; color: #fff; letter-spacing: -0.3px;">WORLD MONITOR</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+          <td style="text-align: right; vertical-align: middle;">
+            <span style="font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 1px;">${dateStr}</span>
+          </td>
+        </tr>
+      </table>
+      <div data-ai-summary-slot></div>
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 24px;">
+        <tr>
+          <td style="text-align: center; padding: 14px 8px; width: 33%; background: #161616; border: 1px solid #222;">
+            <div style="font-size: 24px; font-weight: 800; color: #4ade80;">${totalCount}</div>
+            <div style="font-size: 9px; color: #666; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 2px;">Events</div>
+          </td>
+          <td style="width: 1px;"></td>
+          <td style="text-align: center; padding: 14px 8px; width: 33%; background: #161616; border: 1px solid #222;">
+            <div style="font-size: 24px; font-weight: 800; color: #ef4444;">${criticalCount}</div>
+            <div style="font-size: 9px; color: #666; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 2px;">Critical</div>
+          </td>
+          <td style="width: 1px;"></td>
+          <td style="text-align: center; padding: 14px 8px; width: 33%; background: #161616; border: 1px solid #222;">
+            <div style="font-size: 24px; font-weight: 800; color: #f97316;">${highCount}</div>
+            <div style="font-size: 9px; color: #666; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 2px;">High</div>
+          </td>
+        </tr>
+      </table>
+      ${sectionsHtml}
+      <div style="text-align: center; padding: 12px 0 36px;">
+        <a href="https://worldmonitor.app" style="display: inline-block; background: #4ade80; color: #0a0a0a; padding: 12px 32px; text-decoration: none; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; border-radius: 3px;">Open Dashboard</a>
+      </div>
     </div>
-    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px; background: #111; border: 1px solid #1a1a1a;">
-      <tr>
-        <td style="text-align: center; padding: 16px 8px; width: 33%;">
-          <div style="font-size: 22px; font-weight: 800; color: #4ade80;">${totalCount}</div>
-          <div style="font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px;">Total</div>
-        </td>
-        <td style="text-align: center; padding: 16px 8px; width: 33%; border-left: 1px solid #1a1a1a; border-right: 1px solid #1a1a1a;">
-          <div style="font-size: 22px; font-weight: 800; color: #ef4444;">${criticalCount}</div>
-          <div style="font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px;">Critical</div>
-        </td>
-        <td style="text-align: center; padding: 16px 8px; width: 33%;">
-          <div style="font-size: 22px; font-weight: 800; color: #f97316;">${highCount}</div>
-          <div style="font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px;">High</div>
-        </td>
-      </tr>
-    </table>
-    ${sectionsHtml}
-    <div style="text-align: center; margin-bottom: 36px;">
-      <a href="https://worldmonitor.app" style="display: inline-block; background: #4ade80; color: #0a0a0a; padding: 14px 36px; text-decoration: none; font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; border-radius: 2px;">View Full Dashboard</a>
+    <div style="background: #0a0a0a; border-top: 1px solid #1a1a1a; padding: 20px 36px; text-align: center;">
+      <div style="margin-bottom: 12px;">
+        <a href="https://x.com/worldmonitorapp" style="color: #555; text-decoration: none; font-size: 11px; margin: 0 10px;">X / Twitter</a>
+        <a href="https://github.com/koala73/worldmonitor" style="color: #555; text-decoration: none; font-size: 11px; margin: 0 10px;">GitHub</a>
+        <a href="https://discord.gg/re63kWKxaz" style="color: #555; text-decoration: none; font-size: 11px; margin: 0 10px;">Discord</a>
+      </div>
+      <p style="font-size: 10px; color: #444; margin: 0; line-height: 1.5;">
+        <a href="https://worldmonitor.app" style="color: #4ade80; text-decoration: none;">worldmonitor.app</a>
+      </p>
     </div>
-  </div>
-  <div style="border-top: 1px solid #1a1a1a; padding: 24px 32px; text-align: center;">
-    <div style="margin-bottom: 16px;">
-      <a href="https://x.com/eliehabib" style="color: #666; text-decoration: none; font-size: 12px; margin: 0 12px;">X / Twitter</a>
-      <a href="https://github.com/koala73/worldmonitor" style="color: #666; text-decoration: none; font-size: 12px; margin: 0 12px;">GitHub</a>
-      <a href="https://worldmonitor.app" style="color: #666; text-decoration: none; font-size: 12px; margin: 0 12px;">worldmonitor.app</a>
-    </div>
-    <p style="font-size: 11px; color: #444; margin: 0; line-height: 1.6;">
-      World Monitor &mdash; Real-time intelligence for a connected world.<br />
-      <a href="https://worldmonitor.app" style="color: #4ade80; text-decoration: none;">worldmonitor.app</a>
-    </p>
   </div>
 </div>`;
+}
+
+// ── AI summary generation ────────────────────────────────────────────────────
+
+function hashShort(str) {
+  return createHash('sha256').update(str).digest('hex').slice(0, 16);
+}
+
+async function generateAISummary(stories, rule) {
+  if (!AI_DIGEST_ENABLED) return null;
+  if (!stories || stories.length === 0) return null;
+
+  // rule.aiDigestEnabled (from alertRules) is the user's explicit opt-in for
+  // AI summaries. userPreferences is a SEPARATE table (SPA app settings blob:
+  // watchlist, airports, panels). A user can have alertRules without having
+  // ever saved userPreferences — or under a different variant. Missing prefs
+  // must NOT silently disable the feature the user just enabled; degrade to
+  // a non-personalized summary instead.
+  //   error: true  = transient fetch failure (network, non-OK HTTP, env missing)
+  //   error: false = the (userId, variant) row genuinely does not exist
+  // Both cases degrade to a non-personalized summary, but log them distinctly
+  // so transient fetch failures are visible in observability.
+  const { data: prefs, error: prefsFetchError } = await fetchUserPreferences(rule.userId, rule.variant ?? 'full');
+  if (!prefs) {
+    console.log(
+      prefsFetchError
+        ? `[digest] Prefs fetch failed for ${rule.userId} — generating non-personalized AI summary`
+        : `[digest] No stored preferences for ${rule.userId} — generating non-personalized AI summary`,
+    );
+  }
+  const ctx = extractUserContext(prefs);
+  const profile = formatUserProfile(ctx, rule.variant ?? 'full');
+
+  const variant = rule.variant ?? 'full';
+  const tz = rule.digestTimezone ?? 'UTC';
+  const localHour = toLocalHour(Date.now(), tz);
+  if (localHour === -1) console.warn(`[digest] Bad timezone "${tz}" for ${rule.userId} — defaulting to evening greeting`);
+  const greeting = localHour >= 5 && localHour < 12 ? 'Good morning'
+    : localHour >= 12 && localHour < 17 ? 'Good afternoon'
+    : 'Good evening';
+  const storiesHash = hashShort(stories.map(s =>
+    `${s.titleHash ?? s.title}:${s.severity ?? ''}:${s.phase ?? ''}:${(s.sources ?? []).slice(0, 3).join(',')}`
+  ).sort().join('|'));
+  const ctxHash = hashShort(JSON.stringify(ctx));
+  const cacheKey = `digest:ai-summary:v1:${variant}:${greeting}:${storiesHash}:${ctxHash}`;
+
+  try {
+    const cached = await upstashRest('GET', cacheKey);
+    if (cached) {
+      console.log(`[digest] AI summary cache hit for ${rule.userId}`);
+      return cached;
+    }
+  } catch { /* miss */ }
+
+  const dateStr = new Date().toISOString().split('T')[0];
+  const storyList = stories.slice(0, 20).map((s, i) => {
+    const phase = s.phase ? ` [${s.phase}]` : '';
+    const src = s.sources?.length > 0 ? ` (${s.sources.slice(0, 2).join(', ')})` : '';
+    return `${i + 1}. [${(s.severity ?? 'high').toUpperCase()}]${phase} ${s.title}${src}`;
+  }).join('\n');
+
+  const systemPrompt = `You are WorldMonitor's intelligence analyst. Today is ${dateStr} UTC.
+Write a personalized daily brief for a user focused on ${rule.variant ?? 'full'} intelligence.
+The user's local time greeting is "${greeting}" — use this exact greeting to open the brief.
+
+User profile:
+${profile}
+
+Rules:
+- Open with "${greeting}." followed by the brief
+- Lead with the single most impactful development for this user
+- Connect events to watched assets/regions where relevant
+- 3-5 bullet points, 1-2 sentences each
+- Flag anything directly affecting watched assets
+- Separate facts from assessment
+- End with "Signals to watch:" (1-2 items)
+- Under 250 words`;
+
+  const summary = await callLLM(systemPrompt, storyList, { maxTokens: 600, temperature: 0.3, timeoutMs: 15_000, skipProviders: ['groq'] });
+  if (!summary) {
+    console.warn(`[digest] AI summary generation failed for ${rule.userId}`);
+    return null;
+  }
+
+  try {
+    await upstashRest('SET', cacheKey, summary, 'EX', String(AI_SUMMARY_CACHE_TTL));
+  } catch { /* best-effort cache write */ }
+
+  console.log(`[digest] AI summary generated for ${rule.userId} (${summary.length} chars)`);
+  return summary;
 }
 
 // ── Channel deactivation ──────────────────────────────────────────────────────
@@ -447,30 +562,65 @@ function isPrivateIP(ip) {
 
 // ── Send functions ────────────────────────────────────────────────────────────
 
+const TELEGRAM_MAX_LEN = 4096;
+
+function sanitizeTelegramHtml(html) {
+  let out = html.replace(/<[^>]*$/, '');
+  for (const tag of ['b', 'i', 'u', 's', 'code', 'pre']) {
+    const opens = (out.match(new RegExp(`<${tag}>`, 'g')) || []).length;
+    const closes = (out.match(new RegExp(`</${tag}>`, 'g')) || []).length;
+    for (let i = closes; i < opens; i++) out += `</${tag}>`;
+  }
+  return out;
+}
+
+function truncateTelegramHtml(html, limit = TELEGRAM_MAX_LEN) {
+  if (html.length <= limit) {
+    const sanitized = sanitizeTelegramHtml(html);
+    return sanitized.length <= limit ? sanitized : truncateTelegramHtml(sanitized, limit);
+  }
+  const truncated = html.slice(0, limit - 30);
+  const lastNewline = truncated.lastIndexOf('\n');
+  const cutPoint = lastNewline > limit * 0.6 ? lastNewline : truncated.length;
+  return sanitizeTelegramHtml(truncated.slice(0, cutPoint) + '\n\n[truncated]');
+}
+
 async function sendTelegram(userId, chatId, text) {
   if (!TELEGRAM_BOT_TOKEN) {
-    console.warn('[digest] Telegram: TELEGRAM_BOT_TOKEN not set — skipping');
+    console.warn('[digest] Telegram: TELEGRAM_BOT_TOKEN not set, skipping');
     return false;
   }
-  const res = await fetch(
-    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
-      body: JSON.stringify({ chat_id: chatId, text }),
-      signal: AbortSignal.timeout(10000),
-    },
-  );
-  if (res.status === 403) {
-    console.warn(`[digest] Telegram 403 for ${userId} — deactivating`);
-    await deactivateChannel(userId, 'telegram');
-    return false;
-  } else if (!res.ok) {
-    console.warn(`[digest] Telegram send failed ${res.status} for ${userId}`);
+  const safeText = truncateTelegramHtml(text);
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: safeText,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+        }),
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    if (res.status === 403) {
+      console.warn(`[digest] Telegram 403 for ${userId}, deactivating`);
+      await deactivateChannel(userId, 'telegram');
+      return false;
+    } else if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.warn(`[digest] Telegram send failed ${res.status} for ${userId}: ${body.slice(0, 300)}`);
+      return false;
+    }
+    console.log(`[digest] Telegram delivered to ${userId}`);
+    return true;
+  } catch (err) {
+    console.warn(`[digest] Telegram send error for ${userId}: ${err.code || err.message}`);
     return false;
   }
-  console.log(`[digest] Telegram delivered to ${userId}`);
-  return true;
 }
 
 const SLACK_RE = /^https:\/\/hooks\.slack\.com\/services\/[A-Z0-9]+\/[A-Z0-9]+\/[a-zA-Z0-9]+$/;
@@ -487,22 +637,27 @@ async function sendSlack(userId, webhookEnvelope, text) {
     const addrs = await dns.resolve4(hostname).catch(() => []);
     if (addrs.some(isPrivateIP)) { console.warn(`[digest] Slack SSRF blocked for ${userId}`); return false; }
   } catch { return false; }
-  const res = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
-    body: JSON.stringify({ text, unfurl_links: false }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (res.status === 404 || res.status === 410) {
-    console.warn(`[digest] Slack webhook gone for ${userId} — deactivating`);
-    await deactivateChannel(userId, 'slack');
-    return false;
-  } else if (!res.ok) {
-    console.warn(`[digest] Slack send failed ${res.status} for ${userId}`);
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
+      body: JSON.stringify({ text, unfurl_links: false }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.status === 404 || res.status === 410) {
+      console.warn(`[digest] Slack webhook gone for ${userId}, deactivating`);
+      await deactivateChannel(userId, 'slack');
+      return false;
+    } else if (!res.ok) {
+      console.warn(`[digest] Slack send failed ${res.status} for ${userId}`);
+      return false;
+    }
+    console.log(`[digest] Slack delivered to ${userId}`);
+    return true;
+  } catch (err) {
+    console.warn(`[digest] Slack send error for ${userId}: ${err.code || err.message}`);
     return false;
   }
-  console.log(`[digest] Slack delivered to ${userId}`);
-  return true;
 }
 
 async function sendDiscord(userId, webhookEnvelope, text) {
@@ -517,22 +672,27 @@ async function sendDiscord(userId, webhookEnvelope, text) {
     if (addrs.some(isPrivateIP)) { console.warn(`[digest] Discord SSRF blocked for ${userId}`); return false; }
   } catch { return false; }
   const content = text.length > 2000 ? text.slice(0, 1999) + '\u2026' : text;
-  const res = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
-    body: JSON.stringify({ content }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (res.status === 404 || res.status === 410) {
-    console.warn(`[digest] Discord webhook gone for ${userId} — deactivating`);
-    await deactivateChannel(userId, 'discord');
-    return false;
-  } else if (!res.ok) {
-    console.warn(`[digest] Discord send failed ${res.status} for ${userId}`);
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
+      body: JSON.stringify({ content }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.status === 404 || res.status === 410) {
+      console.warn(`[digest] Discord webhook gone for ${userId}, deactivating`);
+      await deactivateChannel(userId, 'discord');
+      return false;
+    } else if (!res.ok) {
+      console.warn(`[digest] Discord send failed ${res.status} for ${userId}`);
+      return false;
+    }
+    console.log(`[digest] Discord delivered to ${userId}`);
+    return true;
+  } catch (err) {
+    console.warn(`[digest] Discord send error for ${userId}: ${err.code || err.message}`);
     return false;
   }
-  console.log(`[digest] Discord delivered to ${userId}`);
-  return true;
 }
 
 async function sendEmail(email, subject, text, html) {
@@ -547,6 +707,122 @@ async function sendEmail(email, subject, text, html) {
     console.warn('[digest] Resend failed:', err.message);
     return false;
   }
+}
+
+async function sendWebhook(userId, webhookEnvelope, stories, aiSummary) {
+  let url;
+  try { url = decrypt(webhookEnvelope); } catch (err) {
+    console.warn(`[digest] Webhook decrypt failed for ${userId}:`, err.message);
+    return false;
+  }
+  let parsed;
+  try { parsed = new URL(url); } catch {
+    console.warn(`[digest] Webhook invalid URL for ${userId}`);
+    await deactivateChannel(userId, 'webhook');
+    return false;
+  }
+  if (parsed.protocol !== 'https:') {
+    console.warn(`[digest] Webhook rejected non-HTTPS for ${userId}`);
+    return false;
+  }
+  try {
+    const addrs = await dns.resolve4(parsed.hostname);
+    if (addrs.some(isPrivateIP)) { console.warn(`[digest] Webhook SSRF blocked for ${userId}`); return false; }
+  } catch {
+    console.warn(`[digest] Webhook DNS resolve failed for ${userId}`);
+    return false;
+  }
+  const payload = JSON.stringify({
+    version: '1',
+    eventType: 'digest',
+    stories: stories.map(s => ({ title: s.title, severity: s.severity, phase: s.phase, sources: s.sources })),
+    summary: aiSummary ?? null,
+    storyCount: stories.length,
+  });
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
+      body: payload,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (resp.status === 404 || resp.status === 410 || resp.status === 403) {
+      console.warn(`[digest] Webhook ${resp.status} for ${userId} — deactivating`);
+      await deactivateChannel(userId, 'webhook');
+      return false;
+    }
+    if (!resp.ok) { console.warn(`[digest] Webhook ${resp.status} for ${userId}`); return false; }
+    console.log(`[digest] Webhook delivered for ${userId}`);
+    return true;
+  } catch (err) {
+    console.warn(`[digest] Webhook error for ${userId}:`, err.message);
+    return false;
+  }
+}
+
+// ── Entitlement check ────────────────────────────────────────────────────────
+
+async function isUserPro(userId) {
+  const cacheKey = `relay:entitlement:${userId}`;
+  try {
+    const cached = await upstashRest('GET', cacheKey);
+    if (cached !== null) return Number(cached) >= 1;
+  } catch { /* miss */ }
+  try {
+    const res = await fetch(`${CONVEX_SITE_URL}/relay/entitlement`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RELAY_SECRET}`, 'User-Agent': 'worldmonitor-digest/1.0' },
+      body: JSON.stringify({ userId }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return true; // fail-open
+    const { tier } = await res.json();
+    await upstashRest('SET', cacheKey, String(tier ?? 0), 'EX', String(ENTITLEMENT_CACHE_TTL));
+    return (tier ?? 0) >= 1;
+  } catch {
+    return true; // fail-open
+  }
+}
+
+// ── Per-channel body composition ─────────────────────────────────────────────
+
+const DIVIDER = '─'.repeat(40);
+
+/**
+ * Compose the per-channel message bodies for a single digest rule.
+ * Keeps the per-channel formatting logic out of main() so its cognitive
+ * complexity stays within the lint budget.
+ */
+function buildChannelBodies(storyListPlain, aiSummary) {
+  if (!aiSummary) {
+    return {
+      text: storyListPlain,
+      telegramText: escapeTelegramHtml(storyListPlain),
+      slackText: escapeSlackMrkdwn(storyListPlain),
+      discordText: storyListPlain,
+    };
+  }
+  return {
+    text: `EXECUTIVE SUMMARY\n\n${aiSummary}\n\n${DIVIDER}\n\n${storyListPlain}`,
+    telegramText: `<b>EXECUTIVE SUMMARY</b>\n\n${markdownToTelegramHtml(aiSummary)}\n\n${DIVIDER}\n\n${escapeTelegramHtml(storyListPlain)}`,
+    slackText: `*EXECUTIVE SUMMARY*\n\n${markdownToSlackMrkdwn(aiSummary)}\n\n${DIVIDER}\n\n${escapeSlackMrkdwn(storyListPlain)}`,
+    discordText: `**EXECUTIVE SUMMARY**\n\n${markdownToDiscord(aiSummary)}\n\n${DIVIDER}\n\n${storyListPlain}`,
+  };
+}
+
+/**
+ * Inject the formatted AI summary into the HTML email template's slot,
+ * or strip the slot placeholder when there is no summary.
+ */
+function injectEmailSummary(html, aiSummary) {
+  if (!html) return html;
+  if (!aiSummary) return html.replace('<div data-ai-summary-slot></div>', '');
+  const formattedSummary = markdownToEmailHtml(aiSummary);
+  const summaryHtml = `<div style="background:#161616;border:1px solid #222;border-left:3px solid #4ade80;padding:18px 22px;margin:0 0 24px 0;">
+<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#4ade80;margin-bottom:10px;">Executive Summary</div>
+<div style="font-size:13px;line-height:1.7;color:#ccc;">${formattedSummary}</div>
+</div>`;
+  return html.replace('<div data-ai-summary-slot></div>', summaryHtml);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -597,19 +873,18 @@ async function main() {
 
     if (!isDue(rule, lastSentAt)) continue;
 
+    const pro = await isUserPro(rule.userId);
+    if (!pro) {
+      console.log(`[digest] Skipping ${rule.userId} — not PRO`);
+      continue;
+    }
+
     const windowStart = lastSentAt ?? (nowMs - DIGEST_LOOKBACK_MS);
     const stories = await buildDigest(rule, windowStart);
     if (!stories) {
       console.log(`[digest] No stories in window for ${rule.userId} (${rule.variant})`);
       continue;
     }
-
-    const text = formatDigest(stories, nowMs);
-    if (!text) continue;
-    const html = formatDigestHtml(stories, nowMs);
-
-    const shortDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(nowMs));
-    const subject = `WorldMonitor Digest — ${shortDate}`;
 
     let channels = [];
     try {
@@ -629,19 +904,41 @@ async function main() {
     }
 
     const ruleChannelSet = new Set(rule.channels ?? []);
+    const deliverableChannels = channels.filter(ch => ruleChannelSet.has(ch.channelType) && ch.verified);
+    if (deliverableChannels.length === 0) {
+      console.log(`[digest] No deliverable channels for ${rule.userId} — skipping`);
+      continue;
+    }
+
+    let aiSummary = null;
+    if (AI_DIGEST_ENABLED && rule.aiDigestEnabled !== false) {
+      aiSummary = await generateAISummary(stories, rule);
+    }
+
+    const storyListPlain = formatDigest(stories, nowMs);
+    if (!storyListPlain) continue;
+    const htmlRaw = formatDigestHtml(stories, nowMs);
+
+    const { text, telegramText, slackText, discordText } = buildChannelBodies(storyListPlain, aiSummary);
+    const html = injectEmailSummary(htmlRaw, aiSummary);
+
+    const shortDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(nowMs));
+    const subject = aiSummary ? `WorldMonitor Intelligence Brief — ${shortDate}` : `WorldMonitor Digest — ${shortDate}`;
+
     let anyDelivered = false;
 
-    for (const ch of channels) {
-      if (!ruleChannelSet.has(ch.channelType) || !ch.verified) continue;
+    for (const ch of deliverableChannels) {
       let ok = false;
       if (ch.channelType === 'telegram' && ch.chatId) {
-        ok = await sendTelegram(rule.userId, ch.chatId, text);
+        ok = await sendTelegram(rule.userId, ch.chatId, telegramText);
       } else if (ch.channelType === 'slack' && ch.webhookEnvelope) {
-        ok = await sendSlack(rule.userId, ch.webhookEnvelope, text);
+        ok = await sendSlack(rule.userId, ch.webhookEnvelope, slackText);
       } else if (ch.channelType === 'discord' && ch.webhookEnvelope) {
-        ok = await sendDiscord(rule.userId, ch.webhookEnvelope, text);
+        ok = await sendDiscord(rule.userId, ch.webhookEnvelope, discordText);
       } else if (ch.channelType === 'email' && ch.email) {
         ok = await sendEmail(ch.email, subject, text, html);
+      } else if (ch.channelType === 'webhook' && ch.webhookEnvelope) {
+        ok = await sendWebhook(rule.userId, ch.webhookEnvelope, stories, aiSummary);
       }
       if (ok) anyDelivered = true;
     }

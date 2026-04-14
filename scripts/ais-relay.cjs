@@ -21,6 +21,8 @@ const { WebSocketServer, WebSocket } = require('ws');
 const { parseProxyConfig } = require('./_proxy-utils.cjs');
 const parseProxyUrl = parseProxyConfig;
 
+const httpsKeepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 6, timeout: 60_000 });
+
 function requireShared(name) {
   const candidates = [path.join(__dirname, '..', 'shared', name), path.join(__dirname, 'shared', name)];
   for (const p of candidates) { try { return require(p); } catch {} }
@@ -89,12 +91,40 @@ const OPENSKY_PROXY_ENABLED = !!OPENSKY_PROXY_AUTH;
 
 const PROXY_URL = process.env.PROXY_URL || ''; // generic residential proxy (US exit) — http://user:pass@host:port or host:port:user:pass (Decodo)
 
-// OREF (Israel Home Front Command) siren alerts — fetched via HTTP proxy (Israel exit)
+// Tzeva Adom (primary) + OREF (fallback) siren alerts
+const TZEVA_ADOM_URL = 'https://api.tzevaadom.co.il/notifications';
 const OREF_PROXY_AUTH = process.env.OREF_PROXY_AUTH || ''; // format: user:pass@host:port
 const OREF_ALERTS_URL = 'https://www.oref.org.il/WarningMessages/alert/alerts.json';
 const OREF_HISTORY_URL = 'https://www.oref.org.il/WarningMessages/alert/History/AlertsHistory.json';
 const OREF_POLL_INTERVAL_MS = Math.max(30_000, Number(process.env.OREF_POLL_INTERVAL_MS || 300_000));
-const OREF_ENABLED = !!OREF_PROXY_AUTH;
+const OREF_PROXY_AVAILABLE = !!OREF_PROXY_AUTH;
+const SIREN_ALERTS_ENABLED = true; // Tzeva Adom is free, no proxy needed
+
+// Hebrew→English translation dictionaries for siren alerts
+const OREF_THREAT_TRANSLATIONS = (() => {
+  try { return JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'data', 'oref-threat-translations-he-en.json'), 'utf8')); }
+  catch { return {}; }
+})();
+const OREF_CITY_TRANSLATIONS = (() => {
+  try { return JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'data', 'israeli-localities-he-en.json'), 'utf8')); }
+  catch { return {}; }
+})();
+
+function translateHebrew(text) {
+  if (!text) return text;
+  if (OREF_THREAT_TRANSLATIONS[text]) return OREF_THREAT_TRANSLATIONS[text];
+  if (OREF_CITY_TRANSLATIONS[text]) return OREF_CITY_TRANSLATIONS[text];
+  let result = text;
+  for (const [heb, eng] of Object.entries(OREF_THREAT_TRANSLATIONS)) {
+    if (result.includes(heb)) result = result.replace(heb, eng);
+  }
+  return result;
+}
+
+function translateCity(city) {
+  if (!city) return city;
+  return OREF_CITY_TRANSLATIONS[city] || city;
+}
 const OREF_DATA_DIR = process.env.OREF_DATA_DIR || '';
 const OREF_LOCAL_FILE = (() => {
   if (!OREF_DATA_DIR) return '';
@@ -762,19 +792,102 @@ function orefCurlFetch(proxyAuth, url, { toFile } = {}) {
   return result;
 }
 
-async function orefFetchAlerts() {
-  if (!OREF_ENABLED) return;
-  try {
-    const raw = orefCurlFetch(OREF_PROXY_AUTH, OREF_ALERTS_URL);
-    const cleaned = stripBom(raw).trim();
+function categorizeOrefThreat(threat) {
+  const t = (threat || '').toLowerCase();
+  if (t.includes('missile') || t.includes('טיל') || t.includes('ballistic')) return 'MISSILE';
+  if (t.includes('rocket') || t.includes('רקט')) return 'ROCKET';
+  if (t.includes('drone') || t.includes('uav') || t.includes('כטב') || t.includes('hostile aircraft') || t.includes('כלי טיס')) return 'DRONE';
+  if (t.includes('mortar')) return 'MORTAR';
+  if (t.includes('infiltration') || t.includes('חדיר') || t.includes('מחבל')) return 'INFILTRATION';
+  if (t.includes('earthquake') || t.includes('רעידת')) return 'EARTHQUAKE';
+  if (t.includes('tsunami') || t.includes('צונמי')) return 'TSUNAMI';
+  if (t.includes('chemical') || t.includes('hazmat') || t.includes('חומרים מסוכנים') || t.includes('רדיולוגי')) return 'HAZMAT';
+  return 'ALERT';
+}
 
-    let alerts = [];
-    if (cleaned && cleaned !== '[]' && cleaned !== 'null') {
-      try {
-        const parsed = JSON.parse(cleaned);
-        alerts = Array.isArray(parsed) ? parsed : [parsed];
-      } catch { alerts = []; }
+async function tzevaAdomFetchAlerts() {
+  try {
+    const resp = await fetch(TZEVA_ADOM_URL, {
+      headers: { 'User-Agent': 'WorldMonitor/1.0', Accept: 'application/json' },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) return [];
+    return data.map((alert) => {
+      const rawThreat = alert.threat || alert.title || '';
+      const rawCities = Array.isArray(alert.cities) ? alert.cities : (alert.data ? [alert.data] : []);
+      let translatedThreat = translateHebrew(rawThreat);
+      const translatedLocations = rawCities.map(translateCity);
+      // API sometimes puts city name in threat field; detect and move to locations
+      if (OREF_CITY_TRANSLATIONS[rawThreat]) {
+        if (!rawCities.includes(rawThreat)) {
+          translatedLocations.push(OREF_CITY_TRANSLATIONS[rawThreat]);
+        }
+        translatedThreat = 'Rocket/Missile Alert';
+      }
+      return {
+        id: alert.notificationId || String(Date.now()),
+        cat: categorizeOrefThreat(rawThreat),
+        title: translatedThreat,
+        titleHe: rawThreat,
+        data: translatedLocations,
+        dataHe: rawCities,
+        desc: alert.desc || '',
+        date: alert.date || new Date().toISOString(),
+        source: 'tzeva-adom',
+      };
+    });
+  } catch (err) {
+    console.warn(`[TzevaAdom] Fetch failed: ${err?.message || err}`);
+    return null;
+  }
+}
+
+async function orefFetchAlerts() {
+  let alerts = [];
+  let source = 'none';
+
+  // Primary: Tzeva Adom (free, no proxy needed)
+  const tzevaAlerts = await tzevaAdomFetchAlerts();
+  if (tzevaAlerts !== null) {
+    alerts = tzevaAlerts;
+    source = 'tzeva-adom';
+  } else if (OREF_PROXY_AVAILABLE) {
+    // Fallback: OREF direct (requires Israeli proxy)
+    try {
+      const raw = orefCurlFetch(OREF_PROXY_AUTH, OREF_ALERTS_URL);
+      const cleaned = stripBom(raw).trim();
+      if (cleaned && cleaned !== '[]' && cleaned !== 'null') {
+        try {
+          const parsed = JSON.parse(cleaned);
+          const orefArr = Array.isArray(parsed) ? parsed : [parsed];
+          alerts = orefArr.map((a) => ({
+            ...a,
+            title: translateHebrew(a.title || ''),
+            titleHe: a.title || '',
+            data: Array.isArray(a.data) ? a.data.map(translateCity) : a.data ? [translateCity(a.data)] : [],
+            dataHe: Array.isArray(a.data) ? a.data : a.data ? [a.data] : [],
+            source: 'oref-direct',
+          }));
+          source = 'oref-direct';
+        } catch { alerts = []; }
+      }
+    } catch (err) {
+      const stderr = err.stderr ? err.stderr.toString().trim() : '';
+      orefState.lastError = redactOrefError(stderr || err.message);
+      console.warn('[Relay] OREF fallback poll error:', orefState.lastError);
     }
+  }
+  if (source === 'none') {
+    orefState.lastError = orefState.lastError || 'All siren sources unavailable';
+    orefState.lastPollAt = Date.now();
+    console.warn('[Relay] Siren poll: both Tzeva Adom and OREF failed');
+    orefPreSerializeResponses();
+    return;
+  }
+
+  try {
 
     const newJson = JSON.stringify(alerts);
     const changed = newJson !== orefState.lastAlertsJson;
@@ -800,7 +913,7 @@ async function orefFetchAlerts() {
         : '';
       publishNotificationEvent({
         eventType: 'oref_siren',
-        payload: { title: orefTitle + orefLocationSuffix, source: 'OREF Pikud HaOref' },
+        payload: { title: orefTitle + orefLocationSuffix, source: source === 'tzeva-adom' ? 'Tzeva Adom / Pikud HaOref' : 'OREF Pikud HaOref' },
         severity: 'critical',
         variant: undefined,
       }).catch(e => console.warn('[Notify] OREF publish error:', e?.message));
@@ -826,6 +939,28 @@ async function orefFetchAlerts() {
     orefState.lastError = redactOrefError(stderr || err.message);
     console.warn('[Relay] OREF poll error:', orefState.lastError);
   }
+}
+
+function orefPreSerializeResponses() {
+  const ts = orefState.lastPollAt ? new Date(orefState.lastPollAt).toISOString() : new Date().toISOString();
+  const alertsJson = JSON.stringify({
+    configured: SIREN_ALERTS_ENABLED,
+    alerts: orefState.lastAlerts || [],
+    historyCount24h: orefState.historyCount24h,
+    totalHistoryCount: orefState.totalHistoryCount,
+    timestamp: ts,
+    ...(orefState.lastError ? { error: orefState.lastError } : {}),
+  });
+  orefState._alertsCache = { json: alertsJson, gzip: gzipSyncBuffer(alertsJson), brotli: brotliSyncBuffer(alertsJson) };
+
+  const historyJson = JSON.stringify({
+    configured: SIREN_ALERTS_ENABLED,
+    history: orefState.history || [],
+    historyCount24h: orefState.historyCount24h,
+    totalHistoryCount: orefState.totalHistoryCount,
+    timestamp: ts,
+  });
+  orefState._historyCache = { json: historyJson, gzip: gzipSyncBuffer(historyJson), brotli: brotliSyncBuffer(historyJson) };
 }
 
 async function orefBootstrapHistoryFromUpstream() {
@@ -1043,10 +1178,11 @@ async function orefBootstrapHistoryWithRetry() {
 }
 
 async function startOrefPollLoop() {
-  if (!OREF_ENABLED) {
-    console.log('[Relay] OREF disabled (no OREF_PROXY_AUTH)');
+  if (!SIREN_ALERTS_ENABLED) {
+    console.log('[Relay] Siren alerts disabled');
     return;
   }
+  console.log(`[Relay] Siren alerts: primary=Tzeva Adom, fallback=${OREF_PROXY_AVAILABLE ? 'OREF (proxy)' : 'none'}`);
   await orefBootstrapHistoryWithRetry();
   console.log(`[Relay] OREF bootstrap complete (source: ${orefState.bootstrapSource || 'none'}, redis: ${UPSTASH_ENABLED})`);
   orefFetchAlerts().catch(e => console.warn('[Relay] OREF initial poll error:', e?.message || e));
@@ -1419,6 +1555,58 @@ function fetchYahooChartDirect(symbol) {
   });
 }
 
+function fetchYahooQuoteSummary(symbol) {
+  return new Promise((resolve) => {
+    const modules = 'summaryDetail,defaultKeyStatistics';
+    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}`;
+    const req = https.get(url, {
+      headers: { 'User-Agent': CHROME_UA, Accept: 'application/json' },
+      timeout: 12000,
+    }, (resp) => {
+      if (resp.statusCode !== 200) {
+        resp.resume();
+        logThrottled('warn', `yahoo-summary-${resp.statusCode}:${symbol}`, `[Sector] Yahoo quoteSummary ${symbol} HTTP ${resp.statusCode}`);
+        return resolve(null);
+      }
+      let body = '';
+      resp.on('data', (chunk) => { body += chunk; });
+      resp.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          const result = data?.quoteSummary?.result?.[0];
+          if (!result) return resolve(null);
+          const sd = result.summaryDetail || {};
+          const ks = result.defaultKeyStatistics || {};
+          const raw = (obj) => typeof obj === 'object' && obj !== null ? (obj.raw ?? obj.fmt ?? null) : (typeof obj === 'number' ? obj : null);
+          resolve({
+            trailingPE: raw(sd.trailingPE),
+            forwardPE: raw(sd.forwardPE),
+            beta: raw(sd.beta) ?? raw(ks.beta3Year),
+            ytdReturn: raw(ks.ytdReturn),
+            threeYearReturn: raw(ks.threeYearAverageReturn),
+            fiveYearReturn: raw(ks.fiveYearAverageReturn),
+          });
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', (err) => { logThrottled('warn', `yahoo-summary-err:${symbol}`, `[Sector] Yahoo quoteSummary ${symbol} error: ${err.message}`); resolve(null); });
+    req.on('timeout', () => { req.destroy(); logThrottled('warn', `yahoo-summary-timeout:${symbol}`, `[Sector] Yahoo quoteSummary ${symbol} timeout`); resolve(null); });
+  });
+}
+
+function parseSectorValuation(raw) {
+  if (!raw) return null;
+  const num = (v) => typeof v === 'number' && Number.isFinite(v) ? v : null;
+  const tpe = num(typeof raw.trailingPE === 'string' ? parseFloat(raw.trailingPE) : raw.trailingPE);
+  const fpe = num(typeof raw.forwardPE === 'string' ? parseFloat(raw.forwardPE) : raw.forwardPE);
+  const beta = num(typeof raw.beta === 'string' ? parseFloat(raw.beta) : raw.beta);
+  const ytd = num(typeof raw.ytdReturn === 'string' ? parseFloat(raw.ytdReturn) : raw.ytdReturn);
+  const y3 = num(typeof raw.threeYearReturn === 'string' ? parseFloat(raw.threeYearReturn) : raw.threeYearReturn);
+  const y5 = num(typeof raw.fiveYearReturn === 'string' ? parseFloat(raw.fiveYearReturn) : raw.fiveYearReturn);
+  if (tpe === null && fpe === null) return null;
+  return { trailingPE: tpe, forwardPE: fpe, beta, ytdReturn: ytd, threeYearReturn: y3, fiveYearReturn: y5 };
+}
+
 function fetchFinnhubQuoteDirect(symbol, apiKey) {
   return new Promise((resolve) => {
     const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}`;
@@ -1565,10 +1753,17 @@ async function seedSectorSummary() {
     return 0;
   }
 
-  const payload = { sectors };
-  const ok = await upstashSet('market:sectors:v1', payload, MARKET_SEED_TTL);
-  // Also write under market:quotes:v1: key — the frontend routes sectors through
-  // fetchMultipleStocks → listMarketQuotes RPC, which constructs this key pattern
+  const valuations = {};
+  let valCount = 0;
+  for (const s of SECTOR_SYMBOLS) {
+    const raw = await fetchYahooQuoteSummary(s);
+    const parsed = parseSectorValuation(raw);
+    if (parsed) { valuations[s] = parsed; valCount++; }
+    await sleep(150);
+  }
+
+  const payload = { sectors, valuations };
+  const ok = await upstashSet('market:sectors:v2', payload, MARKET_SEED_TTL);
   const quotesKey = `market:quotes:v1:${[...SECTOR_SYMBOLS].sort().join(',')}`;
   const sectorQuotes = sectors.map((s) => ({
     symbol: s.symbol, name: s.name, display: s.name,
@@ -1577,7 +1772,7 @@ async function seedSectorSummary() {
   const quotesPayload = { quotes: sectorQuotes, finnhubSkipped: false, skipReason: '', rateLimited: false };
   const ok2 = await upstashSet(quotesKey, quotesPayload, MARKET_SEED_TTL);
   const ok3 = await upstashSet('seed-meta:market:sectors', { fetchedAt: Date.now(), recordCount: sectors.length }, 604800);
-  console.log(`[Market] Seeded ${sectors.length}/${SECTOR_SYMBOLS.length} sectors (redis: ${ok && ok2 && ok3 ? 'OK' : 'PARTIAL'})`);
+  console.log(`[Market] Seeded ${sectors.length}/${SECTOR_SYMBOLS.length} sectors, ${valCount} valuations (redis: ${ok && ok2 && ok3 ? 'OK' : 'PARTIAL'})`);
   return sectors.length;
 }
 
@@ -1687,6 +1882,30 @@ const CRYPTO_IDS = _cryptoCfg.ids;
 const CRYPTO_META = _cryptoCfg.meta;
 const CRYPTO_PAPRIKA_MAP = _cryptoCfg.coinpaprika;
 const CRYPTO_SEED_TTL = 3600; // 1h
+
+// Shared CoinPaprika tickers fetcher — direct first, PROXY_URL fallback.
+// Cached for 5 min so the 3 crypto seeders (crypto, stablecoins, token-panels)
+// that run in the same cycle don't triple-fetch the same 2000-item response.
+let _paprikaCached = null;
+let _paprikaCachedAt = 0;
+const _PAPRIKA_CACHE_MS = 5 * 60 * 1000;
+const _PAPRIKA_URL = 'https://api.coinpaprika.com/v1/tickers?quotes=USD';
+
+async function _fetchCoinPaprikaTickers() {
+  if (_paprikaCached && Date.now() - _paprikaCachedAt < _PAPRIKA_CACHE_MS) return _paprikaCached;
+  // Try direct
+  let data = await cyberHttpGetJson(_PAPRIKA_URL, { Accept: 'application/json' }, 15000);
+  if (Array.isArray(data) && data.length > 0) { _paprikaCached = data; _paprikaCachedAt = Date.now(); return data; }
+  // Fallback via proxy
+  if (!PROXY_URL) throw new Error('CoinPaprika direct failed and no PROXY_URL configured');
+  const proxy = { ...parseProxyUrl(PROXY_URL), tls: true };
+  const resp = await ytFetchViaProxy(_PAPRIKA_URL, proxy);
+  if (!resp?.ok) throw new Error(`CoinPaprika proxy HTTP ${resp?.status || 'unavailable'}`);
+  data = JSON.parse(resp.body);
+  if (!Array.isArray(data)) throw new Error('CoinPaprika proxy returned non-array');
+  _paprikaCached = data; _paprikaCachedAt = Date.now();
+  return data;
+}
 
 // Shared CoinPaprika tickers fetcher — direct first, PROXY_URL fallback.
 // Cached for 5 min so the 3 crypto seeders (crypto, stablecoins, token-panels)
@@ -2970,14 +3189,50 @@ const CLASSIFY_VARIANT_STAGGER_MS = 3 * 60 * 1000;
 // Relay gates — active only when RELAY_GATES_READY=1 (see Appendix E of docs/internal/news-alerts-enhancements-from-trendradar.md).
 // When the flag is set the relay becomes the sole authoritative source of rss_alert events and
 // the client /api/notify path is suppressed via VITE_RELAY_GATES_READY on the Vercel side.
-// Inline subset of source-tiers.ts — canonical copy in server/_shared/source-tiers.ts; keep in sync.
 const RELAY_GATES_READY = process.env.RELAY_GATES_READY === '1';
-const RELAY_TIER4_SOURCES = new Set([
-  'Hacker News', 'The Verge', 'The Verge AI', 'VentureBeat AI',
-  'Yahoo Finance', 'TechCrunch Layoffs', 'ArXiv AI', 'AI News',
-  'Layoffs News', 'GloNewswire (Taiwan)',
-]);
 const RELAY_RECENCY_MS = 15 * 60 * 1000; // 15 min — matches client-side recency gate
+
+// ── Importance score parity with digest ──────────────────────────────────────
+// Source-tier data loaded via requireShared('source-tiers.json'), which resolves
+// to either repo-root shared/ OR scripts/shared/ depending on packaging root.
+// Both copies are enforced byte-identical by tests/edge-functions.test.mjs
+// ('scripts/shared/ stays in sync with shared/') and cross-checked in
+// tests/importance-score-parity.test.mjs.
+// Formula constants + computeImportanceScore mirror list-feed-digest.ts; parity
+// is enforced by tests/importance-score-parity.test.mjs.
+const RELAY_SOURCE_TIERS = requireShared('source-tiers.json');
+
+function relayGetSourceTier(sourceName) {
+  return RELAY_SOURCE_TIERS[sourceName] ?? 4;
+}
+
+// Derived from the tier map so the tier-4 gate and the tier map stay in lockstep.
+const RELAY_TIER4_SOURCES = new Set(
+  Object.entries(RELAY_SOURCE_TIERS).filter(([, t]) => t === 4).map(([s]) => s),
+);
+
+const RELAY_SCORE_WEIGHTS = { severity: 0.4, sourceTier: 0.2, corroboration: 0.3, recency: 0.1 };
+const RELAY_SEVERITY_SCORES = { critical: 100, high: 75, medium: 50, low: 25, info: 0 };
+
+// Mirrors computeImportanceScore() in list-feed-digest.ts with ONE intentional
+// deviation: the relay defensively returns 0 for unknown severity levels
+// (`?? 0` on the lookup); the TS digest returns NaN. This defensiveness is
+// exercised in tests/importance-score-parity.test.mjs "unknown severity" case.
+// Caller responsibility: pass defined values; relay publish site defaults
+// corroborationCount → 1 and publishedAt → Date.now() when upstream omits them.
+function relayComputeImportanceScore(level, source, corroborationCount, publishedAt) {
+  const tier = relayGetSourceTier(source);
+  const tierScore = tier === 1 ? 100 : tier === 2 ? 75 : tier === 3 ? 50 : 25;
+  const corroborationScore = Math.min(corroborationCount, 5) * 20;
+  const ageMs = Date.now() - publishedAt;
+  const recencyScore = Math.max(0, 1 - ageMs / (24 * 60 * 60 * 1000)) * 100;
+  return Math.round(
+    (RELAY_SEVERITY_SCORES[level] ?? 0) * RELAY_SCORE_WEIGHTS.severity +
+    tierScore * RELAY_SCORE_WEIGHTS.sourceTier +
+    corroborationScore * RELAY_SCORE_WEIGHTS.corroboration +
+    recencyScore * RELAY_SCORE_WEIGHTS.recency,
+  );
+}
 
 const CLASSIFY_VALID_LEVELS = ['critical', 'high', 'medium', 'low', 'info'];
 const CLASSIFY_VALID_CATEGORIES = [
@@ -3165,7 +3420,7 @@ async function seedClassifyForVariant(variant, seenTitles) {
           allTitles.set(item.title, {
             source: item.source ?? variant,
             publishedAt: item.publishedAt ?? Date.now(),
-            importanceScore: item.importanceScore ?? 0,
+            corroborationCount: item.corroborationCount ?? 1,
             link: item.link ?? '',
           });
         }
@@ -3241,7 +3496,12 @@ async function seedClassifyForVariant(variant, seenTitles) {
       // Notifications are outside seenTitles guard — each variant publishes
       // independently, protected by the variant-scoped Redis scan-dedup key.
       if (level === 'critical' || level === 'high') {
-        const meta = allTitles.get(chunk[idx]) ?? { source: variant, publishedAt: Date.now(), importanceScore: 0, link: '' };
+        const meta = allTitles.get(chunk[idx]) ?? {
+          source: variant,
+          publishedAt: Date.now(),
+          corroborationCount: 1,
+          link: '',
+        };
         // Relay gates: when RELAY_GATES_READY is set the relay enforces source tier and
         // recency checks that the client path previously handled.
         if (RELAY_GATES_READY) {
@@ -3249,6 +3509,15 @@ async function seedClassifyForVariant(variant, seenTitles) {
           const ageMs = Date.now() - (meta.publishedAt ?? 0);
           if (meta.publishedAt && ageMs > RELAY_RECENCY_MS) continue;
         }
+        // Recompute importanceScore from the post-LLM level. Publishing the
+        // digest's pre-LLM keyword-based score would leak a stale value —
+        // see docs/internal/scoringDiagnostic.md §2.
+        const importanceScore = relayComputeImportanceScore(
+          level,
+          meta.source,
+          meta.corroborationCount ?? 1,
+          meta.publishedAt ?? Date.now(),
+        );
         publishNotificationEvent({
           eventType: 'rss_alert',
           payload: {
@@ -3256,7 +3525,8 @@ async function seedClassifyForVariant(variant, seenTitles) {
             source: meta.source,
             link: meta.link,
             publishedAt: meta.publishedAt,
-            importanceScore: meta.importanceScore,
+            importanceScore,
+            corroborationCount: meta.corroborationCount ?? 1,
           },
           severity: level,
           variant,
@@ -3716,6 +3986,50 @@ async function fetchTheaterFlightsFromOpenSky() {
   return allFlights;
 }
 
+async function fetchTheaterFlightsFromAdsbLol() {
+  try {
+    const resp = await fetch('https://api.adsb.lol/v2/mil', {
+      headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!resp.ok) {
+      console.warn(`[adsb.lol] API error: ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    const aircraft = data.ac || [];
+    const flights = [];
+    const seenIds = new Set();
+    for (const a of aircraft) {
+      const lat = a.lat; const lon = a.lon;
+      if (lat == null || lon == null) continue;
+      if (a.alt_baro === 'ground') continue;
+      const icao24 = (a.hex || '').trim().replace(/~/g, '');
+      if (!icao24 || seenIds.has(icao24)) continue;
+      const inTheater = POSTURE_THEATERS.some((t) =>
+        lat >= t.bounds.south && lat <= t.bounds.north &&
+        lon >= t.bounds.west && lon <= t.bounds.east
+      );
+      if (!inTheater) continue;
+      seenIds.add(icao24);
+      const callsign = (a.flight || '').trim();
+      flights.push({
+        id: icao24, callsign,
+        lat, lon,
+        altitude: typeof a.alt_baro === 'number' ? a.alt_baro : 0,
+        heading: a.track || 0,
+        speed: a.gs || 0,
+        aircraftType: theaterDetectAircraftType(callsign),
+      });
+    }
+    console.log(`[adsb.lol] Fetched ${flights.length} military flights in theater (${aircraft.length} global mil)`);
+    return flights;
+  } catch (err) {
+    console.warn(`[adsb.lol] Fetch failed: ${err?.message || err}`);
+    return null;
+  }
+}
+
 async function fetchTheaterFlightsFromWingbits() {
   const apiKey = process.env.WINGBITS_API_KEY;
   if (!apiKey) {
@@ -3808,12 +4122,17 @@ async function seedTheaterPosture() {
     console.warn(`[TheaterPosture] OpenSky failed: ${e?.message || e}`);
   }
   if (flights.length === 0) {
-    const wb = await fetchTheaterFlightsFromWingbits();
-    if (wb && wb.length > 0) flights = wb;
+    const adsbLol = await fetchTheaterFlightsFromAdsbLol();
+    if (adsbLol !== null) {
+      // null = fetch error (fall through to Wingbits); [] = success, no theater traffic (stop here)
+      flights = adsbLol;
+    } else {
+      const wb = await fetchTheaterFlightsFromWingbits();
+      if (wb && wb.length > 0) flights = wb;
+    }
   }
   if (flights.length === 0) {
-    console.warn('[TheaterPosture] No military flights from OpenSky or Wingbits — skipping');
-    return;
+    console.warn('[TheaterPosture] No military flights from OpenSky, adsb.lol, or Wingbits — continuing with vessel-only posture');
   }
   const theaters = calculateTheaterPostures(flights);
   const payload = { theaters };
@@ -4631,8 +4950,7 @@ async function startWorldBankSeedLoop() {
 
 const PORTWATCH_REDIS_KEY = 'supply_chain:portwatch:v1';
 
-const CORRIDOR_RISK_API_KEY = process.env.CORRIDOR_RISK_API_KEY || '';
-const CORRIDOR_RISK_BASE_URL = 'https://api.corridorrisk.io/v1/corridors';
+const CORRIDOR_RISK_BASE_URL = 'https://corridorrisk.io/api/corridors';
 const CORRIDOR_RISK_REDIS_KEY = 'supply_chain:corridorrisk:v1';
 const CORRIDOR_RISK_TTL = 7200;
 const CORRIDOR_RISK_SEED_INTERVAL_MS = 60 * 60 * 1000;
@@ -4915,29 +5233,29 @@ async function seedUsniFleet() {
   console.log('[USNI] Fetching fleet tracker...');
   const t0 = Date.now();
   try {
-    // USNI (WordPress) returns 403 from Railway datacenter IPs via Cloudflare.
-    // Use PROXY_URL (US-targeted proxy). OREF_PROXY_AUTH is IL-only and must NOT be used here.
+    // USNI (WordPress): try direct fetch first (Railway Virginia should work),
+    // fall back to proxy if Cloudflare blocks the datacenter IP.
     let wpData;
-    const proxiesToTry = [
-      PROXY_URL ? { ...parseProxyUrl(PROXY_URL), tls: true } : null, // Decodo gate.*.com:10001 is HTTPS
-    ].filter(Boolean);
     let fetched = false;
-    for (const proxy of proxiesToTry) {
-      try {
-        const result = await ytFetchViaProxy(USNI_URL, proxy);
-        if (!result?.ok) { console.warn(`[USNI] Proxy ${proxy.host} returned HTTP ${result?.status ?? 'unavailable'}`); continue; }
-        try { wpData = JSON.parse(result.body); fetched = true; break; }
-        catch (parseErr) { console.warn(`[USNI] Proxy ${proxy.host} returned non-JSON (CF challenge?):`, parseErr?.message); }
-      } catch (proxyErr) { console.warn(`[USNI] Proxy ${proxy.host} error:`, proxyErr?.message); }
-    }
-    if (!fetched) {
+    try {
       const res = await fetch(USNI_URL, {
         headers: { 'User-Agent': CHROME_UA, 'Accept': 'application/json' },
         signal: AbortSignal.timeout(15000),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      wpData = await res.json();
+      if (res.ok) { wpData = await res.json(); fetched = true; }
+      else { console.warn(`[USNI] Direct fetch HTTP ${res.status}, trying proxy`); }
+    } catch (directErr) { console.warn(`[USNI] Direct fetch failed: ${directErr?.message}, trying proxy`); }
+    if (!fetched && PROXY_URL) {
+      try {
+        const proxy = { ...parseProxyUrl(PROXY_URL), tls: true };
+        const result = await ytFetchViaProxy(USNI_URL, proxy);
+        if (result?.ok) {
+          wpData = JSON.parse(result.body);
+          fetched = true;
+        } else { console.warn(`[USNI] Proxy returned HTTP ${result?.status ?? 'unavailable'}`); }
+      } catch (proxyErr) { console.warn(`[USNI] Proxy error: ${proxyErr?.message}`); }
     }
+    if (!fetched) throw new Error('USNI fetch failed (direct + proxy)');
     if (!Array.isArray(wpData) || !wpData.length) throw new Error('No fleet tracker articles');
 
     const post = wpData[0];
@@ -5153,6 +5471,202 @@ async function startSocialVelocitySeedLoop() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// WSB Ticker Scanner — Reddit r/wallstreetbets + r/stocks + r/investing
+// ─────────────────────────────────────────────────────────────
+
+const WSB_TICKERS_REDIS_KEY = 'intelligence:wsb-tickers:v1';
+const WSB_TICKERS_TTL = 1800; // 30min — seed runs every 10min (3× safety margin)
+const WSB_TICKERS_INTERVAL_MS = 10 * 60 * 1000;
+const WSB_TICKERS_RETRY_MS = 20 * 60 * 1000;
+const WSB_SUBREDDITS = ['wallstreetbets', 'stocks', 'investing'];
+
+// $-prefixed: case-insensitive ($nvda, $NVDA, $BRK.B). Bare: uppercase only (NVDA, BRK.B).
+// $-prefixed tickers skip whitelist validation (strong signal). Bare uppercase validated against known set.
+const DOLLAR_TICKER_REGEX = /\$([a-zA-Z]{1,5}(?:[.\-][a-zA-Z]{1,2})?)\b/g;
+const BARE_TICKER_REGEX = /\b([A-Z]{1,5}(?:[.\-][A-Z]{1,2})?)\b/g;
+const TICKER_BLACKLIST = new Set([
+  'I','A','ALL','FOR','THE','CEO','GDP','IPO','SEC','FDA','IMF','ETF','ATH',
+  'DD','YOLO','FOMO','FUD','HODL','WSB','USA','EU','UK','AI','EV','IT','OR',
+  'AM','PM','ON','BE','SO','GO','AT','TO','UP','NO','IF','AS','BY','AN','DO',
+  'IN','OF','IS','HAS','NEW','CFO','CTO','IRS','FBI','CIA','UN','WHO',
+  'IMO','PSA','FYI','TL','DR','OP','OC','US','ER','RE','VS',
+]);
+
+let wsbTickersInFlight = false;
+let wsbTickersRetryTimer = null;
+let wsbTickerSetCache = null;
+let wsbTickerSetCacheTs = 0;
+const WSB_TICKER_SET_CACHE_TTL_MS = 30 * 60 * 1000; // refresh known ticker set every 30min
+
+async function loadWsbTickerSet() {
+  if (wsbTickerSetCache && (Date.now() - wsbTickerSetCacheTs < WSB_TICKER_SET_CACHE_TTL_MS)) return wsbTickerSetCache;
+  try {
+    const data = await upstashGet('market:stocks-bootstrap:v1');
+    if (data && Array.isArray(data.quotes)) {
+      wsbTickerSetCache = new Set(data.quotes.map(s => s.symbol?.toUpperCase()).filter(Boolean));
+      wsbTickerSetCacheTs = Date.now();
+      return wsbTickerSetCache;
+    }
+  } catch {}
+  return wsbTickerSetCache || new Set();
+}
+
+async function fetchWsbRedditHot(subreddit) {
+  const url = `https://www.reddit.com/r/${subreddit}/hot.json?limit=50&raw_json=1`;
+  const resp = await fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) { console.warn(`[WsbTickers] Reddit r/${subreddit} HTTP ${resp.status}`); return []; }
+  const data = await resp.json();
+  return (data?.data?.children || []).map(c => c.data).filter(Boolean);
+}
+
+function normalizeTicker(raw) {
+  // BRK.B → BRK-B (Yahoo Finance uses dash, Reddit uses dot)
+  return raw.toUpperCase().replace(/\./g, '-');
+}
+
+function extractTickers(text, knownTickers) {
+  const found = new Set();
+  if (!text) return found;
+  let m;
+
+  // $-prefixed tickers: strong signal, skip whitelist validation (only blacklist)
+  DOLLAR_TICKER_REGEX.lastIndex = 0;
+  while ((m = DOLLAR_TICKER_REGEX.exec(text)) !== null) {
+    const sym = normalizeTicker(m[1] || '');
+    if (!sym || sym.length < 1) continue;
+    if (TICKER_BLACKLIST.has(sym)) continue;
+    found.add(sym);
+  }
+
+  // Bare uppercase: high false-positive risk, REQUIRE known ticker set
+  // When knownTickers is empty (bootstrap unavailable), skip bare matching entirely
+  if (knownTickers.size > 0) {
+    BARE_TICKER_REGEX.lastIndex = 0;
+    while ((m = BARE_TICKER_REGEX.exec(text)) !== null) {
+      const sym = normalizeTicker(m[1] || '');
+      if (!sym || sym.length < 1) continue;
+      if (TICKER_BLACKLIST.has(sym)) continue;
+      if (!knownTickers.has(sym)) continue;
+      found.add(sym);
+    }
+  }
+
+  return found;
+}
+
+async function seedWsbTickers() {
+  if (wsbTickersInFlight) { console.log('[WsbTickers] Skipped (in-flight)'); return; }
+  wsbTickersInFlight = true;
+  if (wsbTickersRetryTimer) { clearTimeout(wsbTickersRetryTimer); wsbTickersRetryTimer = null; }
+  console.log('[WsbTickers] Fetching...');
+  const t0 = Date.now();
+  try {
+    const knownTickers = await loadWsbTickerSet();
+    if (knownTickers.size === 0) {
+      console.warn('[WsbTickers] Known ticker set empty (bootstrap unavailable). $-prefixed tickers will still be extracted; bare uppercase validation disabled.');
+    }
+    const nowSec = Date.now() / 1000;
+    const tickerMap = new Map();
+    let postsScanned = 0;
+
+    for (const sub of WSB_SUBREDDITS) {
+      await new Promise(r => setTimeout(r, 500));
+      const posts = await fetchWsbRedditHot(sub);
+      for (const p of posts) {
+        postsScanned++;
+        const text = `${p.title || ''} ${p.selftext || ''}`;
+        const tickers = extractTickers(text, knownTickers);
+        for (const sym of tickers) {
+          let entry = tickerMap.get(sym);
+          if (!entry) {
+            entry = {
+              symbol: sym,
+              mentionCount: 0,
+              postIds: new Set(),
+              totalScore: 0,
+              upvoteRatioSum: 0,
+              topPost: null,
+              subreddits: new Set(),
+            };
+            tickerMap.set(sym, entry);
+          }
+          entry.mentionCount++;
+          entry.postIds.add(p.id);
+          entry.totalScore += (p.score || 0);
+          entry.upvoteRatioSum += (p.upvote_ratio || 0);
+          entry.subreddits.add(sub);
+          if (!entry.topPost || (p.score || 0) > entry.topPost.score) {
+            entry.topPost = {
+              title: String(p.title || '').slice(0, 300),
+              url: `https://reddit.com${p.permalink || ''}`,
+              score: p.score || 0,
+              subreddit: sub,
+            };
+          }
+        }
+      }
+    }
+
+    if (tickerMap.size === 0) {
+      console.warn('[WsbTickers] No tickers found — extending TTL, retrying in 20min');
+      try { await upstashExpire(WSB_TICKERS_REDIS_KEY, WSB_TICKERS_TTL); } catch {}
+      wsbTickersRetryTimer = setTimeout(() => { seedWsbTickers().catch(() => {}); }, WSB_TICKERS_RETRY_MS);
+      return;
+    }
+
+    const tickers = [];
+    for (const [, entry] of tickerMap) {
+      const uniquePosts = entry.postIds.size;
+      const avgUpvoteRatio = uniquePosts > 0 ? Math.round((entry.upvoteRatioSum / uniquePosts) * 100) / 100 : 0;
+      const ageFactor = 1; // all posts are "hot" (recent)
+      const velocityScore = Math.round(Math.log1p(entry.totalScore) * entry.mentionCount * ageFactor * 10) / 10;
+      tickers.push({
+        symbol: entry.symbol,
+        mentionCount: entry.mentionCount,
+        uniquePosts,
+        totalScore: entry.totalScore,
+        avgUpvoteRatio,
+        topPost: entry.topPost,
+        subreddits: [...entry.subreddits],
+        velocityScore,
+      });
+    }
+
+    tickers.sort((a, b) => b.velocityScore - a.velocityScore);
+    const top = tickers.slice(0, 50);
+    const payload = { tickers: top, fetchedAt: Date.now(), subredditsScanned: WSB_SUBREDDITS.length, postsScanned };
+    const writeOk = await upstashSet(WSB_TICKERS_REDIS_KEY, payload, WSB_TICKERS_TTL);
+    if (writeOk) {
+      await upstashSet('seed-meta:intelligence:wsb-tickers', { fetchedAt: Date.now(), recordCount: top.length }, 604800);
+    } else {
+      console.error('[WsbTickers] Canonical write failed. Skipping seed-meta.');
+    }
+    console.log(`[WsbTickers] Seeded ${top.length} tickers from ${postsScanned} posts (redis: ${writeOk ? 'OK' : 'FAIL'}) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  } catch (e) {
+    console.warn('[WsbTickers] Seed error:', e?.message || e, '— extending TTL, retrying in 20min');
+    try { await upstashExpire(WSB_TICKERS_REDIS_KEY, WSB_TICKERS_TTL); } catch {}
+    wsbTickersRetryTimer = setTimeout(() => { seedWsbTickers().catch(() => {}); }, WSB_TICKERS_RETRY_MS);
+  } finally {
+    wsbTickersInFlight = false;
+  }
+}
+
+async function startWsbTickersSeedLoop() {
+  if (!UPSTASH_ENABLED) {
+    console.log('[WsbTickers] Disabled (no Upstash Redis)');
+    return;
+  }
+  console.log(`[WsbTickers] Seed loop starting (interval ${WSB_TICKERS_INTERVAL_MS / 1000 / 60}min)`);
+  seedWsbTickers().catch(e => console.warn('[WsbTickers] Initial seed error:', e?.message || e));
+  setInterval(() => {
+    seedWsbTickers().catch(e => console.warn('[WsbTickers] Seed error:', e?.message || e));
+  }, WSB_TICKERS_INTERVAL_MS).unref?.();
+}
+
+// ─────────────────────────────────────────────────────────────
 // Climate News Intelligence — delegated to standalone seed script
 // ─────────────────────────────────────────────────────────────
 
@@ -5287,73 +5801,6 @@ function startChokepointFlowsSeedLoop() {
   setInterval(() => {
     seedChokepointFlows().catch((e) => console.warn('[ChokepointFlows] Seed error:', e?.message || e));
   }, CHOKEPOINT_FLOWS_SEED_INTERVAL_MS).unref?.();
-}
-
-// ─────────────────────────────────────────────────────────────
-// Ember Monthly Electricity Seed — monthly generation CSV → Redis
-// Downloads Ember Climate's long-format CSV (CC BY 4.0) and writes
-// energy:ember:v1:<ISO2> and energy:ember:v1:_all to Redis.
-// Runs once per day (24h interval). Large CSV (~30MB) — 8 min timeout.
-// ─────────────────────────────────────────────────────────────
-
-const EMBER_ELECTRICITY_SEED_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
-const EMBER_ELECTRICITY_SEED_TIMEOUT_MS = 8 * 60 * 1000; // 8 min (large CSV download)
-const EMBER_ELECTRICITY_SEED_RETRY_MS = 20 * 60 * 1000;
-const EMBER_ELECTRICITY_SEED_SCRIPT = path.join(__dirname, 'seed-ember-electricity.mjs');
-
-let emberElectricitySeedInFlight = false;
-let emberElectricityRetryTimer = null;
-
-function runEmberElectricitySeedScript() {
-  return new Promise((resolve, reject) => {
-    execFile(process.execPath, [EMBER_ELECTRICITY_SEED_SCRIPT], {
-      env: process.env,
-      timeout: EMBER_ELECTRICITY_SEED_TIMEOUT_MS,
-      maxBuffer: 2 * 1024 * 1024,
-    }, (err, stdout, stderr) => {
-      relayLogScriptOutput('[EmberElectricity]', stdout);
-      if (stderr) {
-        const trimmedErr = String(stderr).trim();
-        if (trimmedErr) {
-          for (const line of trimmedErr.split('\n')) console.warn(`[EmberElectricity] ${line}`);
-        }
-      }
-      if (err) return reject(err);
-      resolve();
-    });
-  });
-}
-
-async function seedEmberElectricity() {
-  if (emberElectricitySeedInFlight) {
-    console.log('[EmberElectricity] Skipped (in-flight)');
-    return;
-  }
-  emberElectricitySeedInFlight = true;
-  if (emberElectricityRetryTimer) { clearTimeout(emberElectricityRetryTimer); emberElectricityRetryTimer = null; }
-  const t0 = Date.now();
-  try {
-    await runEmberElectricitySeedScript();
-    console.log(`[EmberElectricity] Completed in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-  } catch (e) {
-    const message = e?.killed ? 'timeout' : (e?.message || e);
-    console.warn('[EmberElectricity] Seed error:', message);
-    emberElectricityRetryTimer = setTimeout(() => { seedEmberElectricity().catch(() => {}); }, EMBER_ELECTRICITY_SEED_RETRY_MS);
-  } finally {
-    emberElectricitySeedInFlight = false;
-  }
-}
-
-function startEmberElectricitySeedLoop() {
-  if (!UPSTASH_ENABLED) {
-    console.log('[EmberElectricity] Disabled (no Upstash Redis)');
-    return;
-  }
-  console.log(`[EmberElectricity] Seed loop starting (interval ${EMBER_ELECTRICITY_SEED_INTERVAL_MS / 1000 / 60}min)`);
-  seedEmberElectricity().catch((e) => console.warn('[EmberElectricity] Initial seed error:', e?.message || e));
-  setInterval(() => {
-    seedEmberElectricity().catch((e) => console.warn('[EmberElectricity] Seed error:', e?.message || e));
-  }, EMBER_ELECTRICITY_SEED_INTERVAL_MS).unref?.();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -6913,7 +7360,7 @@ function _openskyProxyConnect(targetHost, targetPort, timeoutMs = 10000) {
   const { proxyConnectTunnel, parseProxyConfig } = require('./_proxy-utils.cjs');
   const proxyConfig = parseProxyConfig(OPENSKY_PROXY_AUTH);
   if (!proxyConfig) return Promise.resolve(null);
-  // proxyConfig.tls defaults to true from parseProxyConfig (Decodo requires TLS)
+  proxyConfig.tls = true; // Decodo always requires TLS; http:// scheme in PROXY_URL would set false
   return proxyConnectTunnel(targetHost, proxyConfig, { timeoutMs, targetPort })
     .then(({ socket }) => socket);
 }
@@ -7800,6 +8247,87 @@ function handleYahooChartRequest(req, res) {
   });
 }
 
+// ── AviationStack Proxy ─────────────────────────────────────────────
+// Vercel handlers proxy flight queries through Railway to keep the API key
+// off Vercel edge and consolidate external calls on one egress IP.
+const aviationStackCache = new Map();
+const AVIATIONSTACK_CACHE_TTL_MS = 120_000; // 2 min
+
+function handleAviationStackRequest(req, res) {
+  if (!AVIATIONSTACK_API_KEY) {
+    return sendCompressed(req, res, 503, { 'Content-Type': 'application/json' },
+      JSON.stringify({ error: 'AviationStack not configured' }));
+  }
+
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  const params = new URLSearchParams(url.searchParams);
+  params.set('access_key', AVIATIONSTACK_API_KEY);
+
+  const cacheKey = params.toString();
+  const cached = aviationStackCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < AVIATIONSTACK_CACHE_TTL_MS) {
+    return sendCompressed(req, res, 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=120, s-maxage=120',
+      'X-Aviation-Source': 'relay-cache',
+    }, cached.json);
+  }
+
+  const apiUrl = `https://api.aviationstack.com/v1/flights?${params}`;
+  const apiReq = https.get(apiUrl, {
+    headers: { 'User-Agent': CHROME_UA, Accept: 'application/json' },
+    timeout: 10000,
+  }, (upstream) => {
+    let body = '';
+    upstream.on('data', (chunk) => { body += chunk; });
+    upstream.on('end', () => {
+      if (upstream.statusCode !== 200) {
+        logThrottled('warn', `aviationstack-upstream-${upstream.statusCode}`,
+          `[Relay] AviationStack upstream ${upstream.statusCode}`);
+        return sendCompressed(req, res, upstream.statusCode || 502, {
+          'Content-Type': 'application/json',
+          'X-Aviation-Source': 'relay-upstream-error',
+        }, JSON.stringify({ error: `AviationStack upstream ${upstream.statusCode}` }));
+      }
+      aviationStackCache.set(cacheKey, { json: body, ts: Date.now() });
+      // Prune stale entries periodically
+      if (aviationStackCache.size > 200) {
+        const now = Date.now();
+        for (const [k, v] of aviationStackCache) {
+          if (now - v.ts > AVIATIONSTACK_CACHE_TTL_MS * 2) aviationStackCache.delete(k);
+        }
+      }
+      sendCompressed(req, res, 200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=120, s-maxage=120',
+        'X-Aviation-Source': 'relay-upstream',
+      }, body);
+    });
+  });
+  apiReq.on('error', (err) => {
+    logThrottled('error', 'aviationstack-error', `[Relay] AviationStack error: ${err.message}`);
+    if (cached) {
+      return sendCompressed(req, res, 200, {
+        'Content-Type': 'application/json',
+        'X-Aviation-Source': 'relay-stale',
+      }, cached.json);
+    }
+    sendCompressed(req, res, 502, { 'Content-Type': 'application/json' },
+      JSON.stringify({ error: 'AviationStack upstream error' }));
+  });
+  apiReq.on('timeout', () => {
+    apiReq.destroy();
+    if (cached) {
+      return sendCompressed(req, res, 200, {
+        'Content-Type': 'application/json',
+        'X-Aviation-Source': 'relay-stale',
+      }, cached.json);
+    }
+    sendCompressed(req, res, 504, { 'Content-Type': 'application/json' },
+      JSON.stringify({ error: 'AviationStack upstream timeout' }));
+  });
+}
+
 // ── YouTube Live Detection (residential proxy bypass) ──────────────
 const YOUTUBE_PROXY_URL = process.env.YOUTUBE_PROXY_URL || '';
 
@@ -8130,7 +8658,7 @@ const server = http.createServer(async (req, res) => {
         pollInFlightSince: telegramPollInFlight && telegramPollStartedAt ? new Date(telegramPollStartedAt).toISOString() : null,
       },
       oref: {
-        enabled: OREF_ENABLED,
+        enabled: SIREN_ALERTS_ENABLED,
         alertCount: orefState.lastAlerts?.length || 0,
         historyCount24h: orefState.historyCount24h,
         totalHistoryCount: orefState.totalHistoryCount,
@@ -8540,28 +9068,44 @@ const server = http.createServer(async (req, res) => {
       }
     }
   } else if (pathname === '/oref/alerts') {
-    sendCompressed(req, res, 200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'public, max-age=5, s-maxage=5, stale-while-revalidate=3',
-    }, JSON.stringify({
-      configured: OREF_ENABLED,
-      alerts: orefState.lastAlerts || [],
-      historyCount24h: orefState.historyCount24h,
-      totalHistoryCount: orefState.totalHistoryCount,
-      timestamp: orefState.lastPollAt ? new Date(orefState.lastPollAt).toISOString() : new Date().toISOString(),
-      ...(orefState.lastError ? { error: orefState.lastError } : {}),
-    }));
+    const c = orefState._alertsCache;
+    if (c) {
+      sendPreGzipped(req, res, 200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=5, s-maxage=5, stale-while-revalidate=3',
+      }, c.json, c.gzip, c.brotli);
+    } else {
+      sendCompressed(req, res, 200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=5, s-maxage=5, stale-while-revalidate=3',
+      }, JSON.stringify({
+        configured: SIREN_ALERTS_ENABLED,
+        alerts: orefState.lastAlerts || [],
+        historyCount24h: orefState.historyCount24h,
+        totalHistoryCount: orefState.totalHistoryCount,
+        timestamp: orefState.lastPollAt ? new Date(orefState.lastPollAt).toISOString() : new Date().toISOString(),
+        ...(orefState.lastError ? { error: orefState.lastError } : {}),
+      }));
+    }
   } else if (pathname === '/oref/history') {
-    sendCompressed(req, res, 200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'public, max-age=30, s-maxage=30, stale-while-revalidate=10',
-    }, JSON.stringify({
-      configured: OREF_ENABLED,
-      history: orefState.history || [],
-      historyCount24h: orefState.historyCount24h,
-      totalHistoryCount: orefState.totalHistoryCount,
-      timestamp: orefState.lastPollAt ? new Date(orefState.lastPollAt).toISOString() : new Date().toISOString(),
-    }));
+    const c = orefState._historyCache;
+    if (c) {
+      sendPreGzipped(req, res, 200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=30, s-maxage=30, stale-while-revalidate=10',
+      }, c.json, c.gzip, c.brotli);
+    } else {
+      sendCompressed(req, res, 200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'public, max-age=30, s-maxage=30, stale-while-revalidate=10',
+      }, JSON.stringify({
+        configured: SIREN_ALERTS_ENABLED,
+        history: orefState.history || [],
+        historyCount24h: orefState.historyCount24h,
+        totalHistoryCount: orefState.totalHistoryCount,
+        timestamp: orefState.lastPollAt ? new Date(orefState.lastPollAt).toISOString() : new Date().toISOString(),
+      }));
+    }
   } else if (pathname.startsWith('/ucdp-events')) {
     handleUcdpEventsRequest(req, res);
   } else if (pathname.startsWith('/opensky')) {
@@ -9120,7 +9664,10 @@ aviation: get-airport-ops-summary (params: airport_code), get-carrier-ops (param
 intelligence: get-country-intel-brief (params: country_code), get-country-facts (params: country_code),
   get-social-velocity
 health: list-disease-outbreaks
-supply-chain: get-shipping-stress
+supply-chain: get-shipping-stress,
+  get-country-chokepoint-index (params: iso2 required, hs2 default '27'; PRO-gated — returns exposures[], vulnerabilityIndex 0-100, primaryChokepointId),
+  get-bypass-options (params: chokepointId required, cargoType default 'container', closurePct default 100; PRO-gated — returns options[] sorted by liveScore asc, each with addedTransitDays/addedCostMultiplier/bypassWarRiskTier; also primaryChokepointWarRiskTier),
+  get-country-cost-shock (params: iso2 required, chokepointId required, hs2 default '27'; PRO-gated — returns supplyDeficitPct 0-100%, coverageDays, warRiskPremiumBps, warRiskTier; hasEnergyModel=true only for HS 27 + Hormuz/Suez/Malacca/BEM)
 conflict: list-acled-events, get-humanitarian-summary (params: country_code)
 market: get-country-stock-index (params: country_code), list-earnings-calendar, get-cot-positioning
 consumer-prices: list-retailer-price-spreads
@@ -9701,7 +10248,10 @@ aviation: get-airport-ops-summary (params: airport_code), get-carrier-ops (param
 intelligence: get-country-intel-brief (params: country_code), get-country-facts (params: country_code),
   get-social-velocity
 health: list-disease-outbreaks
-supply-chain: get-shipping-stress
+supply-chain: get-shipping-stress,
+  get-country-chokepoint-index (params: iso2 required, hs2 default '27'; PRO-gated — returns exposures[], vulnerabilityIndex 0-100, primaryChokepointId),
+  get-bypass-options (params: chokepointId required, cargoType default 'container', closurePct default 100; PRO-gated — returns options[] sorted by liveScore asc, each with addedTransitDays/addedCostMultiplier/bypassWarRiskTier; also primaryChokepointWarRiskTier),
+  get-country-cost-shock (params: iso2 required, chokepointId required, hs2 default '27'; PRO-gated — returns supplyDeficitPct 0-100%, coverageDays, warRiskPremiumBps, warRiskTier; hasEnergyModel=true only for HS 27 + Hormuz/Suez/Malacca/BEM)
 conflict: list-acled-events, get-humanitarian-summary (params: country_code)
 market: get-country-stock-index (params: country_code), list-earnings-calendar, get-cot-positioning
 consumer-prices: list-retailer-price-spreads
@@ -9919,9 +10469,9 @@ server.listen(PORT, () => {
   startUsniFleetSeedLoop();
   startShippingStressSeedLoop();
   startSocialVelocitySeedLoop();
+  startWsbTickersSeedLoop();
   startClimateNewsSeedLoop();
   startChokepointFlowsSeedLoop();
-  startEmberElectricitySeedLoop();
   startPizzintSeedLoop();
   startDodoPriceSeedLoop();
 });

@@ -73,4 +73,14 @@ service AviationService {
   rpc SearchGoogleDates(SearchGoogleDatesRequest) returns (SearchGoogleDatesResponse) {
     option (sebuf.http.config) = {path: "/search-google-dates", method: HTTP_METHOD_GET};
   }
+
+  // SearchGoogleFlights searches Google Flights for available itineraries on a specific date.
+  rpc SearchGoogleFlights(SearchGoogleFlightsRequest) returns (SearchGoogleFlightsResponse) {
+    option (sebuf.http.config) = {path: "/search-google-flights", method: HTTP_METHOD_GET};
+  }
+
+  // SearchGoogleDates finds the cheapest travel dates across a flexible date range via Google Flights.
+  rpc SearchGoogleDates(SearchGoogleDatesRequest) returns (SearchGoogleDatesResponse) {
+    option (sebuf.http.config) = {path: "/search-google-dates", method: HTTP_METHOD_GET};
+  }
 }
