@@ -7,7 +7,6 @@ import type {
 import { cachedFetchJsonWithMeta } from '../../../_shared/redis';
 import {
   CACHE_TTL_SECONDS,
-  deduplicateHeadlines,
   buildArticlePrompts,
   getProviderCredentials,
   getCacheKey,
@@ -17,6 +16,32 @@ import { isProviderAvailable } from '../../../_shared/llm-health';
 import { sanitizeHeadlinesLight, sanitizeHeadlines, sanitizeForPrompt } from '../../../_shared/llm-sanitize.js';
 import { isCallerPremium } from '../../../_shared/premium-check';
 import { stripThinkingTags } from '../../../_shared/llm';
+import { buildLlmCallEvent, deliverUsageEvents } from '../../../_shared/usage';
+
+// Best-effort llm_call telemetry (#4895). This handler bypasses callLlm (the
+// client picks the provider), so it emits its own events.
+async function emitSummarizeLlmEvent(p: {
+  provider: string; model: string; ok: boolean; durationMs: number;
+  promptChars: number; usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
+  reason?: string;
+}): Promise<void> {
+  try {
+    await deliverUsageEvents([buildLlmCallEvent({
+      provider: p.provider,
+      model: p.model,
+      stage: 'summarize-article',
+      ok: p.ok,
+      durationMs: p.durationMs,
+      tokensTotal: p.usage?.total_tokens ?? 0,
+      tokensPrompt: p.usage?.prompt_tokens ?? 0,
+      tokensCompletion: p.usage?.completion_tokens ?? 0,
+      promptChars: p.promptChars,
+      maxTokens: 100,
+      fallbackIndex: 0,
+      reason: p.reason,
+    })]);
+  } catch { /* telemetry must never affect the summary */ }
+}
 
 // ======================================================================
 // Reasoning preamble detection
@@ -42,15 +67,52 @@ export async function summarizeArticle(
   const isPremium = await isCallerPremium(ctx.request);
   const { provider, mode = 'brief', geoContext = '', variant = 'full', lang = 'en' } = req;
   const systemAppend = isPremium && typeof req.systemAppend === 'string' ? req.systemAppend : '';
+  const requiresPremium = mode !== 'translate';
 
   // Input sanitization (M-14 fix): limit headline count and length
   const MAX_HEADLINES = 10;
   const MAX_HEADLINE_LEN = 500;
   const MAX_GEO_CONTEXT_LEN = 2000;
-  const headlines = (req.headlines || [])
-    .slice(0, MAX_HEADLINES)
-    .map(h => typeof h === 'string' ? h.slice(0, MAX_HEADLINE_LEN) : '');
-  const sanitizedGeoContext = typeof geoContext === 'string' ? geoContext.slice(0, MAX_GEO_CONTEXT_LEN) : '';
+  const MAX_BODY_LEN = 400;
+
+  // Bounded raw headlines — used for cache key so browser/server keys agree.
+  // Only structural patterns stripped (delimiters, control chars); semantic
+  // phrases kept intact to avoid mangling legitimate security news headlines.
+  const headlines = sanitizeHeadlinesLight(
+    (req.headlines || [])
+      .slice(0, MAX_HEADLINES)
+      .map(h => typeof h === 'string' ? h.slice(0, MAX_HEADLINE_LEN) : ''),
+  );
+
+  // geoContext gets full injection sanitization — it is free-form user text.
+  const sanitizedGeoContext = sanitizeForPrompt(
+    typeof geoContext === 'string' ? geoContext.slice(0, MAX_GEO_CONTEXT_LEN) : '',
+  );
+
+  // Bodies (RSS descriptions) paired 1:1 with headlines. Full injection
+  // sanitisation applied — bodies are untrusted upstream text identical in
+  // trust-level to geoContext. Padded to match headlines length so pair-wise
+  // cache-key identity stays stable. Callers may omit (old path) or pass a
+  // shorter/longer array (handler tolerates).
+  const rawBodies = Array.isArray(req.bodies) ? req.bodies : [];
+  const bodies = headlines.map((_, i) => {
+    const b = rawBodies[i];
+    return typeof b === 'string' ? sanitizeForPrompt(b.slice(0, MAX_BODY_LEN)) : '';
+  });
+
+  if (requiresPremium && !isPremium) {
+    return {
+      summary: '',
+      model: '',
+      provider: provider,
+      tokens: 0,
+      fallback: true,
+      error: 'Pro subscription required',
+      errorType: 'AuthError',
+      status: 'SUMMARIZE_STATUS_ERROR',
+      statusDetail: 'Pro subscription required',
+    };
+  }
 
   // Provider credential check
   const skipReasons: Record<string, string> = {
@@ -92,7 +154,7 @@ export async function summarizeArticle(
   }
 
   try {
-    const cacheKey = getCacheKey(headlines, mode, sanitizedGeoContext, variant, lang, systemAppend || undefined);
+    const cacheKey = getCacheKey(headlines, mode, sanitizedGeoContext, variant, lang, systemAppend || undefined, bodies);
 
     // Single atomic call — source tracking happens inside cachedFetchJsonWithMeta,
     // eliminating the TOCTOU race between a separate getCachedJson and cachedFetchJson.
@@ -102,12 +164,40 @@ export async function summarizeArticle(
       async () => {
         // Health gate inside fetcher — only runs on cache miss
         if (!(await isProviderAvailable(apiUrl))) return null;
-        const uniqueHeadlines = deduplicateHeadlines(headlines.slice(0, 5));
-        const { systemPrompt, userPrompt } = buildArticlePrompts(headlines, uniqueHeadlines, {
+        // Full injection sanitization applied at prompt-build time only.
+        // Headlines are re-sanitized here (not at cache-key time) so that
+        // the cache key stays aligned with the browser while the actual
+        // prompt is protected against semantic injection phrases.
+        //
+        // Pair headlines with bodies BEFORE deduping so sanitizeHeadlines
+        // drops / merges don't break the 1:1 mapping. sanitizeHeadlines
+        // operates elementwise so paired indices survive per-element
+        // replacement; we then dedup pairs together (seen-set on the
+        // sanitized headline) to preserve the pairing post-dedup.
+        const paired = headlines.map((h, i) => ({
+          h: sanitizeHeadlines([h])[0] ?? '',
+          b: bodies[i] ?? '',
+        }));
+        const nonEmpty = paired.filter((p) => p.h.length > 0);
+        const uniquePairs: Array<{ h: string; b: string }> = [];
+        const seen = new Set<string>();
+        for (const p of nonEmpty.slice(0, 5)) {
+          if (!seen.has(p.h)) {
+            seen.add(p.h);
+            uniquePairs.push(p);
+          }
+        }
+        // Preserves the existing variable name for downstream prompt
+        // builder callers that expect the full sanitised-headline list.
+        const promptHeadlines = nonEmpty.map((p) => p.h);
+        const uniqueHeadlines = uniquePairs.map((p) => p.h);
+        const uniqueBodies = uniquePairs.map((p) => p.b);
+        const { systemPrompt, userPrompt } = buildArticlePrompts(promptHeadlines, uniqueHeadlines, {
           mode,
           geoContext: sanitizedGeoContext,
           variant,
           lang,
+          bodies: uniqueBodies,
         });
 
         const sanitizedAppend = systemAppend ? sanitizeForPrompt(systemAppend) : '';
@@ -115,6 +205,8 @@ export async function summarizeArticle(
           ? `${systemPrompt}\n\n---\n\n${sanitizedAppend}`
           : systemPrompt;
 
+        const llmStartMs = Date.now();
+        const llmPromptChars = effectiveSystemPrompt.length + userPrompt.length;
         const response = await fetch(apiUrl, {
           method: 'POST',
           headers: { ...providerHeaders, 'User-Agent': CHROME_UA },
@@ -135,25 +227,30 @@ export async function summarizeArticle(
         if (!response.ok) {
           const errorText = await response.text();
           console.error(`[SummarizeArticle:${provider}] API error:`, response.status, errorText);
+          await emitSummarizeLlmEvent({ provider, model, ok: false, durationMs: Date.now() - llmStartMs, promptChars: llmPromptChars, reason: `http_${response.status}` });
           throw new Error(response.status === 429 ? 'Rate limited' : `${provider} API error`);
         }
 
         const data = await response.json() as any;
         const tokens = (data.usage?.total_tokens as number) || 0;
+        const usage = data.usage as { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number } | undefined;
         const message = data.choices?.[0]?.message;
         const rawText = typeof message?.content === 'string' ? message.content.trim() : '';
-        let rawContent = stripThinkingTags(rawText);
+        const rawContent = stripThinkingTags(rawText);
 
         if (['brief', 'analysis'].includes(mode) && rawContent.length < 20) {
           console.warn(`[SummarizeArticle:${provider}] Output too short after stripping (${rawContent.length} chars), rejecting`);
+          await emitSummarizeLlmEvent({ provider, model, ok: false, durationMs: Date.now() - llmStartMs, promptChars: llmPromptChars, usage, reason: 'stripped_empty' });
           return null;
         }
 
         if (['brief', 'analysis'].includes(mode) && hasReasoningPreamble(rawContent)) {
           console.warn(`[SummarizeArticle:${provider}] Reasoning preamble detected, rejecting`);
+          await emitSummarizeLlmEvent({ provider, model, ok: false, durationMs: Date.now() - llmStartMs, promptChars: llmPromptChars, usage, reason: 'validate_reject' });
           return null;
         }
 
+        await emitSummarizeLlmEvent({ provider, model, ok: Boolean(rawContent), durationMs: Date.now() - llmStartMs, promptChars: llmPromptChars, usage, reason: rawContent ? '' : 'empty' });
         return rawContent ? { summary: rawContent, model, tokens } : null;
       },
     );

@@ -4,8 +4,72 @@ All notable changes to World Monitor are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **CII formula `v8`** — fixed dead UCDP conflict-floor attribution. The server
+  scorer read non-existent `intensity_level` / `type_of_violence` fields from the
+  cached `conflict:ucdp-events:v1` feed (whose rows actually carry `violenceType`,
+  `deathsBest`, and `dateStart`), so UCDP never applied its war (floor 70) / minor
+  (floor 50) score floor and never counted toward `/api/health.riskScores`
+  realtime signal coverage. UCDP is now classified per country over a 2-year
+  trailing window (war when total deaths > 1000 or event count > 100; minor when
+  event count > 10), matching the frontend `deriveUcdpClassifications` heuristic.
+  The health coverage metric's conflict family is now satisfied by EITHER the
+  ACLED API path OR UCDP, so a thin/empty ACLED window no longer flips health to
+  `COVERAGE_PARTIAL` while UCDP is healthy. `combinedScore` values rise for active
+  UCDP conflict countries (e.g. UA/PK/MX gain a war floor); the risk-score cache
+  key family moved to `risk:scores:sebuf:v8` and emitted `methodology_version` is
+  now `v8`, so clients should re-baseline.
+- **CII formula `v7`** — score attribution now changes for the second
+  gap-closure batch. Coordinate attribution resolves three-way bbox overlaps
+  before pairwise border rules, so Punggye-ri maps to KP instead of CN and
+  Lublin maps to PL instead of UA; the seed mirror uses the same resolver.
+  Targeted probes also cover Lhasa, Gaziantep, Kermanshah, Quetta/Islamabad,
+  Dammam, Tabuk, Ruili, Belogorsk, north Hokkaido, and Amman. Climate anomaly
+  boosts now cover the producer-emitted `Europe`, `East Asia`, and
+  `Latin America` zones, restoring KP/KR/JP/PL/DE/FR/GB/VE coverage, and future
+  unknown zones can fall back through anomaly coordinates when available.
+  `combinedScore` values may shift for affected records, the risk-score cache
+  key family moved to `risk:scores:sebuf:v7`, and emitted
+  `methodology_version` is now `v7`; clients should re-baseline. Remaining
+  coordinate attribution is still a rectangular approximation, not full
+  point-in-polygon border geometry.
+- **CII formula `v6`** — score attribution now changes as one batch for country
+  text, coordinate, and climate anomaly inputs. The seed and server country
+  resolvers now agree on token/phrase matching, Rio Grande US/MX border
+  segments, the western Korean DMZ, RU/UA, IN/PK, CN/RU, and RU/JP bbox
+  overlaps; `north korean` maps to KP and `taiwanese` maps to TW while bare
+  `korean` remains ambiguous. Climate anomalies now feed the emitted producer
+  zones (`Ukraine`, `California`, `Amazon`, `Taiwan Strait`, `Caribbean`, etc.)
+  into CII and translate enum severities into the numeric climate boost scale.
+  `combinedScore` values may shift for affected records, the risk-score cache
+  key family moved to `risk:scores:sebuf:v6`, and emitted
+  `methodology_version` is now `v6`; clients should re-baseline.
+- **CII formula `v5`** — `dynamicScore` is now a signed movement delta in the
+  range `-100..100`, derived from a valid CII snapshot from approximately 24
+  hours earlier. Positive values mean rising risk, negative values mean falling
+  risk, and `0` means stable or no valid prior snapshot. The browser fallback
+  trend deadband now matches the server rule (`> 1` / `< -1`, an effective
+  two-point threshold for whole-point scores). `combinedScore` coefficients are
+  unchanged, the risk-score cache key family moved to `risk:scores:sebuf:v5`,
+  and emitted `methodology_version` is now `v5`; clients that previously treated
+  `dynamicScore` as a non-negative live score should re-baseline.
+- **CII methodology `v4`** — country attribution and source inputs were tightened
+  for the Composite Instability Index. Text attribution now uses token
+  exact-match / phrase matching, known bounding-box overlaps route through
+  explicit heuristics, the earthquake seed uses the USGS 4.5-week
+  (`4.5_week`) feed, and sanctions scoring reads the full country-count map.
+  Client impact: `combinedScore` values may shift for affected countries, the
+  risk-score cache key family moved to `risk:scores:sebuf:v4`, and emitted
+  `methodology_version` is now `v4`.
+- **CII formula `v3`** — conflict event activity now uses log-scaled calibration before the final component cap, preserving distance between moderate and extreme event volumes. The browser CII path now matches the server displacement log-ramp instead of the old `+4/+8` tiers, and browser news-alert pressure is no longer amplified by per-country `eventMultiplier`. Public `combinedScore` values may shift and `methodology_version` is bumped `v2` → `v3`; clients pinned on it should re-baseline. See `docs/methodology/cii-risk-scores.mdx` (#2457, methodology portions of #3726).
+- **CII weights source of truth (#3789, foundation for #2457)** — `baselineRisk` and `eventMultiplier` now come from one shared coefficient table used by both server-side risk scoring and frontend client-side CII rendering. The previous 7-country frontend/server drift was resolved to the published server/API values for AF, EG, IQ, JP, KR, LB and QA. Server/API values were unchanged by this refactor — the v3 `methodology_version` bump above is from the calibration changes, not this source-of-truth move.
+- **CII formula `v2`** — the Composite Instability Index `Security` component now scores military flights, military vessels and aviation disruptions in addition to GPS jamming (previously GPS-jamming-only — issue #3738). The composite blend gains `newsUrgencyBoost`, `earthquakeBoost`, `sanctionsBoost` and an AIS-disruption boost; `cyberBoost`/`fireBoost` are now severity-weighted. Public `combinedScore` values shift accordingly and `methodology_version` is bumped `v1` → `v2` — clients pinned on it should re-baseline. See `docs/methodology/cii-risk-scores.mdx` (#3864).
+
 ### Added
 
+- **Global inflation (all countries)** — the Consumer Prices panel gains a **World** tab surfacing IMF WEO official annual CPI inflation for every reporting economy (~195 countries), sorted highest-first, leading with year-over-year period-average inflation and an end-of-period secondary column, plus a country filter and severity colour bands. Reuses the already-hydrated `imfMacro` bootstrap bundle (no new network). Discoverable via CMD+K — typing "inflation", "global inflation", or "inflation by country" lands directly on the tab through the new `panel:consumer-prices@world` deep-link command.
+- **Unified OpenAPI bundle** — `docs/api/worldmonitor.openapi.yaml` is now emitted alongside per-service specs, merging every WorldMonitor RPC into a single OpenAPI 3.1 document (190 operations). Powered by sebuf v0.11.1's origin-level bundle support ([SebastienMelki/sebuf#158](https://github.com/SebastienMelki/sebuf/issues/158)). Bumps `SEBUF_VERSION` in the Makefile from v0.7.0 to v0.11.1 — rerun `make install-plugins` after pulling.
 - **Route Explorer**: standalone full-screen modal (CMD+K) for planning shipments between any two countries. Includes Current/Alternatives/Land/Impact tabs, keyboard-first navigation, URL state sharing, strategic-product trade data, dependency flags, and free-tier blur with public route highlight (#2980, #2982, #2994, #2996, #2997, #2998)
 - US Treasury customs revenue in Trade Policy panel with monthly data, FYTD year-over-year comparison, and revenue spike highlighting (#1663)
 - Security advisories gold standard migration: Railway cron seed fetches 24 government RSS feeds hourly, Vercel reads Redis only (#1637)
@@ -20,9 +84,23 @@ All notable changes to World Monitor are documented here.
 
 - CDN-Cache-Control header now only set for trusted origins (worldmonitor.app, Vercel previews, Tauri); no-origin server-side requests always reach the edge function so `validateApiKey` can run, closing a potential cache-bypass path for external scrapers
 
+### Changed
+
+- **Sebuf API migration (#3207)** — scenario + supply-chain endpoints migrated to the typed sebuf contract. RPC URLs now derive from method names; the five renamed v1 URLs remain live as thin aliases so existing integrations keep working:
+  - `/api/scenario/v1/run` → `/api/scenario/v1/run-scenario`
+  - `/api/scenario/v1/status` → `/api/scenario/v1/get-scenario-status`
+  - `/api/scenario/v1/templates` → `/api/scenario/v1/list-scenario-templates`
+  - `/api/supply-chain/v1/country-products` → `/api/supply-chain/v1/get-country-products`
+  - `/api/supply-chain/v1/multi-sector-cost-shock` → `/api/supply-chain/v1/get-multi-sector-cost-shock`
+
+  Aliases will retire at the next v1→v2 break ([#3282](https://github.com/koala73/worldmonitor/issues/3282)).
+
+- `POST /api/scenario/v1/run-scenario` now returns `200 OK` instead of the pre-migration `202 Accepted` on successful enqueue. sebuf's HTTP annotations don't support per-RPC status codes. Branch on response body `status === "pending"` instead of `response.status === 202`. `statusUrl` is preserved.
+
 ### Security
 
 - CDN-Cache-Control header now only set for trusted origins (worldmonitor.app, Vercel previews, Tauri); no-origin server-side requests always reach the edge function so `validateApiKey` can run, closing a potential cache-bypass path for external scrapers
+- **Shipping v2 webhook tenant isolation (#3242)** — `POST /api/v2/shipping/webhooks` (register) and `GET /api/v2/shipping/webhooks` (list) now enforce `validateApiKey(req, { forceKey: true })`, matching the sibling `[subscriberId]{,/[action]}` routes and the documented contract in `docs/api-shipping-v2.mdx`. Without this gate, a Clerk-authenticated pro user with no API key would fall through `callerFingerprint()` to the shared `'anon'` bucket and see/overwrite webhooks owned by other `'anon'`-bucket tenants.
 
 ### Fixed
 

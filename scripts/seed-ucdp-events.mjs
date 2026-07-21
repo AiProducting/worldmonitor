@@ -2,14 +2,25 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { unwrapEnvelope } from './_seed-envelope-source.mjs';
+import { compactUcdpDashboardPayload } from './_ucdp-dashboard.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const REDIS_KEY = 'conflict:ucdp-events:v1';
+// Dashboard-sized projection. The bootstrap slow tier hydrates from THIS key so
+// every client stops downloading 2,000 events (662 KB) to render 150 rows and a
+// handful of derived numbers (#5300). The canonical key above is untouched and
+// still serves the RPC, MCP and the map layer.
+const BOOTSTRAP_KEY = 'conflict:ucdp-events-bootstrap:v1';
+const BOOTSTRAP_META_KEY = 'seed-meta:conflict:ucdp-events-bootstrap';
 const UCDP_PAGE_SIZE = 1000;
 const MAX_PAGES = 6;
-const MAX_EVENTS = 2000; // TODO: review cap after observing real map density & panel usage
+const MAX_EVENTS = 2000; // Redis payload guard; widening needs live UCDP volume + Upstash payload validation.
+// Retained Redis input window. CII v8's classifier accepts a 2-year window, but
+// this writer fetches the newest pages only and keeps at most MAX_EVENTS from a
+// 365-day trailing slice until retention is deliberately widened.
 const TRAILING_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
 const VIOLENCE_TYPE_MAP = {
@@ -64,14 +75,13 @@ async function fetchGedPage(version, page, token) {
   return resp.json();
 }
 
-async function discoverVersion(token) {
-  const candidates = buildVersionCandidates();
+async function discoverVersion(token, fetchPage = fetchGedPage, candidates = buildVersionCandidates()) {
   console.log(`  Probing versions sequentially: ${candidates.join(', ')}`);
   for (const version of candidates) {
     try {
       console.log(`  Trying v${version}...`);
-      const page0 = await fetchGedPage(version, 0, token);
-      if (!Array.isArray(page0?.Result)) continue;
+      const page0 = await fetchPage(version, 0, token);
+      if (!Array.isArray(page0?.Result) || page0.Result.length === 0) continue;
       console.log(`  Found v${version} with ${page0.Result.length} events on page 0`);
       return { version, page0 };
     } catch (err) {
@@ -213,6 +223,34 @@ async function main() {
   const result = await resp.json();
   console.log('  Redis SET result:', result);
 
+  // Compact dashboard projection (#5300): rows the panel renders + aggregates and
+  // classifications it derives from the full set. Best-effort — a failure here
+  // must not fail the canonical publish; bootstrap falls back to reporting the key
+  // missing and the client re-fetches from the RPC.
+  try {
+    const compact = compactUcdpDashboardPayload(payload);
+    const compactBody = JSON.stringify(['SET', BOOTSTRAP_KEY, JSON.stringify(compact), 'EX', 86400]);
+    const compactResp = await fetch(redisUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${redisToken}`, 'Content-Type': 'application/json' },
+      body: compactBody,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!compactResp.ok) throw new Error(`HTTP ${compactResp.status}`);
+
+    const compactMeta = JSON.stringify({ fetchedAt: Date.now(), recordCount: compact.events.length });
+    const compactMetaResp = await fetch(redisUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${redisToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(['SET', BOOTSTRAP_META_KEY, compactMeta, 'EX', 604800]),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!compactMetaResp.ok) throw new Error(`seed-meta HTTP ${compactMetaResp.status}`);
+    console.log(`  Wrote ${BOOTSTRAP_KEY}: ${compact.events.length} rows, ${Object.keys(compact.classifications).length} classifications (from ${compact.totalEvents} events)`);
+  } catch (e) {
+    console.error(`  Compact projection write failed: ${e.message} — canonical key is published, dashboard will fall back to the RPC`);
+  }
+
   // Write seed-meta for health endpoint freshness tracking
   const metaKey = 'seed-meta:conflict:ucdp-events';
   const meta = { fetchedAt: Date.now(), recordCount: capped.length };
@@ -232,7 +270,7 @@ async function main() {
   if (getResp.ok) {
     const getData = await getResp.json();
     if (getData.result) {
-      const parsed = JSON.parse(getData.result);
+      const parsed = unwrapEnvelope(JSON.parse(getData.result)).data;
       console.log(`\n  Verified: ${parsed.events?.length} events in Redis`);
       console.log(`  Version: ${parsed.version} | fetchedAt: ${new Date(parsed.fetchedAt).toISOString()}`);
     }
@@ -241,9 +279,13 @@ async function main() {
   console.log('\n=== Done ===');
 }
 
-main().catch(err => {
-  console.error('FATAL:', err.message || err);
-  // Exit gracefully for cron — crashing restarts the container unnecessarily.
-  // The health endpoint will flag stale data via seed-meta.
-  process.exit(0);
-});
+export { buildVersionCandidates, discoverVersion };
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch(err => {
+    const _cause = err.cause ? ` (cause: ${err.cause.message || err.cause.code || err.cause})` : ''; console.error('FATAL:', (err.message || err) + _cause);
+    // Exit gracefully for cron — crashing restarts the container unnecessarily.
+    // The health endpoint will flag stale data via seed-meta.
+    process.exit(0);
+  });
+}

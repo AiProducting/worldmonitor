@@ -6,6 +6,7 @@ export interface RefreshRegistration {
   fn: () => Promise<boolean | void>;
   intervalMs: number;
   condition?: () => boolean;
+  runImmediately?: boolean;
 }
 
 export class RefreshScheduler implements AppModule {
@@ -43,7 +44,8 @@ export class RefreshScheduler implements AppModule {
     name: string,
     fn: () => Promise<boolean | void>,
     intervalMs: number,
-    condition?: () => boolean
+    condition?: () => boolean,
+    options: { runImmediately?: boolean } = {},
   ): void {
     this.refreshRunners.get(name)?.loop.stop();
 
@@ -62,7 +64,7 @@ export class RefreshScheduler implements AppModule {
       intervalMs,
       pauseWhenHidden: true,
       refreshOnVisible: false,
-      runImmediately: false,
+      runImmediately: options.runImmediately ?? false,
       maxBackoffMultiplier: 4,
       onError: (e) => {
         console.error(`[App] Refresh ${name} failed:`, e);
@@ -97,7 +99,9 @@ export class RefreshScheduler implements AppModule {
 
   registerAll(registrations: RefreshRegistration[]): void {
     for (const reg of registrations) {
-      this.scheduleRefresh(reg.name, reg.fn, reg.intervalMs, reg.condition);
+      this.scheduleRefresh(reg.name, reg.fn, reg.intervalMs, reg.condition, {
+        runImmediately: reg.runImmediately,
+      });
     }
   }
 }

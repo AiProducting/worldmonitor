@@ -16,71 +16,16 @@ import {
   type PredictionMarket,
 } from '../../../../src/generated/server/worldmonitor/prediction/v1/service_server';
 
-import { CHROME_UA, clampInt } from '../../../_shared/constants';
-import { cachedFetchJson, getCachedJson } from '../../../_shared/redis';
-import predictionTags from '../../../../scripts/data/prediction-tags.json';
+import filterParamContracts from '../../../../shared/openapi-filter-param-contracts.json';
+import { clampInt } from '../../../_shared/constants';
+import { getCachedJson } from '../../../_shared/redis';
 
 const REDIS_CACHE_KEY = 'prediction:markets:v1';
 const REDIS_CACHE_TTL = 600; // 10 min
 const BOOTSTRAP_KEY = 'prediction:markets-bootstrap:v1';
 
-const GAMMA_BASE = 'https://gamma-api.polymarket.com';
-const KALSHI_BASE = 'https://trading-api.kalshi.com/trade-api/v2';
-const KALSHI_CACHE_KEY = 'prediction:kalshi:v1';
-const KALSHI_API_KEY = process.env.KALSHI_API_KEY || '';
-const KALSHI_ENABLED = KALSHI_API_KEY.length > 0;
-const FETCH_TIMEOUT = 8000;
-
-const TECH_CATEGORY_TAGS = ['ai', 'tech', 'crypto', 'science'];
-const FINANCE_CATEGORY_TAGS = ['economy', 'fed', 'inflation', 'interest-rates', 'recession', 'trade', 'tariffs', 'debt-ceiling'];
-const KALSHI_CATEGORIES = [...FINANCE_CATEGORY_TAGS, 'markets', 'business'];
-
-// ---------- Internal Gamma API types ----------
-
-interface GammaMarket {
-  question: string;
-  outcomes?: string;
-  outcomePrices?: string;
-  volume?: string;
-  volumeNum?: number;
-  closed?: boolean;
-  slug?: string;
-  endDate?: string;
-}
-
-interface GammaEvent {
-  id: string;
-  title: string;
-  slug: string;
-  volume?: number;
-  markets?: GammaMarket[];
-  closed?: boolean;
-  endDate?: string;
-}
-
-// ---------- Internal Kalshi API types ----------
-
-interface KalshiMarket {
-  ticker: string;
-  event_ticker: string;
-  title: string;
-  yes_sub_title?: string;
-  last_price_dollars?: string;
-  volume_fp?: string;
-  open_interest_fp?: string;
-  close_time?: string;
-  status?: string;
-  market_type?: string;
-}
-
-interface KalshiEvent {
-  event_ticker: string;
-  title: string;
-  category?: string;
-  markets?: KalshiMarket[];
-}
-
-// ---------- Bootstrap types ----------
+const TECH_CATEGORY_TAGS = filterParamContracts.predictionMarketTechCategories;
+const FINANCE_CATEGORY_TAGS = filterParamContracts.predictionMarketFinanceCategories;
 
 interface BootstrapMarket {
   title: string;
@@ -95,6 +40,7 @@ interface BootstrapData {
   geopolitical?: BootstrapMarket[];
   tech?: BootstrapMarket[];
   finance?: BootstrapMarket[];
+  fetchedAt?: number;
 }
 
 function isExcluded(title: string): boolean {
@@ -230,105 +176,28 @@ export const listPredictionMarkets: PredictionServiceHandler['listPredictionMark
     const limit = clampInt(req.pageSize, 50, 1, 100);
     const includeKalshi = !category || KALSHI_CATEGORIES.includes(category);
 
-    // Try Railway-seeded bootstrap data first (no Gamma API call needed)
-    if (!query) {
-      try {
-        const bootstrap = await getCachedJson(BOOTSTRAP_KEY) as BootstrapData | null;
-        if (bootstrap) {
-          const isTech = category && TECH_CATEGORY_TAGS.includes(category);
-          const isFinance = !isTech && category && FINANCE_CATEGORY_TAGS.includes(category);
-          const variant = isTech ? bootstrap.tech
-            : isFinance ? (bootstrap.finance ?? bootstrap.geopolitical)
-            : bootstrap.geopolitical;
-          if (variant && variant.length > 0) {
-            const markets: PredictionMarket[] = variant.slice(0, limit).map((m) => ({
-              id: m.url?.split('/').pop() || '',
-              title: m.title,
-              yesPrice: (m.yesPrice ?? 50) / 100, // bootstrap stores 0-100, proto uses 0-1
-              volume: m.volume ?? 0,
-              url: m.url || '',
-              closesAt: m.endDate ? Date.parse(m.endDate) : 0,
-              category: category || '',
-              source: m.source === 'kalshi' ? MarketSource.MARKET_SOURCE_KALSHI : MarketSource.MARKET_SOURCE_POLYMARKET,
-          
-            }));
-            return { markets, pagination: undefined };
-          }
-        }
-      } catch { /* bootstrap read failed, fall through */ }
+    const bootstrap = await getCachedJson(BOOTSTRAP_KEY) as BootstrapData | null;
+    if (!bootstrap) return { markets: [], pagination: undefined, fetchedAt: 0, dataAvailable: false };
+
+    const fetchedAt = Number(bootstrap.fetchedAt ?? 0);
+
+    const isTech = category && TECH_CATEGORY_TAGS.includes(category);
+    const isFinance = !isTech && category && FINANCE_CATEGORY_TAGS.includes(category);
+    const variant = isTech ? bootstrap.tech
+      : isFinance ? (bootstrap.finance ?? bootstrap.geopolitical)
+      : bootstrap.geopolitical;
+
+    if (!variant || variant.length === 0) return { markets: [], pagination: undefined, fetchedAt, dataAvailable: false };
+
+    let markets = variant.map((m) => toProtoMarket(m, category));
+
+    if (query) {
+      const q = query.toLowerCase();
+      markets = markets.filter((m) => m.title.toLowerCase().includes(q));
     }
 
-    // Fallback: fetch from Gamma API and Kalshi API in parallel
-    const kalshiFetch = includeKalshi ? fetchKalshiMarkets() : Promise.resolve(null);
-
-    const gammaFetch = cachedFetchJson<PredictionMarket[]>(
-      `${REDIS_CACHE_KEY}:${category || 'all'}:${query || ''}:${req.pageSize || 50}`,
-      REDIS_CACHE_TTL,
-      async () => {
-        const useEvents = !!category;
-        const endpoint = useEvents ? 'events' : 'markets';
-        const params = new URLSearchParams({
-          closed: 'false',
-          active: 'true',
-          archived: 'false',
-          end_date_min: new Date().toISOString(),
-          order: 'volume',
-          ascending: 'false',
-          limit: String(limit),
-        });
-        if (useEvents) {
-          params.set('tag_slug', category);
-        }
-
-        const response = await fetch(
-          `${GAMMA_BASE}/${endpoint}?${params}`,
-          {
-            headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
-            signal: AbortSignal.timeout(FETCH_TIMEOUT),
-          },
-        );
-        if (!response.ok) return null;
-
-        const data: unknown = await response.json();
-        let markets: PredictionMarket[];
-        if (useEvents) {
-          markets = (data as GammaEvent[]).map((e) => mapEvent(e, category));
-        } else {
-          markets = (data as GammaMarket[]).map(mapMarket);
-        }
-
-        if (query) {
-          const q = query.toLowerCase();
-          markets = markets.filter((m) => m.title.toLowerCase().includes(q));
-        }
-
-        return markets.length > 0 ? markets : null;
-      },
-    );
-
-    const [gammaResult, kalshiResult] = await Promise.allSettled([gammaFetch, kalshiFetch]);
-
-    const polymarketMarkets = gammaResult.status === 'fulfilled' && gammaResult.value ? gammaResult.value : [];
-
-    let filteredKalshi: PredictionMarket[] = [];
-    if (includeKalshi) {
-      const kalshiMarkets = kalshiResult.status === 'fulfilled' && kalshiResult.value ? kalshiResult.value : [];
-      filteredKalshi = kalshiMarkets;
-      if (query && kalshiMarkets.length > 0) {
-        const q = query.toLowerCase();
-        filteredKalshi = kalshiMarkets.filter((m) => m.title.toLowerCase().includes(q));
-      }
-    }
-
-    const allMarkets = [...polymarketMarkets, ...filteredKalshi];
-
-    allMarkets.sort((a, b) => b.volume - a.volume);
-    const finalMarkets = allMarkets.slice(0, limit);
-
-    return finalMarkets.length > 0
-      ? { markets: finalMarkets, pagination: undefined }
-      : { markets: [], pagination: undefined };
+    return { markets: markets.slice(0, limit), pagination: undefined, fetchedAt, dataAvailable: true };
   } catch {
-    return { markets: [], pagination: undefined };
+    return { markets: [], pagination: undefined, fetchedAt: 0, dataAvailable: false };
   }
 };

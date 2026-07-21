@@ -59,16 +59,16 @@ describe('notification-relay shadowLogScore discipline', () => {
   });
 });
 
-describe('shadow-log v2 key migration', () => {
-  it('uses the v2 JSON-member key, not the legacy v1 string-member key', () => {
+describe('shadow-log key version', () => {
+  it('uses the v4 JSON-member key (prompt upgrade clean dataset)', () => {
     assert.match(
       relaySrc,
-      /SHADOW_SCORE_LOG_KEY\s*=\s*['"]shadow:score-log:v2['"]/,
-      'notification-relay must write to shadow:score-log:v2 after the schema fix',
+      /SHADOW_SCORE_LOG_KEY\s*=\s*['"]shadow:score-log:v5['"]/,
+      'notification-relay must write to shadow:score-log:v5 after the prompt upgrade',
     );
     assert.ok(
-      !/SHADOW_SCORE_LOG_KEY\s*=\s*['"]shadow:score-log:v1['"]/.test(relaySrc),
-      'legacy v1 key must not be active',
+      !/SHADOW_SCORE_LOG_KEY\s*=\s*['"]shadow:score-log:v[1234]['"]/.test(relaySrc),
+      'legacy v1/v2/v3/v4 keys must not be active',
     );
   });
 

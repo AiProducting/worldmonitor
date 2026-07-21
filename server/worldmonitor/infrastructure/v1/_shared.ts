@@ -1,3 +1,5 @@
+import filterParamContracts from '../../../../shared/openapi-filter-param-contracts.json';
+
 // ========================================================================
 // Constants
 // ========================================================================
@@ -11,9 +13,7 @@ export const Z_THRESHOLD_LOW = 1.5;
 export const Z_THRESHOLD_MEDIUM = 2.0;
 export const Z_THRESHOLD_HIGH = 3.0;
 
-export const VALID_BASELINE_TYPES = [
-  'military_flights', 'vessels', 'protests', 'news', 'ais_gaps', 'satellite_fires',
-];
+export const VALID_BASELINE_TYPES = filterParamContracts.infrastructureTemporalBaselineTypes;
 
 // ========================================================================
 // Temporal baseline helpers
@@ -40,7 +40,7 @@ export const COUNT_SOURCE_KEYS: Record<string, string> = {
 };
 
 export const TEMPORAL_ANOMALIES_KEY = 'temporal:anomalies:v1';
-export const TEMPORAL_ANOMALIES_TTL = 900;
+export const TEMPORAL_ANOMALIES_TTL = 3600;
 export const BASELINE_LOCK_KEY = 'baseline:lock';
 export const BASELINE_LOCK_TTL = 30;
 
@@ -55,6 +55,8 @@ export function getBaselineSeverity(zScore: number): string {
 // Upstash Redis MGET helper (edge-compatible)
 // getCachedJson / setCachedJson are imported from ../../../_shared/redis.ts
 // ========================================================================
+
+import { unwrapEnvelope } from '../../../_shared/seed-envelope';
 
 export async function mgetJson(keys: string[]): Promise<(unknown | null)[]> {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -72,7 +74,9 @@ export async function mgetJson(keys: string[]): Promise<(unknown | null)[]> {
     });
     if (!resp.ok) return keys.map(() => null);
     const data = (await resp.json()) as { result?: (string | null)[] };
-    return (data.result || []).map(v => v ? JSON.parse(v) : null);
+    // Envelope-aware: several of these count-source keys (wildfire:fires:v1,
+    // news:insights:v1) are contract-mode canonical keys post-PR-2.
+    return (data.result || []).map(v => v ? unwrapEnvelope(JSON.parse(v)).data : null);
   } catch {
     return keys.map(() => null);
   }

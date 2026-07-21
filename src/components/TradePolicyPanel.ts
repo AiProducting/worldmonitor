@@ -6,7 +6,7 @@ import type {
   GetTradeBarriersResponse,
 } from '@/services/trade';
 import { t } from '@/services/i18n';
-import { escapeHtml } from '@/utils/sanitize';
+import { escapeHtml, unsafeRawHtml } from '@/utils/sanitize';
 import { isFeatureAvailable } from '@/services/runtime-config';
 import { isDesktopRuntime } from '@/services/runtime';
 
@@ -53,9 +53,15 @@ export class TradePolicyPanel extends Panel {
   }
 
   private render(): void {
-    // Check for API key
-    if (isDesktopRuntime() && !isFeatureAvailable('wtoTrade')) {
-      this.setContent(`<div class="economic-empty">${t('components.tradePolicy.apiKeyMissing')}</div>`);
+    const wtoAvailable = !isDesktopRuntime() || isFeatureAvailable('wtoTrade');
+    const hasTariffs = wtoAvailable && this.tariffsData && this.tariffsData.datapoints?.length > 0;
+    const hasFlows = wtoAvailable && this.flowsData && this.flowsData.flows?.length > 0;
+    const hasBarriers = wtoAvailable && this.barriersData && this.barriersData.barriers?.length > 0;
+    const hasRevenue = this.revenueData && this.revenueData.months?.length > 0;
+    const hasComtrade = this.comtradeData && this.comtradeData.flows?.length > 0;
+
+    if (!wtoAvailable && !hasRevenue && !hasComtrade) {
+      this.setSafeContent(unsafeRawHtml(`<div class="economic-empty">${t('components.tradePolicy.apiKeyMissing')}</div>`, 'legacy Panel.setContent() migration'));
       return;
     }
 
@@ -104,14 +110,20 @@ export class TradePolicyPanel extends Panel {
       case 'barriers': contentHtml = this.renderBarriers(); break;
     }
 
-    this.setContent(`
+    const source = this.activeTab === 'comtrade' ? t('components.tradePolicy.sourceComtrade')
+      : this.activeTab === 'revenue' ? t('components.tradePolicy.sourceTreasury')
+      : (this.activeTab === 'tariffs' || this.activeTab === 'restrictions') && this.tariffsData?.effectiveTariffRate?.sourceName
+      ? `${t('components.tradePolicy.sourceWto')} / ${this.tariffsData.effectiveTariffRate.sourceName}`
+      : t('components.tradePolicy.sourceWto');
+
+    this.setSafeContent(unsafeRawHtml(`
       ${tabsHtml}
       ${unavailableBanner}
       <div class="economic-content">${contentHtml}</div>
       <div class="economic-footer">
         <span class="economic-source">WTO</span>
       </div>
-    `);
+    `, 'legacy Panel.setContent() migration'));
 
   }
 

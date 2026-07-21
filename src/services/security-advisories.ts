@@ -1,10 +1,8 @@
-import { rssProxyUrl } from '@/utils';
-import { getPersistentCache, setPersistentCache } from './persistent-cache';
+import { createLazyClient, getRpcBaseUrl } from '@/services/rpc-client';
+import { getHydratedData } from '@/services/bootstrap';
 import { dataFreshness } from './data-freshness';
-import { nameToCountryCode, matchCountryNamesInText } from './country-geometry';
-import { parseFeedDateOrNow } from './feed-date';
-
-const advisoryFeedUrl = rssProxyUrl;
+import type { ListSecurityAdvisoriesResponse } from '@/generated/client/worldmonitor/intelligence/v1/service_client';
+import { IntelligenceServiceClient } from '@/services/generated-rpc-clients';
 
 export interface SecurityAdvisory {
   title: string;
@@ -22,12 +20,21 @@ export interface SecurityAdvisoriesFetchResult {
   cachedAt?: string;
 }
 
-interface AdvisoryFeed {
-  name: string;
-  sourceCountry: string;
-  url: string;
-  parseLevel?: (title: string) => SecurityAdvisory['level'];
-  targetCountry?: string;
+const getClient = createLazyClient(() => new IntelligenceServiceClient(getRpcBaseUrl(), { fetch: (...args) => globalThis.fetch(...args) }));
+
+function normalizeAdvisories(
+  raw: ListSecurityAdvisoriesResponse | { advisories: Array<{ title: string; link: string; pubDate: string; source: string; sourceCountry: string; level: string; country: string }>; byCountry: Record<string, string> },
+): SecurityAdvisory[] {
+  if (!raw?.advisories?.length) return [];
+  return raw.advisories.map(a => ({
+    title: a.title,
+    link: a.link,
+    pubDate: new Date(a.pubDate),
+    source: a.source,
+    sourceCountry: a.sourceCountry,
+    level: (a.level || 'info') as SecurityAdvisory['level'],
+    ...(a.country ? { country: a.country } : {}),
+  }));
 }
 
 const US_LEVEL_RE = /Level (\d)/i;
@@ -201,9 +208,13 @@ export async function fetchSecurityAdvisories(
     }),
   );
 
-  for (const result of feedResults) {
-    if (result.status === 'fulfilled') {
-      allAdvisories.push(...result.value);
+  try {
+    const resp = await getClient().listSecurityAdvisories({});
+    const advisories = normalizeAdvisories(resp);
+    cachedResult = advisories;
+    lastFetch = now;
+    if (advisories.length > 0) {
+      dataFreshness.recordUpdate('security_advisories', advisories.length);
     }
   }
 

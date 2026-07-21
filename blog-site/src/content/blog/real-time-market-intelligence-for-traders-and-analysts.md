@@ -1,7 +1,7 @@
 ---
-title: "Real-Time Market Intelligence: How Traders Use World Monitor's Finance Dashboard"
-description: "Monitor 92 stock exchanges, 13 central banks, commodity prices, prediction markets, and macro signals in one free dashboard. World Monitor Finance gives traders the edge."
-metaTitle: "Free Real-Time Market Intelligence Dashboard for Traders | World Monitor Finance"
+title: "Real-Time Market Intelligence with World Monitor Finance"
+description: "Monitor 92 stock exchanges, 13 central banks, commodities, and macro signals in one free dashboard. World Monitor Finance gives traders the geopolitical edge."
+metaTitle: "Real-Time Market Intelligence for Traders | World Monitor"
 keywords: "real-time market intelligence, stock market dashboard free, financial intelligence platform, macro trading signals, market monitoring tool"
 audience: "Retail and professional traders, financial analysts, macro investors, fintech enthusiasts"
 heroImage: "/blog/images/blog/real-time-market-intelligence-for-traders-and-analysts.jpg"
@@ -51,7 +51,7 @@ Interest rates drive everything. World Monitor tracks policy decisions from 13 c
 - Bank of Korea (BoK)
 - Central Bank of Brazil (BCB)
 - Saudi Arabian Monetary Authority (SAMA)
-- BIS and IMF for systemic indicators
+- [BIS](https://www.bis.org/) and [IMF](https://www.imf.org/en/Data) for systemic indicators
 
 Each tracker includes BIS data on policy rates, real effective exchange rates (REER), and credit-to-GDP ratios, the indicators that matter for macro positioning.
 
@@ -87,7 +87,7 @@ For anyone investing in MENA, this is context that Bloomberg charges premium for
 
 ## Prediction Markets Integration
 
-World Monitor integrates **Polymarket** data directly into country dossiers and the prediction panel. See what bettors think about upcoming elections, military escalations, trade deals, and policy changes.
+World Monitor integrates **[Polymarket](https://polymarket.com/)** data directly into country dossiers and the prediction panel. See what bettors think about upcoming elections, military escalations, trade deals, and policy changes.
 
 Prediction markets are consistently among the best forecasting tools available. Having them alongside news feeds and geopolitical scoring lets you triangulate signal from noise.
 

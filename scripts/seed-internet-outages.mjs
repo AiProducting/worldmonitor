@@ -68,7 +68,7 @@ async function fetchOutages() {
     process.exit(0);
   }
 
-  const resp = await fetch(`${CF_RADAR_URL}?dateRange=7d&limit=50`, {
+  const resp = await fetch(`${CF_RADAR_URL}?dateRange=28d&limit=50`, {
     headers: {
       Authorization: `Bearer ${token}`,
       'User-Agent': CHROME_UA,
@@ -238,10 +238,27 @@ function validate(data) {
   return data && Array.isArray(data.outages);
 }
 
-runSeed('infra', 'outages', CANONICAL_KEY, fetchOutages, {
+export function declareRecords(data) {
+  return Array.isArray(data?.outages) ? data.outages.length : 0;
+}
+
+runSeed('infra', 'outages', CANONICAL_KEY, fetchAll, {
   validateFn: validate,
   ttlSeconds: CACHE_TTL,
-  sourceVersion: 'cloudflare-radar-7d',
+  sourceVersion: 'cloudflare-radar-28d',
+
+  declareRecords,
+  // CF Radar curated outage annotations are sparse (~1-2/wk, clustered, with
+  // multi-day gaps). Zero mappable outages is the NORMAL state, not a fetch
+  // failure — without this, runSeed takes the contract RETRY path on every
+  // quiet cycle, never refreshing seed-meta.fetchedAt → false STALE_SEED in
+  // /api/health after maxStaleMin. zeroIsValid publishes an empty {outages:[]}
+  // envelope + fresh meta (recordCount=0) instead. Health-side: 'outages' is in
+  // ZERO_RECORD_DATA_OK_KEYS (narrow) so present+0 is OK while a MISSING key
+  // still alarms EMPTY (real publish failure).
+  zeroIsValid: true,
+  schemaVersion: 1,
+  maxStaleMin: 30,
 }).catch((err) => {
   console.error('FATAL:', err.message || err);
   process.exit(1);

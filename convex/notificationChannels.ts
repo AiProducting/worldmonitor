@@ -1,6 +1,44 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+  mutation,
+  query,
+} from "./_generated/server";
 import { channelTypeValidator } from "./constants";
+
+/**
+ * Notifications are a PRO feature. Enforce the entitlement at the public
+ * Convex write boundary so callers cannot bypass the edge API gate.
+ */
+async function hasProEntitlement(
+  ctx: MutationCtx,
+  userId: string,
+): Promise<boolean> {
+  const entitlement = await ctx.db
+    .query("entitlements")
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
+    .first();
+  const tier =
+    entitlement && entitlement.validUntil >= Date.now()
+      ? entitlement.features.tier
+      : 0;
+  return tier >= 1;
+}
+
+async function assertProEntitlement(
+  ctx: MutationCtx,
+  userId: string,
+): Promise<void> {
+  if (!(await hasProEntitlement(ctx, userId))) {
+    throw new ConvexError({
+      code: "PRO_REQUIRED",
+      message:
+        "Notifications are a PRO feature. Upgrade to enable real-time and digest alerts.",
+    });
+  }
+}
 
 export const getChannelsByUserId = internalQuery({
   args: { userId: v.string() },
@@ -49,6 +87,83 @@ export const setChannelForUser = internalMutation({
       if (existing) { await ctx.db.replace(existing._id, doc); } else { await ctx.db.insert("notificationChannels", doc); }
     } else {
       throw new ConvexError("discord channel must be set via set-discord-oauth");
+    }
+    return { isNew };
+  },
+});
+
+// Web Push (Phase 6). Stored as its own internal mutation because the
+// payload shape is incompatible with setChannelForUser (three required
+// identity fields, no chatId/webhookEnvelope/email). Replaces any
+// prior subscription for this user — one subscription per user until
+// per-device fan-out is needed.
+//
+// Cross-account dedupe: the browser's PushSubscription is bound to
+// the origin, NOT to the Clerk session. If user A subscribes on
+// device X, signs out, then user B signs in on the same device X
+// and subscribes, the browser hands out the SAME endpoint. Without
+// this dedupe, both users' rows carry the same endpoint — meaning
+// every alert the relay fans out to user A would also deliver to
+// user B on that shared device, and vice versa. That's a cross-
+// account privacy leak.
+//
+// Fix: before writing the new row, delete any existing rows
+// anywhere in the table that match this endpoint. Effectively
+// transfers ownership of the subscription to the current caller.
+// The previous user will need to re-subscribe on that device if
+// they sign in again.
+export const setWebPushChannelForUser = internalMutation({
+  args: {
+    userId: v.string(),
+    endpoint: v.string(),
+    p256dh: v.string(),
+    auth: v.string(),
+    userAgent: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Step 1: scan for any existing rows with this endpoint across
+    // ALL users and delete them. notificationChannels has no
+    // endpoint-based index, so we filter at read time — acceptable
+    // at current scale (<10k rows) and well-bounded to a single
+    // write-path per user per connect.
+    const allWebPush = await ctx.db
+      .query("notificationChannels")
+      .collect();
+    for (const row of allWebPush) {
+      if (
+        row.channelType === "web_push" &&
+        // Narrow through the channel-type literal so TS knows
+        // `endpoint` exists on this row.
+        row.endpoint === args.endpoint
+      ) {
+        await ctx.db.delete(row._id);
+      }
+    }
+
+    // Step 2: upsert the current-user row by (userId, channelType).
+    // After the delete above there is at most one row matching the
+    // unique index, so .unique() is safe.
+    const existing = await ctx.db
+      .query("notificationChannels")
+      .withIndex("by_user_channel", (q) =>
+        q.eq("userId", args.userId).eq("channelType", "web_push"),
+      )
+      .unique();
+    const isNew = !existing;
+    const doc = {
+      userId: args.userId,
+      channelType: "web_push" as const,
+      endpoint: args.endpoint,
+      p256dh: args.p256dh,
+      auth: args.auth,
+      verified: true,
+      linkedAt: Date.now(),
+      userAgent: args.userAgent,
+    };
+    if (existing) {
+      await ctx.db.replace(existing._id, doc);
+    } else {
+      await ctx.db.insert("notificationChannels", doc);
     }
     return { isNew };
   },
@@ -193,6 +308,7 @@ export const setChannel = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("UNAUTHENTICATED");
     const userId = identity.subject;
+    await assertProEntitlement(ctx, userId);
 
     const existing = await ctx.db
       .query("notificationChannels")
@@ -247,6 +363,7 @@ export const deleteChannel = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("UNAUTHENTICATED");
     const userId = identity.subject;
+    await assertProEntitlement(ctx, userId);
 
     const existing = await ctx.db
       .query("notificationChannels")
@@ -295,6 +412,7 @@ export const deactivateChannel = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("UNAUTHENTICATED");
     const userId = identity.subject;
+    await assertProEntitlement(ctx, userId);
 
     const existing = await ctx.db
       .query("notificationChannels")
@@ -315,6 +433,7 @@ export const createPairingToken = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("UNAUTHENTICATED");
     const userId = identity.subject;
+    await assertProEntitlement(ctx, userId);
 
     // Invalidate any existing unused tokens for this user
     const existing = await ctx.db
@@ -358,6 +477,9 @@ export const claimPairingToken = mutation({
     if (!record) return { ok: false, reason: "NOT_FOUND" as const };
     if (record.used) return { ok: false, reason: "ALREADY_USED" as const };
     if (record.expiresAt < Date.now()) return { ok: false, reason: "EXPIRED" as const };
+    if (!(await hasProEntitlement(ctx, record.userId))) {
+      return { ok: false, reason: "PRO_REQUIRED" as const };
+    }
 
     // Mark token used
     await ctx.db.patch(record._id, { used: true });

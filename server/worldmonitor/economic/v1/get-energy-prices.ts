@@ -9,8 +9,8 @@ import type {
   EnergyPrice,
 } from '../../../../src/generated/server/worldmonitor/economic/v1/service_server';
 
-import { CHROME_UA } from '../../../_shared/constants';
-import { cachedFetchJson } from '../../../_shared/redis';
+import { getCachedJson } from '../../../_shared/redis';
+import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
 
 const REDIS_CACHE_KEY = 'economic:energy:v1';
 const REDIS_CACHE_TTL = 3600; // 1 hr — weekly EIA data
@@ -103,17 +103,17 @@ async function fetchEnergyPrices(commodities: string[]): Promise<EnergyPrice[]> 
 }
 
 export async function getEnergyPrices(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   req: GetEnergyPricesRequest,
 ): Promise<GetEnergyPricesResponse> {
   try {
-    const cacheKey = `${REDIS_CACHE_KEY}:${[...req.commodities].sort().join(',') || 'all'}`;
-    const result = await cachedFetchJson<GetEnergyPricesResponse>(cacheKey, REDIS_CACHE_TTL, async () => {
-      const prices = await fetchEnergyPrices(req.commodities);
-      return prices.length > 0 ? { prices } : null;
-    });
-    return result || { prices: [] };
+    const result = await getCachedJson(SEED_CACHE_KEY, true) as GetEnergyPricesResponse | null;
+    if (!result?.prices?.length) return markNoStoreFallbackResponse(ctx.request, { prices: [] });
+    if (req.commodities.length > 0) {
+      return { prices: result.prices.filter(p => req.commodities.includes(p.commodity)) };
+    }
+    return result;
   } catch {
-    return { prices: [] };
+    return markNoStoreFallbackResponse(ctx.request, { prices: [] });
   }
 }

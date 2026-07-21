@@ -1,7 +1,7 @@
 ---
-title: "Five Dashboards, One Platform: How World Monitor Serves Every Intelligence Need"
-description: "World Monitor runs 5 specialized dashboards from one codebase: geopolitical, tech, finance, commodity, and positive news. Switch between them instantly. All free."
-metaTitle: "5 Free Intelligence Dashboards: World, Tech, Finance, Commodity, Happy | World Monitor"
+title: "Five Intelligence Dashboards on One Platform"
+description: "World Monitor offers 5 free intelligence dashboards: geopolitical, tech, finance, commodity, and positive news. Switch between them instantly from one platform."
+metaTitle: "5 Intelligence Dashboards, One Platform | World Monitor"
 keywords: "intelligence dashboard variants, tech monitoring dashboard, positive news dashboard, multi-purpose intelligence platform, specialized monitoring tools"
 audience: "General tech audience, product managers, developers, knowledge workers, content creators"
 heroImage: "/blog/images/blog/five-dashboards-one-platform-worldmonitor-variants.jpg"
@@ -70,14 +70,14 @@ Finance Monitor is for traders and analysts who know that markets move on geopol
 
 - 92 global stock exchanges with trading hours and market caps
 - 7-signal macro radar with composite BUY/CASH verdict
-- 13 central bank policy trackers with BIS data
+- 13 central bank policy trackers with [BIS](https://www.bis.org/) data
 - Stablecoin peg monitoring (USDT, USDC, DAI, FDUSD, USDe)
 - BTC spot ETF flow tracker (IBIT, FBTC, GBTC, and 7 more)
 - Fear & Greed Index with 30-day history
 - Bitcoin technical signals (SMA50, SMA200, VWAP, Mayer Multiple)
 - 64 Gulf FDI investments (Saudi/UAE Vision 2030)
 - 19 financial centers ranked by GFCI
-- Polymarket prediction market integration
+- [Polymarket](https://polymarket.com/) prediction market integration
 - Forex, bonds, and derivatives panels
 
 **Who it's for:** Retail and institutional traders, macro investors, financial analysts, emerging market researchers, fintech builders.
@@ -130,7 +130,7 @@ Regardless of which variant you use, you get the full platform engine:
 
 ### Interactive 3D Globe + Flat Map
 
-Dual map engines (globe.gl/Three.js for 3D, deck.gl for flat WebGL) that switch at runtime. Both support all 45 data layers.
+Dual map engines ([globe.gl](https://globe.gl/)/[Three.js](https://threejs.org/) for 3D, [deck.gl](https://deck.gl/) for flat WebGL) that switch at runtime. Both support all 45 data layers.
 
 ### AI Analysis
 
@@ -190,7 +190,7 @@ Open source under AGPL-3.0. Deploy it yourself, contribute to it, or just use it
 
 **Pick your variant and start exploring:**
 
-- [worldmonitor.app](https://worldmonitor.app) for geopolitics
+- [worldmonitor.app](https://www.worldmonitor.app) for geopolitics
 - [tech.worldmonitor.app](https://tech.worldmonitor.app) for technology
 - [finance.worldmonitor.app](https://finance.worldmonitor.app) for markets
 - [commodity.worldmonitor.app](https://commodity.worldmonitor.app) for commodities

@@ -13,8 +13,20 @@ export const config = { runtime: 'edge' };
 import { getCorsHeaders, isDisallowedOrigin } from './_cors.js';
 // @ts-expect-error — JS module, no declaration file
 import { jsonResponse } from './_json-response.js';
+import {
+  beginStandaloneIdempotency,
+  completeStandaloneIdempotency,
+  getIdempotencyKey,
+} from './_idempotency.js';
 import { validateBearerToken } from '../server/auth-session';
 import { getEntitlements } from '../server/_shared/entitlement-check';
+
+const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low', 'info']);
+const INTERNAL_EVENT_TYPES = new Set(['flush_quiet_held', 'channel_welcome', 'watchlist_story_alert']);
+
+export function isInternalNotifyEventType(eventType: string): boolean {
+  return INTERNAL_EVENT_TYPES.has(eventType);
+}
 
 export default async function handler(req: Request): Promise<Response> {
   if (isDisallowedOrigin(req)) {
@@ -42,6 +54,8 @@ export default async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: 'UNAUTHENTICATED' }, 401, cors);
   }
 
+  const idempotencyRequest = req.clone();
+
   const ent = await getEntitlements(session.userId);
   if (!ent || ent.features.tier < 1) {
     return jsonResponse({ error: 'pro_required', message: 'Event publishing is available on the Pro plan.', upgradeUrl: 'https://worldmonitor.app/pro' }, 403, cors);
@@ -58,6 +72,16 @@ export default async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: 'eventType required (string, max 64 chars)' }, 400, cors);
   }
 
+  // Reject internal relay control events. These are dispatched by Railway
+  // cron scripts (seed-digest-notifications, quiet-hours) and must never be
+  // user-submittable. flush_quiet_held would let a Pro user force-drain their
+  // held queue on demand, bypassing batch_on_wake behaviour. watchlist_story_alert
+  // is produced by the digest scanner after ticker extraction, importance gating,
+  // and scan dedup; user-submitted copies would bypass that pipeline.
+  if (isInternalNotifyEventType(body.eventType)) {
+    return jsonResponse({ error: 'Reserved event type' }, 403, cors);
+  }
+
   if (typeof body.payload !== 'object' || body.payload === null || Array.isArray(body.payload)) {
     return jsonResponse({ error: 'payload must be an object' }, 400, cors);
   }
@@ -69,8 +93,36 @@ export default async function handler(req: Request): Promise<Response> {
     return jsonResponse({ error: 'Service unavailable' }, 503, cors);
   }
 
-  const { eventType, payload } = body;
-  const severity = typeof body.severity === 'string' ? body.severity : 'high';
+  const idempotencyKey = getIdempotencyKey(req);
+  const idempotency = idempotencyKey
+    ? await beginStandaloneIdempotency({
+      request: idempotencyRequest,
+      pathname: '/api/notify',
+      scope: `user:${session.userId}`,
+      idempotencyKey,
+      corsHeaders: cors,
+    })
+    : null;
+  if (
+    idempotency &&
+    idempotency.kind !== 'proceed' &&
+    idempotency.kind !== 'disabled'
+  ) {
+    return idempotency.response;
+  }
+
+  const { eventType } = body;
+
+  // Strip relay-internal scoring fields from user-supplied payload. These are
+  // computed server-side by the relay's importanceScore pipeline; allowing
+  // user-supplied values would let a Pro user bypass the IMPORTANCE_SCORE_MIN
+  // gate and fan out arbitrary alerts to every subscriber.
+  const payload = { ...(body.payload as Record<string, unknown>) };
+  delete payload.importanceScore;
+  delete payload.corroborationCount;
+
+  const rawSeverity = typeof body.severity === 'string' ? body.severity : 'high';
+  const severity = VALID_SEVERITIES.has(rawSeverity) ? rawSeverity : 'high';
   const variant = typeof body.variant === 'string' ? body.variant : undefined;
 
   const msg = JSON.stringify({
@@ -88,8 +140,8 @@ export default async function handler(req: Request): Promise<Response> {
   );
 
   if (!res.ok) {
-    return jsonResponse({ error: 'Publish failed' }, 502, cors);
+    return completeStandaloneIdempotency(idempotency, jsonResponse({ error: 'Publish failed' }, 502, cors));
   }
 
-  return jsonResponse({ ok: true }, 200, cors);
+  return completeStandaloneIdempotency(idempotency, jsonResponse({ ok: true }, 200, cors));
 }

@@ -18,7 +18,9 @@ import type {
   ArxivPaper,
 } from '../../../../src/generated/server/worldmonitor/research/v1/service_server';
 
-// ---------- XML Parser ----------
+import { clampInt } from '../../../_shared/constants';
+import { getCachedJson } from '../../../_shared/redis';
+import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false, // CRITICAL: arXiv uses attributes for category term, link href/rel
@@ -88,21 +90,17 @@ async function fetchArxivPapers(req: ListArxivPapersRequest): Promise<ArxivPaper
 // ---------- Handler ----------
 
 export async function listArxivPapers(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   req: ListArxivPapersRequest,
 ): Promise<ListArxivPapersResponse> {
   try {
-    const cacheKey = `${REDIS_CACHE_KEY}:${req.category || 'cs.AI'}:${req.query || ''}:${clampInt(req.pageSize, 50, 1, 100)}`;
-    const result = await cachedFetchJson<ListArxivPapersResponse>(
-      cacheKey,
-      REDIS_CACHE_TTL,
-      async () => {
-        const papers = await fetchArxivPapers(req);
-        return papers.length > 0 ? { papers, pagination: undefined } : null;
-      },
-    );
-    return result || { papers: [], pagination: undefined };
+    const category = req.category || 'cs.AI';
+    const pageSize = clampInt(req.pageSize, 50, 1, 100);
+    const seedKey = `${SEED_KEY_PREFIX}:${category}::50`;
+    const result = await getCachedJson(seedKey, true) as ListArxivPapersResponse | null;
+    if (!result?.papers?.length) return markNoStoreFallbackResponse(ctx.request, { papers: [], pagination: undefined });
+    return { papers: result.papers.slice(0, pageSize), pagination: undefined };
   } catch {
-    return { papers: [], pagination: undefined };
+    return markNoStoreFallbackResponse(ctx.request, { papers: [], pagination: undefined });
   }
 }

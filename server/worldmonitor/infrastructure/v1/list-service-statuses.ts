@@ -312,13 +312,18 @@ export async function listServiceStatuses(
   req: ListServiceStatusesRequest,
 ): Promise<ListServiceStatusesResponse> {
   try {
-    const results = await cachedFetchJson<ServiceStatus[]>(INFRA_CACHE_KEY, INFRA_CACHE_TTL, async () => {
+    const { data: results, source, leader } = await cachedFetchJsonWithMeta<ServiceStatus[]>(INFRA_CACHE_KEY, INFRA_CACHE_TTL, async () => {
       const fresh = await Promise.all(SERVICES.map(checkServiceStatus));
       return fresh.length > 0 ? fresh : null;
     });
 
     const effective = results || fallbackStatusesCache?.data || [];
-    if (results) fallbackStatusesCache = { data: results, ts: Date.now() };
+    if (results) {
+      fallbackStatusesCache = { data: results, ts: Date.now() };
+      if (source === 'fresh' && leader) {
+        setCachedJson('seed-meta:infra:service-statuses', { fetchedAt: Date.now(), recordCount: results.length }, 604800).catch(() => {});
+      }
+    }
 
     return { statuses: filterAndSortStatuses(effective, req) };
   } catch {

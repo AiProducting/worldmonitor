@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod cache_bounds;
+
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -18,6 +20,8 @@ use serde_json::{Map, Value};
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, Webview, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+use cache_bounds::validate_cache_write_sizes;
+
 const DEFAULT_LOCAL_API_PORT: u16 = 46123;
 const KEYRING_SERVICE: &str = "world-monitor";
 const LOCAL_API_LOG_FILE: &str = "local-api.log";
@@ -27,7 +31,9 @@ const MENU_HELP_GITHUB_ID: &str = "help.github";
 #[cfg(feature = "devtools")]
 const MENU_HELP_DEVTOOLS_ID: &str = "help.devtools";
 const TRUSTED_WINDOWS: [&str; 3] = ["main", "settings", "live-channels"];
-const SUPPORTED_SECRET_KEYS: [&str; 28] = [
+const DESKTOP_SHARED_SECRET_KEY: &str = "WM_DESKTOP_SHARED_SECRET";
+const BUILD_TIME_SIDECAR_ENV_KEYS: [&str; 2] = ["CONVEX_URL", DESKTOP_SHARED_SECRET_KEY];
+const SUPPORTED_SECRET_KEYS: [&str; 29] = [
     "GROQ_API_KEY",
     "OPENROUTER_API_KEY",
     "TAVILY_API_KEYS",
@@ -56,6 +62,7 @@ const SUPPORTED_SECRET_KEYS: [&str; 28] = [
     "WTO_API_KEY",
     "AVIATIONSTACK_API",
     "ICAO_API_KEY",
+    DESKTOP_SHARED_SECRET_KEY,
 ];
 
 struct LocalApiState {
@@ -271,11 +278,12 @@ fn get_local_api_port(webview: Webview, state: tauri::State<'_, LocalApiState>) 
 }
 
 #[tauri::command]
-fn list_supported_secret_keys() -> Vec<String> {
-    SUPPORTED_SECRET_KEYS
+fn list_supported_secret_keys(webview: Webview) -> Result<Vec<String>, String> {
+    require_trusted_window(webview.label())?;
+    Ok(SUPPORTED_SECRET_KEYS
         .iter()
         .map(|key| (*key).to_string())
-        .collect()
+        .collect())
 }
 
 #[tauri::command]
@@ -454,6 +462,7 @@ fn delete_cache_entries_by_prefix(webview: Webview, app: AppHandle, cache: tauri
 #[tauri::command]
 fn write_cache_entry(webview: Webview, app: AppHandle, cache: tauri::State<'_, PersistentCache>, key: String, value: String) -> Result<(), String> {
     require_trusted_window(webview.label())?;
+    validate_cache_write_sizes(&key, &value)?;
     let parsed_value: Value = serde_json::from_str(&value)
         .map_err(|e| format!("Invalid cache payload JSON: {e}"))?;
     {
@@ -503,33 +512,29 @@ fn append_desktop_log(app: &AppHandle, level: &str, message: &str) {
 }
 
 fn open_in_shell(arg: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut cmd = Command::new("open");
-        cmd.arg(arg);
-        cmd
-    };
-
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "start", "", arg]);
-        cmd
-    };
-
+    // Linux keeps its own path: spawn xdg-open directly with LD_* scrubbed
+    // (library-injection hardening that a generic opener would drop).
     #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
+    {
         let mut cmd = Command::new("xdg-open");
         cmd.arg(arg);
         cmd.env_remove("LD_LIBRARY_PATH");
         cmd.env_remove("LD_PRELOAD");
-        cmd
-    };
+        cmd.spawn()
+            .map(|_| ())
+            .map_err(|e| format!("Failed to open {}: {e}", arg))
+    }
 
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("Failed to open {}: {e}", arg))
+    // macOS + Windows: `opener` opens the target with the OS default handler
+    // via `/usr/bin/open` (macOS) and `ShellExecuteW` (Windows). It NEVER routes
+    // through `cmd.exe`, so a URL containing shell metacharacters (`&`, `|`, …)
+    // is passed as a single argument and cannot inject commands. This is the fix
+    // for GHSA-2x6r-qq54-mmhr: the old Windows branch ran `cmd /c start "" <url>`
+    // with the URL unquoted, so `https://x/?a=1&calc` executed `calc` on click.
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        opener::open(arg).map_err(|e| format!("Failed to open {}: {e}", arg))
+    }
 }
 
 fn open_path_in_shell(path: &Path) -> Result<(), String> {
@@ -568,22 +573,26 @@ fn open_sidecar_log_impl(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn open_logs_folder(app: AppHandle) -> Result<String, String> {
+fn open_logs_folder(webview: Webview, app: AppHandle) -> Result<String, String> {
+    require_trusted_window(webview.label())?;
     open_logs_folder_impl(&app).map(|path| path.display().to_string())
 }
 
 #[tauri::command]
-fn open_sidecar_log_file(app: AppHandle) -> Result<String, String> {
+fn open_sidecar_log_file(webview: Webview, app: AppHandle) -> Result<String, String> {
+    require_trusted_window(webview.label())?;
     open_sidecar_log_impl(&app).map(|path| path.display().to_string())
 }
 
 #[tauri::command]
-async fn open_settings_window_command(app: AppHandle) -> Result<(), String> {
+async fn open_settings_window_command(webview: Webview, app: AppHandle) -> Result<(), String> {
+    require_trusted_window(webview.label())?;
     open_settings_window(&app)
 }
 
 #[tauri::command]
-fn close_settings_window(app: AppHandle) -> Result<(), String> {
+fn close_settings_window(webview: Webview, app: AppHandle) -> Result<(), String> {
+    require_trusted_window(webview.label())?;
     if let Some(window) = app.get_webview_window("settings") {
         window
             .close()
@@ -616,7 +625,8 @@ async fn open_live_channels_window_command(
 }
 
 #[tauri::command]
-fn close_live_channels_window(app: AppHandle) -> Result<(), String> {
+fn close_live_channels_window(webview: Webview, app: AppHandle) -> Result<(), String> {
+    require_trusted_window(webview.label())?;
     if let Some(window) = app.get_webview_window("live-channels") {
         window
             .close()
@@ -660,14 +670,16 @@ fn open_settings_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let _settings_window = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    #[allow(unused_mut)]
+    let mut settings_builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("World Monitor Settings")
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
         .inner_size(980.0, 600.0)
         .min_inner_size(820.0, 480.0)
         .resizable(true)
-        .background_color(tauri::webview::Color(26, 28, 30, 255))
-        .build()
+        .background_color(tauri::webview::Color(26, 28, 30, 255));
+    #[cfg(target_os = "macos")]
+    { settings_builder = settings_builder.title_bar_style(tauri::TitleBarStyle::Overlay); }
+    let _settings_window = settings_builder.build()
         .map_err(|e| format!("Failed to create settings window: {e}"))?;
 
     // On Windows/Linux, menus are per-window. Remove the inherited app menu
@@ -698,15 +710,17 @@ fn open_live_channels_window(app: &AppHandle, base_url: Option<String>) -> Resul
         _ => WebviewUrl::App("live-channels.html".into()),
     };
 
-    let _live_channels_window = WebviewWindowBuilder::new(app, "live-channels", url)
-    .title("Channel management - World Monitor")
-    .title_bar_style(tauri::TitleBarStyle::Overlay)
-    .inner_size(680.0, 760.0)
-    .min_inner_size(520.0, 600.0)
-    .resizable(true)
-    .background_color(tauri::webview::Color(26, 28, 30, 255))
-    .build()
-    .map_err(|e| format!("Failed to create live channels window: {e}"))?;
+    #[allow(unused_mut)]
+    let mut channels_builder = WebviewWindowBuilder::new(app, "live-channels", url)
+        .title("Channel management - World Monitor")
+        .inner_size(680.0, 760.0)
+        .min_inner_size(520.0, 600.0)
+        .resizable(true)
+        .background_color(tauri::webview::Color(26, 28, 30, 255));
+    #[cfg(target_os = "macos")]
+    { channels_builder = channels_builder.title_bar_style(tauri::TitleBarStyle::Overlay); }
+    let _live_channels_window = channels_builder.build()
+        .map_err(|e| format!("Failed to create live channels window: {e}"))?;
 
     #[cfg(not(target_os = "macos"))]
     let _ = _live_channels_window.remove_menu();
@@ -866,9 +880,27 @@ fn sanitize_path_for_node(p: &Path) -> String {
     }
 }
 
+fn build_time_sidecar_env_value(key: &str) -> Option<&'static str> {
+    match key {
+        "CONVEX_URL" => option_env!("CONVEX_URL"),
+        DESKTOP_SHARED_SECRET_KEY => option_env!("WM_DESKTOP_SHARED_SECRET"),
+        _ => None,
+    }
+    .filter(|value| !value.trim().is_empty())
+}
+
+fn sidecar_env_value(key: &str) -> Option<String> {
+    build_time_sidecar_env_value(key)
+        .map(ToString::to_string)
+        .or_else(|| std::env::var(key).ok().filter(|value| !value.trim().is_empty()))
+}
+
 #[cfg(test)]
 mod sanitize_path_tests {
-    use super::sanitize_path_for_node;
+    use super::{
+        build_time_sidecar_env_value, sanitize_path_for_node, BUILD_TIME_SIDECAR_ENV_KEYS,
+        DESKTOP_SHARED_SECRET_KEY, SUPPORTED_SECRET_KEYS,
+    };
     use std::path::Path;
 
     #[test]
@@ -896,6 +928,21 @@ mod sanitize_path_tests {
             sanitize_path_for_node(raw),
             r"C:\Users\alice\sidecar\local-api-server.mjs".to_string()
         );
+    }
+
+    #[test]
+    fn supports_desktop_shared_secret_for_keychain_injection() {
+        assert!(SUPPORTED_SECRET_KEYS.contains(&DESKTOP_SHARED_SECRET_KEY));
+    }
+
+    #[test]
+    fn supports_desktop_shared_secret_for_packaged_sidecar_env() {
+        assert!(BUILD_TIME_SIDECAR_ENV_KEYS.contains(&DESKTOP_SHARED_SECRET_KEY));
+    }
+
+    #[test]
+    fn ignores_unknown_build_time_sidecar_env_keys() {
+        assert_eq!(build_time_sidecar_env_value("NOT_A_SUPPORTED_SIDECAR_KEY"), None);
     }
 }
 
@@ -1130,11 +1177,11 @@ fn start_local_api(app: &AppHandle) -> Result<(), String> {
         &format!("injected {secret_count} keychain secrets into sidecar env"),
     );
 
-    // Inject build-time secrets (CI) with runtime env fallback (dev)
-    if let Some(url) = option_env!("CONVEX_URL") {
-        cmd.env("CONVEX_URL", url);
-    } else if let Ok(url) = std::env::var("CONVEX_URL") {
-        cmd.env("CONVEX_URL", url);
+    // Inject packaged secrets (CI) with runtime env fallback (dev).
+    for key in BUILD_TIME_SIDECAR_ENV_KEYS {
+        if let Some(value) = sidecar_env_value(key) {
+            cmd.env(key, value);
+        }
     }
 
     let child = cmd

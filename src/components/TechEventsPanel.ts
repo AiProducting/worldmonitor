@@ -1,18 +1,19 @@
 import { Panel } from './Panel';
-import { getRpcBaseUrl } from '@/services/rpc-client';
+import { createLazyClient, getRpcBaseUrl, rpcFetch } from '@/services/rpc-client';
 import { t } from '@/services/i18n';
 import { sanitizeUrl } from '@/utils/sanitize';
 import { h, replaceChildren } from '@/utils/dom-utils';
 import { isDesktopRuntime } from '@/services/runtime';
-import { ResearchServiceClient } from '@/generated/client/worldmonitor/research/v1/service_client';
+
 import type { TechEvent, ListTechEventsResponse } from '@/generated/client/worldmonitor/research/v1/service_client';
 import type { NewsItem, DeductContextDetail } from '@/types';
 import { buildNewsContext } from '@/utils/news-context';
 import { getHydratedData } from '@/services/bootstrap';
+import { ResearchServiceClient } from '@/services/generated-rpc-clients';
 
 type ViewMode = 'upcoming' | 'conferences' | 'earnings' | 'all';
 
-const researchClient = new ResearchServiceClient(getRpcBaseUrl(), { fetch: (...args) => globalThis.fetch(...args) });
+const getResearchClient = createLazyClient(() => new ResearchServiceClient(getRpcBaseUrl(), { fetch: rpcFetch }));
 
 export class TechEventsPanel extends Panel {
   private viewMode: ViewMode = 'upcoming';
@@ -41,41 +42,25 @@ export class TechEventsPanel extends Panel {
       return;
     }
 
-    // Fallback: RPC call with retry
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const data = await researchClient.listTechEvents({
-          type: '',
-          mappable: false,
-          days: 180,
-          limit: 100,
-        });
-        if (!this.element?.isConnected) return;
-        if (!data.success) throw new Error(data.error || 'Unknown error');
-
-        this.events = data.events;
-        this.setCount(data.conferenceCount);
-        this.error = null;
-
-        if (this.events.length === 0 && attempt < 2) {
-          this.showRetrying(undefined, 15);
-          await new Promise(r => setTimeout(r, 15_000));
-          if (!this.element?.isConnected) return;
-          continue;
-        }
-        break;
-      } catch (err) {
-        if (this.isAbortError(err)) return;
-        if (!this.element?.isConnected) return;
-        if (attempt < 2) {
-          this.showRetrying(undefined, 15);
-          await new Promise(r => setTimeout(r, 15_000));
-          if (!this.element?.isConnected) return;
-          continue;
-        }
-        this.error = t('common.failedToLoad');
-        console.error('[TechEvents] Fetch error:', err);
-      }
+    // Fallback: single RPC call — listTechEvents reads from Redis seed,
+    // retrying on empty returns the same stale result each time.
+    try {
+      const data = await getResearchClient().listTechEvents({
+        type: '',
+        mappable: false,
+        days: 180,
+        limit: 100,
+      });
+      if (!this.element?.isConnected) return;
+      if (!data.success) throw new Error(data.error || 'Unknown error');
+      this.events = data.events;
+      this.setCount(data.conferenceCount);
+      this.error = null;
+    } catch (err) {
+      if (this.isAbortError(err)) return;
+      if (!this.element?.isConnected) return;
+      this.error = t('common.failedToLoad');
+      console.error('[TechEvents] Fetch error:', err);
     }
     this.loading = false;
     this.render();

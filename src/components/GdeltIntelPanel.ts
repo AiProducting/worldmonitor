@@ -1,7 +1,8 @@
 import { Panel } from './Panel';
 import { sanitizeUrl } from '@/utils/sanitize';
 import { t } from '@/services/i18n';
-import { h, replaceChildren } from '@/utils/dom-utils';
+import { h, replaceChildren, setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
+import { miniSparkline } from '@/utils/sparkline';
 import {
   getIntelTopics,
   fetchTopicIntelligence,
@@ -100,6 +101,35 @@ export class GdeltIntelPanel extends Panel {
         this.showError(t('common.failedIntelFeed'), () => this.loadActiveTopic());
       }
     }
+  }
+
+  private renderTopicSummary(timeline: TopicTimeline | null | undefined): void {
+    this.summaryEl?.remove();
+    this.summaryEl = null;
+    if (!timeline || (timeline.tone.length < 2 && timeline.vol.length < 2)) return;
+
+    const toneVals = timeline.tone.map(p => p.value);
+    const volVals = timeline.vol.map(p => p.value);
+    const lastTone = toneVals[toneVals.length - 1] ?? 0;
+    const toneChange = lastTone >= 0 ? 1 : -1;
+    const toneBadgeClass = lastTone < -1.5 ? 'negative' : lastTone > 1.5 ? 'positive' : '';
+    const tonePrefix = lastTone < -1.5 ? '▼ ' : lastTone > 1.5 ? '▲ ' : '';
+
+    const toneGroup = h('div', { className: 'gdelt-trend-group' });
+    setTrustedHtml(toneGroup, trustedHtml(miniSparkline(toneVals, toneChange, 60, 18), "legacy direct innerHTML migration"));
+    toneGroup.appendChild(h('span', { className: `gdelt-trend-value ${toneBadgeClass}`.trim() }, `${tonePrefix}${lastTone.toFixed(1)}`));
+    toneGroup.appendChild(h('span', { className: 'gdelt-trend-label' }, 'Tone'));
+
+    const volGroup = h('div', { className: 'gdelt-trend-group' });
+    if (volVals.length >= 2) {
+      setTrustedHtml(volGroup, trustedHtml(miniSparkline(volVals, 1, 60, 18), "legacy direct innerHTML migration"));
+      const lastVol = volVals[volVals.length - 1] ?? 0;
+      volGroup.appendChild(h('span', { className: 'gdelt-trend-value' }, String(Math.round(lastVol))));
+      volGroup.appendChild(h('span', { className: 'gdelt-trend-label' }, 'Volume'));
+    }
+
+    this.summaryEl = h('div', { className: 'gdelt-topic-summary' }, toneGroup, volGroup);
+    this.content.insertAdjacentElement('beforebegin', this.summaryEl);
   }
 
   private renderArticles(articles: GdeltArticle[]): void {

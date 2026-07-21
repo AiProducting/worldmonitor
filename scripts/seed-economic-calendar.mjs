@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { loadEnvFile, CHROME_UA, runSeed, resolveProxyForConnect, fredFetchJson } from './_seed-utils.mjs';
+import { EVENT_SERIES, computePrintValues, fillEventActuals } from './_econ-actuals.mjs';
 
 loadEnvFile(import.meta.url);
 
@@ -295,15 +296,50 @@ async function fetchEconomicCalendar() {
     }),
   );
 
+  // #4922 (b): capture the PRINTS. Release calendars carry dates only;
+  // NOTE consumer scope: the RPC (get-economic-calendar.ts) reconstructs
+  // its proto response and does NOT forward recentPrints — it is a
+  // Redis-side block for seeders/ops until the proto gains a field
+  // (tracked in #4922). The user-visible win flows through the EVENT
+  // actual/previous fields, which the proto already carries.
+  // the values live in series observations and land same-day. Publish a
+  // recentPrints block (always useful to market-brief consumers) and fill
+  // actual/previous on any in-window event whose print is out.
+  const recentPrints = [];
+  const printsByEvent = {};
+  await Promise.all(
+    Object.entries(EVENT_SERIES).map(async ([eventName, { series, transform }]) => {
+      try {
+        const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${series}` +
+          `&api_key=${apiKey}&file_type=json&sort_order=desc&limit=4`;
+        const json = await fredFetchJson(url, _proxyAuth);
+        const print = computePrintValues(json?.observations, transform);
+        if (print.actual) {
+          const unit = FRED_RELEASES.find((release) => release.event === eventName)?.unit ?? '';
+          printsByEvent[eventName] = print;
+          recentPrints.push({ event: eventName, series, obsDate: print.obsDate, actual: print.actual, previous: print.previous, unit });
+        }
+      } catch (err) {
+        console.warn(`  FRED observations ${series} (${eventName}) failed: ${err.message} — skipping print`);
+      }
+    }),
+  );
+  const filled = fillEventActuals(events, printsByEvent, today);
+  console.log(`  Prints: ${recentPrints.length} series captured, ${filled} event(s) filled with actuals`);
+
   events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
   console.log(`  Total events: ${events.length}`);
 
-  return { events, fromDate: today, toDate, total: events.length };
+  return { events, recentPrints, fromDate: today, toDate, total: events.length };
 }
 
 function validate(data) {
   return Array.isArray(data?.events) && data.events.length > 0;
+}
+
+export function declareRecords(data) {
+  return Array.isArray(data?.events) ? data.events.length : 0;
 }
 
 if (process.argv[1]?.endsWith('seed-economic-calendar.mjs')) {
@@ -311,6 +347,10 @@ if (process.argv[1]?.endsWith('seed-economic-calendar.mjs')) {
     validateFn: validate,
     ttlSeconds: CACHE_TTL,
     sourceVersion: 'fred-v1',
+  
+    declareRecords,
+    schemaVersion: 1,
+    maxStaleMin: 1440,
   }).catch((err) => {
     const _cause = err.cause ? ` (cause: ${err.cause.message || err.cause.code || err.cause})` : '';
     console.error('FATAL:', (err.message || err) + _cause);

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Bundle orchestrator: spawns multiple seed scripts sequentially
- * via child_process.execFile, with freshness-gated skipping.
- *
- * Pattern matches ais-relay.cjs:5645-5695 (ClimateNews/ChokepointFlows spawns).
+ * Bundle orchestrator: spawns multiple seed scripts sequentially via
+ * child_process.spawn, with line-streamed stdio, SIGTERM→SIGKILL escalation on
+ * timeout, and freshness-gated skipping. Streaming matters because a hanging
+ * section would otherwise buffer its logs until exit and look like a silent
+ * container crash (see PR that replaced execFile).
  *
  * Usage from a bundle script:
  *   import { runBundle } from './_bundle-runner.mjs';
@@ -20,10 +21,10 @@
  * broken by adopting the runner.
  */
 
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadEnvFile } from './_seed-utils.mjs';
+import { GRACEFUL_FETCH_FAILURE_EXIT_CODE, loadEnvFile } from './_seed-utils.mjs';
 import { unwrapEnvelope } from './_seed-envelope-source.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -83,30 +84,111 @@ async function readSectionFreshness(section) {
   return null;
 }
 
-function spawnSeed(scriptPath, { timeoutMs, label }) {
-  return new Promise((resolve, reject) => {
+// Stream child stdio line-by-line so hung sections surface progress instead of
+// looking like a silent crash. Escalate SIGTERM → SIGKILL on timeout so child
+// processes with in-flight HTTPS sockets can't outlive the deadline.
+const KILL_GRACE_MS = 10_000;
+
+function streamLines(stream, onLine) {
+  let buf = '';
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk) => {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line) onLine(line);
+    }
+  });
+  stream.on('end', () => { if (buf) onLine(buf); });
+  // Child-stdio `error` is rare (SIGKILL emits `end`), but Node throws on an
+  // unhandled `error` event. Log it instead of crashing the runner.
+  stream.on('error', (err) => onLine(`<stdio error: ${err.message}>`));
+}
+
+function spawnSeed(scriptPath, { timeoutMs, label, bundleStartedAtMs }) {
+  return new Promise((resolve) => {
     const t0 = Date.now();
-    execFile(process.execPath, [scriptPath], {
-      env: process.env,
-      timeout: timeoutMs,
-      maxBuffer: 2 * 1024 * 1024,
-    }, (err, stdout, stderr) => {
+    // Capture the child's structured `seed_complete` event if emitted, so
+    // the parent can re-emit the key fields on a single bundle-level line.
+    // Railway log ingestion drops child-stdout lines when many seeders log
+    // at similar timestamps (observed across Storage-Facilities /
+    // Energy-Disruptions / Pipelines-Gas in PR #3294 launch run: each
+    // dropped a different subset of Run ID / Mode / seed_complete lines
+    // despite identical code paths). Bundle-level lines survive reliably.
+    let lastSeedComplete = null;
+    // BUNDLE_RUN_STARTED_AT_MS lets consumer seeders detect when a cohort
+    // peer's seed-meta predates the current bundle run and fall back to a
+    // hard default instead of reading a stale peer key. See plan
+    // 2026-04-24-003 §"Phase 2 — SWF seeder" bundle-freshness guard.
+    const child = spawn(process.execPath, [scriptPath], {
+      env: {
+        ...process.env,
+        BUNDLE_RUN_STARTED_AT_MS: String(bundleStartedAtMs ?? Date.now()),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    streamLines(child.stdout, (line) => {
+      console.log(`  [${label}] ${line}`);
+      const idx = line.indexOf('{"event":"seed_complete"');
+      if (idx >= 0) {
+        try {
+          lastSeedComplete = JSON.parse(line.slice(idx));
+        } catch { /* malformed JSON — keep previous */ }
+      }
+    });
+    streamLines(child.stderr, (line) => console.warn(`  [${label}] ${line}`));
+
+    let settled = false;
+    let timedOut = false;
+    let killTimer = null;
+    // Fire the terminal "Failed ... timeout" log the moment we decide to kill,
+    // BEFORE the SIGTERM→SIGKILL grace window. This guarantees the reason
+    // reaches the log stream even if the container itself is killed during
+    // the grace period (Railway's ~10min cap can land inside the grace for
+    // sections whose timeoutMs is close to 10min).
+    const softKill = setTimeout(() => {
+      timedOut = true;
+      const elapsedAtTimeout = ((Date.now() - t0) / 1000).toFixed(1);
+      console.error(`  [${label}] Failed after ${elapsedAtTimeout}s: timeout after ${Math.round(timeoutMs / 1000)}s — sending SIGTERM`);
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => {
+        console.warn(`  [${label}] Did not exit on SIGTERM within ${KILL_GRACE_MS / 1000}s — sending SIGKILL`);
+        child.kill('SIGKILL');
+      }, KILL_GRACE_MS);
+    }, timeoutMs);
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(softKill);
+      if (killTimer) clearTimeout(killTimer);
+      resolve(value);
+    };
+
+    child.on('error', (err) => {
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      if (stdout) {
-        for (const line of String(stdout).trim().split('\n')) {
-          if (line) console.log(`  [${label}] ${line}`);
-        }
-      }
-      if (stderr) {
-        for (const line of String(stderr).trim().split('\n')) {
-          if (line) console.warn(`  [${label}] ${line}`);
-        }
-      }
-      if (err) {
-        const reason = err.killed ? 'timeout' : (err.code || err.message);
-        reject(new Error(`${label} failed after ${elapsed}s: ${reason}`));
+      console.error(`  [${label}] Failed after ${elapsed}s: spawn error: ${err.message}`);
+      settle({ elapsed, ok: false, reason: `spawn error: ${err.message}`, alreadyLogged: true });
+    });
+
+    child.on('close', (code, signal) => {
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      if (timedOut) {
+        // Terminal reason already logged by softKill — just record the outcome.
+        settle({ elapsed, ok: false, reason: `timeout after ${Math.round(timeoutMs / 1000)}s (signal ${signal || 'SIGTERM'})`, alreadyLogged: true });
+      } else if (code === 0) {
+        settle({ elapsed, ok: true, seedComplete: lastSeedComplete });
+      } else if (code === GRACEFUL_FETCH_FAILURE_EXIT_CODE) {
+        settle({
+          elapsed,
+          ok: false,
+          status: 'GRACEFUL_FAIL',
+          reason: `graceful fetch failure (exit ${GRACEFUL_FETCH_FAILURE_EXIT_CODE})`,
+        });
       } else {
-        resolve({ elapsed });
+        settle({ elapsed, ok: false, reason: `exit ${code ?? 'null'}${signal ? ` (signal ${signal})` : ''}` });
       }
     });
   });
@@ -121,18 +203,69 @@ function spawnSeed(scriptPath, { timeoutMs, label }) {
  *   canonicalKey?: string,   // PR 2+: reads envelope from the canonical data key
  *   intervalMs: number,
  *   timeoutMs?: number,
+ *   dependsOn?: string[],    // labels that MUST run earlier in the array
+ *   requiredEnv?: string[],  // deployment config required before any section runs
  * }>} sections
  * @param {{ maxBundleMs?: number }} [opts]
  */
 export async function runBundle(label, sections, opts = {}) {
+  const missingEnvBySection = new Map();
+  for (const section of sections) {
+    if (section.requiredEnv == null) continue;
+    if (!Array.isArray(section.requiredEnv)) {
+      throw new Error(`[Bundle:${label}] section '${section.label}' requiredEnv must be an array`);
+    }
+    const missing = [];
+    for (const name of section.requiredEnv) {
+      if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
+        throw new Error(`[Bundle:${label}] section '${section.label}' has invalid requiredEnv name '${name}'`);
+      }
+      if (!String(process.env[name] ?? '').trim()) {
+        missing.push(name);
+      }
+    }
+    if (missing.length > 0) missingEnvBySection.set(section.label, missing);
+  }
+
+  // Topological-order assertion. A consumer seeder reading a peer's
+  // Redis output in-bundle depends on the peer running first; if a
+  // future edit (e.g. alphabetizing sections) reorders them, the
+  // consumer reads last-bundle's stale output. The freshness-guard in
+  // the consumer is a safety net; this assertion is the contract.
+  // Throws on violation so misconfiguration surfaces before any cron
+  // tick runs.
+  const labelIndex = new Map(sections.map((s, i) => [s.label, i]));
+  for (let i = 0; i < sections.length; i++) {
+    const deps = sections[i].dependsOn;
+    if (!Array.isArray(deps)) continue;
+    for (const depLabel of deps) {
+      const depIdx = labelIndex.get(depLabel);
+      if (depIdx == null) {
+        throw new Error(`[Bundle:${label}] section '${sections[i].label}' dependsOn unknown label '${depLabel}'`);
+      }
+      if (depIdx >= i) {
+        throw new Error(`[Bundle:${label}] section '${sections[i].label}' dependsOn '${depLabel}' but '${depLabel}' is at index ${depIdx} (must be < ${i})`);
+      }
+    }
+  }
+
   const t0 = Date.now();
   const maxBundleMs = opts.maxBundleMs ?? Infinity;
   const budgetLabel = Number.isFinite(maxBundleMs) ? `, budget ${Math.round(maxBundleMs / 1000)}s` : '';
   console.log(`[Bundle:${label}] Starting (${sections.length} sections${budgetLabel})`);
 
-  let ran = 0, skipped = 0, deferred = 0, failed = 0;
+  let ran = 0, skipped = 0, deferred = 0, failed = 0, gracefulFailed = 0;
 
   for (const section of sections) {
+    const missingEnv = missingEnvBySection.get(section.label);
+    if (missingEnv) {
+      const reason = `missing required environment configuration: ${missingEnv.join(', ')}`;
+      console.error(`  [${section.label}] Failed configuration: ${reason}`);
+      console.error(`[Bundle:${label}] section=${section.label} status=CONFIG_ERROR reason=${reason}`);
+      failed++;
+      continue;
+    }
+
     const scriptPath = join(__dirname, section.script);
     const timeout = section.timeoutMs || 300_000;
 
@@ -149,25 +282,62 @@ export async function runBundle(label, sections, opts = {}) {
     }
 
     const elapsedBundle = Date.now() - t0;
-    if (elapsedBundle + timeout > maxBundleMs) {
+    // Worst-case runtime is timeoutMs + KILL_GRACE_MS (child may ignore SIGTERM
+    // and need SIGKILL after grace). Admit only when the full worst-case fits.
+    const worstCase = timeout + KILL_GRACE_MS;
+    if (elapsedBundle + worstCase > maxBundleMs) {
       const remainingSec = Math.max(0, Math.round((maxBundleMs - elapsedBundle) / 1000));
-      const timeoutSec = Math.round(timeout / 1000);
-      console.log(`  [${section.label}] Deferred, needs ${timeoutSec}s but only ${remainingSec}s left in bundle budget`);
+      const needSec = Math.round(worstCase / 1000);
+      console.log(`  [${section.label}] Deferred, needs ${needSec}s (timeout+grace) but only ${remainingSec}s left in bundle budget`);
       deferred++;
       continue;
     }
 
-    try {
-      const result = await spawnSeed(scriptPath, { timeoutMs: timeout, label: section.label });
+    const result = await spawnSeed(scriptPath, { timeoutMs: timeout, label: section.label, bundleStartedAtMs: t0 });
+    if (result.ok) {
       console.log(`  [${section.label}] Done (${result.elapsed}s)`);
+      // Bundle-level per-section summary — emitted from parent stdout so
+      // Railway log ingestion captures it reliably even when child lines
+      // drop. Observability tools should key off this line, not per-section
+      // Run ID / Mode / seed_complete lines which are best-effort only.
+      const sc = result.seedComplete;
+      if (sc && typeof sc === 'object') {
+        console.log(`[Bundle:${label}] section=${section.label} status=OK durationMs=${sc.durationMs ?? ''} records=${sc.recordCount ?? ''} state=${sc.state || 'OK'}`);
+      } else {
+        // Seeder didn't emit seed_complete (legacy non-contract seeders, or
+        // the child's event line was dropped before parsing).
+        console.log(`[Bundle:${label}] section=${section.label} status=OK elapsed=${result.elapsed}s`);
+      }
       ran++;
-    } catch (err) {
-      console.error(`  [${section.label}] ${err.message}`);
-      failed++;
+    } else {
+      if (!result.alreadyLogged) {
+        console.error(`  [${section.label}] Failed after ${result.elapsed}s: ${result.reason}`);
+      }
+      // Emit the FAILED summary to stderr (same stream as the Failed line
+      // and SIGKILL escalation log) so chronological ordering in combined
+      // output is preserved. If we went to stdout here, the line would
+      // appear before those stderr lines when consumers concatenate
+      // stdout+stderr, breaking tests (and log readers) that rely on
+      // signal-escalation ordering.
+      const status = result.status || 'FAILED';
+      console.error(`[Bundle:${label}] section=${section.label} status=${status} elapsed=${result.elapsed}s reason=${(result.reason || 'unknown').replace(/\s+/g, ' ')}`);
+      // A GRACEFUL_FAIL (child exit 75) extended the last-good TTL and lost no
+      // data — a transient upstream blip (e.g. a rate-limited source). Counting
+      // it as a hard failure would crash the whole bundle (exit 1 → Railway
+      // "Deploy Crashed!") over a benign per-member skip. Track it separately so
+      // only HARD failures gate the exit code; the skip stays fully logged above.
+      if (status === 'GRACEFUL_FAIL') gracefulFailed++;
+      else failed++;
     }
   }
 
   const totalSec = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`[Bundle:${label}] Finished in ${totalSec}s, ran:${ran} skipped:${skipped} deferred:${deferred} failed:${failed}`);
+  console.log(`[Bundle:${label}] Finished in ${totalSec}s, ran:${ran} skipped:${skipped} deferred:${deferred} failed:${failed} graceful:${gracefulFailed}`);
+  // Graceful-only run (transient skips, no hard failures): exit 0 so Railway
+  // does not paint CRASHED and fire a spurious alert. Real staleness is caught
+  // independently by the /api/health freshness monitor keyed on seed-meta TTL.
+  if (failed === 0 && gracefulFailed > 0) {
+    console.log(`[Bundle:${label}] ${gracefulFailed} graceful fetch skip(s), no hard failures — no data lost, exiting 0 (not a crash)`);
+  }
   process.exit(failed > 0 ? 1 : 0);
 }

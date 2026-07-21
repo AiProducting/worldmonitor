@@ -1,9 +1,11 @@
 // Non-sebuf: returns XML/HTML, stays as standalone Vercel function
 import { getCorsHeaders, isDisallowedOrigin } from './_cors.js';
+import { jsonResponse } from './_json-response.js';
+import { captureSilentError } from './_sentry-edge.js';
 export const config = { runtime: 'edge' };
 
 // Scrape FwdStart newsletter archive and return as RSS
-export default async function handler(req) {
+export default async function handler(req, ctx) {
   const cors = getCorsHeaders(req);
   if (isDisallowedOrigin(req)) {
     return new Response(JSON.stringify({ error: 'Origin not allowed' }), { status: 403, headers: cors });
@@ -96,7 +98,8 @@ export default async function handler(req) {
     });
   } catch (error) {
     console.error('FwdStart scraper error:', error);
-    return new Response(JSON.stringify({
+    captureSilentError(error, { tags: { route: 'api/fwdstart', step: 'scrape' }, ctx });
+    return jsonResponse({
       error: 'Failed to fetch FwdStart archive',
       details: error.message
     }), {

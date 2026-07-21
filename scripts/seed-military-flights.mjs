@@ -2,6 +2,7 @@
 
 import { loadEnvFile, CHROME_UA, getRedisCredentials, acquireLockSafely, releaseLock, withRetry, writeFreshnessMetadata, logSeedResult, verifySeedKey, extendExistingTtl } from './_seed-utils.mjs';
 import { summarizeMilitaryTheaters, buildMilitarySurges, appendMilitaryHistory } from './_military-surges.mjs';
+import { unwrapEnvelope } from './_seed-envelope-source.mjs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -62,11 +63,40 @@ const HEX_RANGES = [
   { start: 'E40000', end: 'E41FFF', operator: 'other', country: 'Brazil' },
 ];
 
+// Individually observed PLA aircraft only. These records are intentionally
+// exact matches: China's 780000-7BFFFF national allocation also contains civil
+// traffic and must never become a military range. Evidence snapshots:
+// - 7A4262: PLAAF Y-8G 30518 (Taiwan News, 2021-01-26)
+// - 7A444F/7A446F/7A4403: PLAAF YY-20/Y-20A aircraft observed in 2025
+const EXACT_MILITARY_AIRCRAFT = new Map([
+  ['7A4262', { operator: 'plaaf', country: 'China', aircraftType: 'reconnaissance', aircraftModel: 'Y-8G' }],
+  ['7A444F', { operator: 'plaaf', country: 'China', aircraftType: 'tanker', aircraftModel: 'YY-20' }],
+  ['7A446F', { operator: 'plaaf', country: 'China', aircraftType: 'transport', aircraftModel: 'Y-20A' }],
+  ['7A4403', { operator: 'plaaf', country: 'China', aircraftType: 'transport', aircraftModel: 'Y-20A' }],
+]);
+
 // ── Commercial ICAO 3-letter codes (blocklist for ambiguous patterns) ────
 const COMMERCIAL_CALLSIGNS = new Set([
-  'CCA', 'CHH', 'SVA', 'THY', 'THK', 'TUR', 'ELY', 'ELAL',
+  'CCA', 'CSN', 'CHH', 'SVA', 'THY', 'THK', 'TUR', 'ELY', 'ELAL',
   'UAE', 'QTR', 'ETH', 'SAA', 'PAK', 'AME', 'RED',
 ]);
+
+const COMMERCIAL_CALLSIGN_PATTERNS = [
+  /^CLX\d/i,
+  /^QTR/i,
+  /^QR\d/i,
+  /^UAE\d/i,
+  /^ETH\d/i,
+  /^THY\d/i,
+  /^SVA\d/i,
+  /^CCA\d/i,
+  /^CSN\d/i,
+  /^CHH\d/i,
+  /^ELY\d/i,
+  /^ELAL/i,
+];
+
+const TRUSTED_HEX_OPERATORS = new Set(['usaf', 'raf', 'faf', 'gaf', 'iaf', 'nato', 'plaaf', 'plan', 'vks']);
 
 // ── Military Callsign Patterns ─────────────────────────────
 const CALLSIGN_PATTERNS = [
@@ -158,7 +188,7 @@ const CALLSIGN_PATTERNS = [
   { re: /^RFF\d/i, operator: 'vks', aircraftType: null },
   { re: /^RSD\d/i, operator: 'vks', aircraftType: null },
   { re: /^RUSSIAN/i, operator: 'vks', aircraftType: null },
-  // China — CCA removed (China Airlines ICAO), CHH removed (Hainan Airlines ICAO)
+  // China — CCA removed (Air China ICAO), CHH removed (Hainan Airlines ICAO)
   { re: /^PLAAF/i, operator: 'plaaf', aircraftType: null },
   { re: /^PLA\d/i, operator: 'plaaf', aircraftType: null },
   { re: /^CHINA\s?(AIR\s?FORCE|MIL|NAVY)/i, operator: 'plaaf', aircraftType: null },
@@ -194,6 +224,8 @@ const POSTURE_THEATERS = [
 // ── Detection Functions ────────────────────────────────────
 function isKnownHex(hexCode) {
   const hex = hexCode.toUpperCase();
+  const exact = EXACT_MILITARY_AIRCRAFT.get(hex);
+  if (exact) return { ...exact, exact: true };
   for (const r of HEX_RANGES) {
     if (hex >= r.start && hex <= r.end) return r;
   }
@@ -231,6 +263,222 @@ function detectAircraftType(callsign) {
   if (/^(DEATH|BONE|DOOM|B52|B1|B2)/.test(cs)) return 'bomber';
   if (/^(BOLT|VIPER|RAPTOR|BRONCO|EAGLE|HORNET|FALCON|STRIKE|TANGO|FURY)/.test(cs)) return 'fighter';
   return 'unknown';
+}
+
+function buildWingbitsSourceMeta(flight) {
+  return {
+    source: 'wingbits',
+    rawKeys: Object.keys(flight || {}),
+    rawPreview: {
+      operator: flight?.operator || '',
+      operatorName: flight?.operatorName || '',
+      airline: flight?.airline || '',
+      owner: flight?.owner || '',
+      type: flight?.type || '',
+      category: flight?.category || '',
+      aircraftType: flight?.aircraftType || '',
+      aircraftTypeCode: flight?.aircraftTypeCode || flight?.icaoType || flight?.aircraftCode || '',
+      description: flight?.description || flight?.aircraftDescription || '',
+      registration: flight?.registration || flight?.reg || flight?.tail || '',
+      originCountry: flight?.co || flight?.originCountry || '',
+    },
+    operatorName: flight?.operator || flight?.operatorName || flight?.airline || flight?.owner || flight?.o || '',
+    operatorCode: flight?.operatorCode || flight?.airlineCode || flight?.icaoOperator || flight?.iataOperator || '',
+    ownerName: flight?.owner || flight?.ownerName || '',
+    aircraftModel: flight?.aircraftModel || flight?.model || flight?.aircraftDescription || '',
+    aircraftTypeLabel: flight?.type || flight?.category || flight?.aircraftType || flight?.aircraftCategory || flight?.description || '',
+    aircraftTypeCode: flight?.aircraftTypeCode || flight?.icaoType || flight?.aircraftCode || '',
+    aircraftDescription: flight?.aircraftDescription || flight?.description || '',
+    registration: flight?.registration || flight?.reg || flight?.tail || '',
+    originCountry: flight?.co || flight?.originCountry || '',
+  };
+}
+
+function getSourceHintText(sourceMeta = {}) {
+  return [
+    sourceMeta.operatorName,
+    sourceMeta.operatorCode,
+    sourceMeta.ownerName,
+    sourceMeta.aircraftModel,
+    sourceMeta.aircraftTypeLabel,
+    sourceMeta.aircraftTypeCode,
+    sourceMeta.aircraftDescription,
+    sourceMeta.registration,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toUpperCase();
+}
+
+function summarizeSourceMeta(sourceMeta = {}) {
+  return {
+    source: sourceMeta.source || '',
+    operatorName: sourceMeta.operatorName || '',
+    operatorCode: sourceMeta.operatorCode || '',
+    ownerName: sourceMeta.ownerName || '',
+    aircraftModel: sourceMeta.aircraftModel || '',
+    aircraftTypeLabel: sourceMeta.aircraftTypeLabel || '',
+    aircraftTypeCode: sourceMeta.aircraftTypeCode || '',
+    aircraftDescription: sourceMeta.aircraftDescription || '',
+    registration: sourceMeta.registration || '',
+    originCountry: sourceMeta.originCountry || '',
+  };
+}
+
+function summarizeRawSourcePreview(sourceMeta = {}) {
+  const preview = sourceMeta.rawPreview || {};
+  return Object.fromEntries(
+    Object.entries(preview).filter(([, value]) => Boolean(value)),
+  );
+}
+
+const SOURCE_META_FIELDS = [
+  'operatorName',
+  'operatorCode',
+  'ownerName',
+  'aircraftModel',
+  'aircraftTypeLabel',
+  'aircraftTypeCode',
+  'aircraftDescription',
+  'registration',
+  'originCountry',
+];
+
+function hasMeaningfulSourceMeta(sourceMeta = {}) {
+  const summary = summarizeSourceMeta(sourceMeta);
+  return SOURCE_META_FIELDS.some((field) => Boolean(summary[field]));
+}
+
+function createClassificationStageCounters() {
+  return {
+    positionEligible: 0,
+    sourceMetaAttached: 0,
+    callsignPresent: 0,
+    callsignMatched: 0,
+    hexMatched: 0,
+    candidateStates: 0,
+    sourceTypeCandidateHits: 0,
+    sourceOperatorCandidateHits: 0,
+    sourceFieldCoverage: Object.fromEntries(SOURCE_META_FIELDS.map((field) => [field, 0])),
+    sourceHintCounts: {
+      militaryHint: 0,
+      militaryOperatorHint: 0,
+      commercialHint: 0,
+    },
+    sourceRawKeyCounts: {},
+    rawKeyOnlyCandidates: 0,
+    rawKeyOnlySamples: [],
+    sourceShapeSamples: [],
+  };
+}
+
+function recordSourceCoverage(stageCounters, sourceMeta = {}, sourceHints = {}, sourceOperator = null, sourceType = 'unknown', callsign = '') {
+  const summary = summarizeSourceMeta(sourceMeta);
+  const rawPreview = summarizeRawSourcePreview(sourceMeta);
+  if (hasMeaningfulSourceMeta(sourceMeta)) {
+    stageCounters.sourceMetaAttached += 1;
+  }
+  if ((sourceMeta.rawKeys || []).length > 0 && !hasMeaningfulSourceMeta(sourceMeta)) {
+    stageCounters.rawKeyOnlyCandidates += 1;
+    if (stageCounters.rawKeyOnlySamples.length < 5) {
+      stageCounters.rawKeyOnlySamples.push({
+        callsign,
+        rawKeys: [...(sourceMeta.rawKeys || [])].slice(0, 20).sort(),
+      });
+    }
+  }
+  for (const field of SOURCE_META_FIELDS) {
+    if (summary[field]) stageCounters.sourceFieldCoverage[field] += 1;
+  }
+  if (sourceHints.militaryHint) stageCounters.sourceHintCounts.militaryHint += 1;
+  if (sourceHints.militaryOperatorHint) stageCounters.sourceHintCounts.militaryOperatorHint += 1;
+  if (sourceHints.commercialHint) stageCounters.sourceHintCounts.commercialHint += 1;
+  if (sourceOperator) stageCounters.sourceOperatorCandidateHits += 1;
+  if (sourceType !== 'unknown') stageCounters.sourceTypeCandidateHits += 1;
+  for (const rawKey of sourceMeta.rawKeys || []) {
+    if (!rawKey) continue;
+    stageCounters.sourceRawKeyCounts[rawKey] = (stageCounters.sourceRawKeyCounts[rawKey] || 0) + 1;
+  }
+  if (stageCounters.sourceShapeSamples.length < 5 && ((sourceMeta.rawKeys || []).length > 0 || Object.keys(rawPreview).length > 0)) {
+    stageCounters.sourceShapeSamples.push({
+      callsign,
+      rawKeys: [...(sourceMeta.rawKeys || [])].slice(0, 20).sort(),
+      normalized: summary,
+      rawPreview,
+    });
+  }
+}
+
+function deriveSourceHints(sourceMeta = {}) {
+  const hintText = getSourceHintText(sourceMeta);
+  return {
+    hintText,
+    militaryHint: /(AIR FORCE|AIR ?SELF ?DEFEN[CS]E|MILIT|NAVY|MARINE|ARMY|DEFEN[CS]E|SQUADRON|\bUSAF\b|\bUSN\b|\bUSMC\b|\bRAF\b|\bRCAF\b|\bRAAF\b|NATO|\bPLAAF\b|\bPLAN\b|\bVKS\b|RECON|AWACS|TANKER|AIRLIFT|FIGHTER|BOMBER|DRONE)/.test(hintText),
+    militaryOperatorHint: /(AIR FORCE|AIR ?SELF ?DEFEN[CS]E|NAVY|MARINE|ARMY|DEFEN[CS]E|SQUADRON|EMIRI AIR FORCE|ROYAL .* AIR FORCE|AEROSPACE FORCES|\bPLAAF\b|\bPLAN\b|NATO)/.test(hintText),
+    commercialHint: /(AIRLINES|AIRWAYS|LOGISTICS|EXPRESS|CARGOLUX|TURKISH AIRLINES|ETHIOPIAN AIRLINES|QATAR AIRWAYS|EMIRATES SKYCARGO|SAUDIA)/.test(hintText),
+  };
+}
+
+function detectAircraftTypeFromSourceMeta(sourceMeta = {}) {
+  const hintText = getSourceHintText(sourceMeta);
+  if (!hintText) return 'unknown';
+  if (/(KC-?135|KC-?46|KC-?10|A330 MRTT|MRTT|TANKER|REFUEL)/.test(hintText)) return 'tanker';
+  if (/(AWACS|AEW&C|AEW|E-2|E-3|E-6|E-7|EARLY WARNING)/.test(hintText)) return 'awacs';
+  if (/(C-17|C17|C-130|C130|C-2|C2|C-27|C27|A400M|IL-76|IL76|Y-20|Y20|TRANSPORT|AIRLIFT|CARGO)/.test(hintText)) return 'transport';
+  if (/(RC-135|RC135|RECON|SURVEILLANCE|SIGINT|ELINT|ISR|U-2|P-8|P8|P-3|P3|PATROL)/.test(hintText)) return 'reconnaissance';
+  if (/(MQ-9|MQ9|RQ-4|RQ4|DRONE|UAS|UAV)/.test(hintText)) return 'drone';
+  if (/(B-52|B52|B-1|B1|B-2|B2|BOMBER)/.test(hintText)) return 'bomber';
+  if (/(F-16|F16|F-15|F15|F-18|F18|F-22|F22|F-35|F35|J-10|J10|J-11|J11|J-16|J16|SU-27|SU27|SU-30|SU30|SU-35|SU35|MIG-29|MIG29|FIGHTER)/.test(hintText)) return 'fighter';
+  return 'unknown';
+}
+
+function deriveOperatorFromSourceMeta(sourceMeta = {}) {
+  const hintText = getSourceHintText(sourceMeta);
+  if (!hintText) return null;
+  if (/PEOPLE'?S LIBERATION ARMY AIR FORCE|\bPLAAF\b|CHINESE AIR FORCE/.test(hintText)) return { operator: 'plaaf', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  if (/PEOPLE'?S LIBERATION ARMY NAVY|\bPLAN\b/.test(hintText)) return { operator: 'plan', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES AIR FORCE|US AIR FORCE|\bUSAF\b/.test(hintText)) return { operator: 'usaf', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES NAVY|US NAVY|\bUSN\b/.test(hintText)) return { operator: 'usn', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES MARINE CORPS|US MARINE|\bUSMC\b/.test(hintText)) return { operator: 'usmc', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES ARMY|US ARMY/.test(hintText)) return { operator: 'usa', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL AIR FORCE|\bRAF\b/.test(hintText)) return { operator: 'raf', operatorCountry: 'UK', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL NAVY/.test(hintText)) return { operator: 'rn', operatorCountry: 'UK', reason: 'source_operator', confidence: 'high' };
+  if (/FRENCH AIR FORCE|ARMEE DE L'?AIR|ARMÉE DE L'?AIR|\bFAF\b/.test(hintText)) return { operator: 'faf', operatorCountry: 'France', reason: 'source_operator', confidence: 'high' };
+  if (/GERMAN AIR FORCE|LUFTWAFFE|\bGAF\b/.test(hintText)) return { operator: 'gaf', operatorCountry: 'Germany', reason: 'source_operator', confidence: 'high' };
+  if (/ISRAELI AIR FORCE|\bIAF\b/.test(hintText)) return { operator: 'iaf', operatorCountry: 'Israel', reason: 'source_operator', confidence: 'high' };
+  if (/NATO/.test(hintText)) return { operator: 'nato', operatorCountry: 'NATO', reason: 'source_operator', confidence: 'high' };
+  if (/QATAR EMIRI AIR FORCE|\bQEAF\b/.test(hintText)) return { operator: 'qeaf', operatorCountry: 'Qatar', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL SAUDI AIR FORCE|\bRSAF\b/.test(hintText)) return { operator: 'rsaf', operatorCountry: 'Saudi Arabia', reason: 'source_operator', confidence: 'high' };
+  if (/TURKISH AIR FORCE|\bTURAF\b|\bTRKAF\b/.test(hintText)) return { operator: 'turaf', operatorCountry: 'Turkey', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED ARAB EMIRATES AIR FORCE|UAE AIR FORCE|EMIRATI AIR FORCE/.test(hintText)) return { operator: 'uaeaf', operatorCountry: 'UAE', reason: 'source_operator', confidence: 'high' };
+  if (/KUWAIT AIR FORCE/.test(hintText)) return { operator: 'kuwaf', operatorCountry: 'Kuwait', reason: 'source_operator', confidence: 'high' };
+  if (/EGYPTIAN AIR FORCE/.test(hintText)) return { operator: 'egyaf', operatorCountry: 'Egypt', reason: 'source_operator', confidence: 'high' };
+  if (/PAKISTAN AIR FORCE|\bPAF\b/.test(hintText)) return { operator: 'paf', operatorCountry: 'Pakistan', reason: 'source_operator', confidence: 'high' };
+  if (/\bJASDF\b|JAPAN AIR SELF DEFENSE FORCE/.test(hintText)) return { operator: 'jasdf', operatorCountry: 'Japan', reason: 'source_operator', confidence: 'high' };
+  if (/\bROKAF\b|REPUBLIC OF KOREA AIR FORCE/.test(hintText)) return { operator: 'rokaf', operatorCountry: 'South Korea', reason: 'source_operator', confidence: 'high' };
+  if (/RUSSIAN AEROSPACE FORCES|\bVKS\b/.test(hintText)) return { operator: 'vks', operatorCountry: 'Russia', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL AUSTRALIAN AIR FORCE|\bRAAF\b/.test(hintText)) return { operator: 'raaf', operatorCountry: 'Australia', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL CANADIAN AIR FORCE|\bRCAF\b|CANADIAN ARMED FORCES/.test(hintText)) return { operator: 'rcaf', operatorCountry: 'Canada', reason: 'source_operator', confidence: 'high' };
+  return null;
+}
+
+function deriveTrustedPlaOperatorFromSourceMeta(sourceMeta = {}) {
+  const operatorCode = String(sourceMeta.operatorCode || '').toUpperCase().trim();
+  if (operatorCode === 'PLAAF') {
+    return { operator: 'plaaf', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  }
+  if (operatorCode === 'PLAN' || operatorCode === 'PLANAF') {
+    return { operator: 'plan', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  }
+
+  const operatorName = String(sourceMeta.operatorName || '').toUpperCase().trim();
+  if (/^(PEOPLE'?S LIBERATION ARMY AIR FORCE|CHINESE AIR FORCE)$/.test(operatorName)) {
+    return { operator: 'plaaf', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  }
+  if (/^(PEOPLE'?S LIBERATION ARMY NAVY|PEOPLE'?S LIBERATION ARMY NAVAL AIR FORCE)$/.test(operatorName)) {
+    return { operator: 'plan', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  }
+  return null;
 }
 
 function getNearbyHotspot(lat, lon) {
@@ -461,6 +709,230 @@ async function fetchAllStates() {
 }
 
 // ── Filter & Build Military Flights ────────────────────────
+function summarizeClassificationAudit(rawStates, flights, rejected, stageCounters) {
+  const admittedByReason = {};
+  const rejectedByReason = {};
+  let typedByCallsign = 0;
+  let typedBySource = 0;
+  let hexOnly = 0;
+  let unknownType = 0;
+  let operatorOther = 0;
+  let sourceOperatorInferred = 0;
+  let typedFlights = 0;
+  let operatorResolved = 0;
+  let highConfidenceFlights = 0;
+
+  for (const flight of flights) {
+    admittedByReason[flight.admissionReason] = (admittedByReason[flight.admissionReason] || 0) + 1;
+    if (flight.aircraftTypeInferenceReason === 'callsign_pattern' || flight.classificationReason === 'callsign_pattern') typedByCallsign += 1;
+    if (flight.aircraftTypeInferenceReason === 'source_metadata' || flight.operatorInferenceReason === 'source_metadata' || flight.classificationReason === 'source_metadata') typedBySource += 1;
+    if (flight.operatorInferenceReason === 'source_metadata') sourceOperatorInferred += 1;
+    if (flight.admissionReason.startsWith('hex_')) hexOnly += 1;
+    if (flight.aircraftType === 'unknown') unknownType += 1;
+    else typedFlights += 1;
+    if (flight.operator === 'other') operatorOther += 1;
+    else operatorResolved += 1;
+    if (flight.confidence === 'high') highConfidenceFlights += 1;
+  }
+
+  for (const row of rejected) {
+    rejectedByReason[row.reason] = (rejectedByReason[row.reason] || 0) + 1;
+  }
+
+  return {
+    rawStates,
+    acceptedFlights: flights.length,
+    rejectedFlights: rejected.length,
+    admittedByReason,
+    rejectedByReason,
+    typedByCallsign,
+    typedBySource,
+    sourceOperatorInferred,
+    hexOnlyAdmissions: hexOnly,
+    operatorOtherRate: flights.length ? Number((operatorOther / flights.length).toFixed(3)) : 0,
+    unknownTypeRate: flights.length ? Number((unknownType / flights.length).toFixed(3)) : 0,
+    stageWaterfall: {
+      rawStates,
+      positionEligible: stageCounters.positionEligible,
+      sourceMetaAttached: stageCounters.sourceMetaAttached,
+      callsignPresent: stageCounters.callsignPresent,
+      callsignMatched: stageCounters.callsignMatched,
+      hexMatched: stageCounters.hexMatched,
+      candidateStates: stageCounters.candidateStates,
+      admittedFlights: flights.length,
+      typedFlights,
+      operatorResolved,
+      highConfidenceFlights,
+    },
+    sourceCoverage: {
+      ...Object.fromEntries(
+        Object.entries(stageCounters.sourceFieldCoverage).map(([field, count]) => [`${field}Present`, count]),
+      ),
+      militaryHint: stageCounters.sourceHintCounts.militaryHint,
+      militaryOperatorHint: stageCounters.sourceHintCounts.militaryOperatorHint,
+      commercialHint: stageCounters.sourceHintCounts.commercialHint,
+      sourceOperatorCandidateHits: stageCounters.sourceOperatorCandidateHits,
+      sourceTypeCandidateHits: stageCounters.sourceTypeCandidateHits,
+      rawKeyOnlyCandidates: stageCounters.rawKeyOnlyCandidates,
+      topRawKeys: Object.entries(stageCounters.sourceRawKeyCounts)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 10)
+        .map(([key, count]) => ({ key, count })),
+      rawKeyOnlySamples: stageCounters.rawKeyOnlySamples,
+      sourceShapeSamples: stageCounters.sourceShapeSamples,
+    },
+    samples: {
+      accepted: flights.slice(0, 8).map((flight) => ({
+        callsign: flight.callsign,
+        operator: flight.operator,
+        operatorCountry: flight.operatorCountry,
+        aircraftType: flight.aircraftType,
+        confidence: flight.confidence,
+        admissionReason: flight.admissionReason,
+        classificationReason: flight.classificationReason,
+        operatorInferenceReason: flight.operatorInferenceReason,
+        aircraftTypeInferenceReason: flight.aircraftTypeInferenceReason,
+        sourceMeta: summarizeSourceMeta(flight.sourceMeta),
+      })),
+      rejected: rejected.slice(0, 8),
+    },
+  };
+}
+
+function pushRejectedFlight(rejected, state, reason, extra = {}) {
+  rejected.push({
+    callsign: (state[1] || '').trim(),
+    hexCode: String(state[0] || '').toUpperCase(),
+    reason,
+    ...extra,
+  });
+}
+
+function classifyCallsignMatchedFlight({ csMatch, hexMatch, callsign, sourceMeta }) {
+  const sourceOperator = deriveOperatorFromSourceMeta(sourceMeta);
+  const operator = (csMatch.operator === 'other' && sourceOperator?.operator) ? sourceOperator.operator : csMatch.operator;
+  const operatorCountry = (csMatch.operator === 'other' && sourceOperator?.operatorCountry)
+    ? sourceOperator.operatorCountry
+    : (OPERATOR_COUNTRY[csMatch.operator] || 'Unknown');
+  let aircraftType = csMatch.aircraftType || detectAircraftType(callsign);
+  let classificationReason = csMatch.aircraftType ? 'callsign_pattern' : 'untyped';
+  let aircraftTypeInferenceReason = csMatch.aircraftType ? 'callsign_pattern' : 'untyped';
+  const operatorInferenceReason = operator !== csMatch.operator ? 'source_metadata' : 'callsign_pattern';
+  if (aircraftType === 'unknown') {
+    const sourceType = detectAircraftTypeFromSourceMeta(sourceMeta);
+    if (sourceType !== 'unknown') {
+      aircraftType = sourceType;
+      classificationReason = 'source_metadata';
+      aircraftTypeInferenceReason = 'source_metadata';
+    }
+  } else if (!csMatch.aircraftType) {
+    classificationReason = 'callsign_pattern';
+    aircraftTypeInferenceReason = 'callsign_pattern';
+  }
+
+  return {
+    operator,
+    operatorCountry,
+    aircraftType,
+    confidence: hexMatch ? 'high' : 'medium',
+    admissionReason: hexMatch ? 'callsign_plus_hex' : 'callsign_pattern',
+    classificationReason,
+    aircraftTypeInferenceReason,
+    operatorInferenceReason,
+  };
+}
+
+function classifyHexMatchedFlight({ state, hexMatch, callsign, sourceMeta, sourceHints, rejected }) {
+  const trustedHex = TRUSTED_HEX_OPERATORS.has(hexMatch.operator);
+  if (!trustedHex && (!sourceHints.militaryHint || (sourceHints.commercialHint && !sourceHints.militaryOperatorHint))) {
+    pushRejectedFlight(rejected, state, 'ambiguous_hex_without_support', {
+      operatorCountry: hexMatch.country,
+    });
+    return null;
+  }
+
+  const sourceOperator = deriveOperatorFromSourceMeta(sourceMeta);
+  let aircraftType = hexMatch.aircraftType || detectAircraftType(callsign);
+  let classificationReason = hexMatch.exact ? 'hex_exact' : (sourceOperator ? 'source_metadata' : 'untyped');
+  let aircraftTypeInferenceReason = hexMatch.exact ? 'hex_exact' : 'untyped';
+  if (aircraftType === 'unknown') {
+    const sourceType = detectAircraftTypeFromSourceMeta(sourceMeta);
+    if (sourceType !== 'unknown') {
+      aircraftType = sourceType;
+      classificationReason = 'source_metadata';
+      aircraftTypeInferenceReason = 'source_metadata';
+    }
+  } else if (!sourceOperator) {
+    classificationReason = 'callsign_heuristic';
+    aircraftTypeInferenceReason = 'callsign_heuristic';
+  } else {
+    aircraftTypeInferenceReason = 'callsign_heuristic';
+  }
+
+  return {
+    operator: sourceOperator?.operator || hexMatch.operator,
+    operatorCountry: sourceOperator?.operatorCountry || hexMatch.country,
+    aircraftType,
+    confidence: hexMatch.exact ? 'high' : (trustedHex ? 'medium' : 'low'),
+    admissionReason: hexMatch.exact ? 'hex_exact' : (trustedHex ? 'hex_trusted' : 'hex_supported_by_source'),
+    classificationReason,
+    aircraftTypeInferenceReason,
+    operatorInferenceReason: sourceOperator ? 'source_metadata' : (hexMatch.exact ? 'hex_exact' : 'hex_range'),
+  };
+}
+
+function classifyTrustedPlaSourceFlight(sourceOperator, sourceMeta) {
+  const aircraftType = detectAircraftTypeFromSourceMeta(sourceMeta);
+  return {
+    operator: sourceOperator.operator,
+    operatorCountry: sourceOperator.operatorCountry,
+    aircraftType,
+    confidence: 'high',
+    admissionReason: 'source_operator_trusted',
+    classificationReason: 'source_metadata',
+    aircraftTypeInferenceReason: aircraftType === 'unknown' ? 'untyped' : 'source_metadata',
+    operatorInferenceReason: 'source_metadata',
+  };
+}
+
+function buildMilitaryFlightRecord(state, classified, sourceHints) {
+  const icao24 = state[0];
+  const callsign = (state[1] || '').trim();
+  const lat = state[6];
+  const lon = state[5];
+  const baroAlt = state[7];
+  const velocity = state[9];
+  const track = state[10];
+  const vertRate = state[11];
+  const hotspot = getNearbyHotspot(lat, lon);
+  const isInteresting = (hotspot && hotspot.priority === 'high') ||
+    classified.aircraftType === 'bomber' || classified.aircraftType === 'reconnaissance' || classified.aircraftType === 'awacs';
+
+  return {
+    id: `opensky-${icao24}`,
+    callsign: callsign || `UNKN-${icao24.substring(0, 4).toUpperCase()}`,
+    hexCode: icao24.toUpperCase(),
+    lat,
+    lon,
+    altitude: baroAlt != null ? Math.round(baroAlt * 3.28084) : 0,
+    heading: track != null ? track : 0,
+    speed: velocity != null ? Math.round(velocity * 1.94384) : 0,
+    verticalRate: vertRate != null ? Math.round(vertRate * 196.85) : undefined,
+    onGround: state[8],
+    squawk: state[14] || undefined,
+    ...classified,
+    sourceMeta: summarizeSourceMeta(state[15] || {}),
+    sourceHints: {
+      militaryHint: sourceHints.militaryHint,
+      militaryOperatorHint: sourceHints.militaryOperatorHint,
+      commercialHint: sourceHints.commercialHint,
+    },
+    isInteresting: isInteresting || false,
+    note: hotspot ? `Near ${hotspot.name}` : undefined,
+    lastSeenMs: state[4] ? state[4] * 1000 : Date.now(),
+  };
+}
+
 function filterMilitaryFlights(allStates) {
   const flights = [];
   const byType = {};
@@ -473,52 +945,43 @@ function filterMilitaryFlights(allStates) {
     if (lat == null || lon == null) continue;
 
     const originCountry = state[2] || '';
+    const sourceMeta = state[15] || {};
+    const sourceHints = deriveSourceHints(sourceMeta);
+    const sourceOperator = deriveOperatorFromSourceMeta(sourceMeta);
+    const trustedPlaSourceOperator = deriveTrustedPlaOperatorFromSourceMeta(sourceMeta);
+    const sourceType = detectAircraftTypeFromSourceMeta(sourceMeta);
+    recordSourceCoverage(stageCounters, sourceMeta, sourceHints, sourceOperator, sourceType, callsign);
+    if (callsign) stageCounters.callsignPresent += 1;
     const csMatch = callsign ? identifyByCallsign(callsign, originCountry) : null;
     const hexMatch = isKnownHex(icao24);
-    if (!csMatch && !hexMatch) continue;
+    if (csMatch) stageCounters.callsignMatched += 1;
+    if (hexMatch) stageCounters.hexMatched += 1;
+    if (csMatch || hexMatch || trustedPlaSourceOperator) stageCounters.candidateStates += 1;
 
-    let operator, aircraftType, operatorCountry, confidence;
-    if (csMatch) {
-      operator = csMatch.operator;
-      aircraftType = csMatch.aircraftType || detectAircraftType(callsign);
-      operatorCountry = OPERATOR_COUNTRY[csMatch.operator] || 'Unknown';
-      confidence = hexMatch ? 'high' : 'medium';
-    } else {
-      operator = hexMatch.operator;
-      aircraftType = detectAircraftType(callsign);
-      operatorCountry = hexMatch.country;
-      confidence = 'medium';
+    if (!csMatch && commercialMatch && !trustedPlaSourceOperator && !sourceHints.militaryHint) {
+      pushRejectedFlight(rejected, state, 'commercial_callsign_override');
+      continue;
     }
 
-    const baroAlt = state[7];
-    const velocity = state[9];
-    const track = state[10];
-    const vertRate = state[11];
-    const hotspot = getNearbyHotspot(lat, lon);
-    const isInteresting = (hotspot && hotspot.priority === 'high') ||
-      aircraftType === 'bomber' || aircraftType === 'reconnaissance' || aircraftType === 'awacs';
+    if (!csMatch && !hexMatch && !trustedPlaSourceOperator) {
+      pushRejectedFlight(rejected, state, 'no_military_signal');
+      continue;
+    }
 
-    flights.push({
-      id: `opensky-${icao24}`,
-      callsign: callsign || `UNKN-${icao24.substring(0, 4).toUpperCase()}`,
-      hexCode: icao24.toUpperCase(),
-      lat,
-      lon,
-      altitude: baroAlt != null ? Math.round(baroAlt * 3.28084) : 0,
-      heading: track != null ? track : 0,
-      speed: velocity != null ? Math.round(velocity * 1.94384) : 0,
-      verticalRate: vertRate != null ? Math.round(vertRate * 196.85) : undefined,
-      onGround: state[8],
-      squawk: state[14] || undefined,
-      aircraftType,
-      operator,
-      operatorCountry,
-      confidence,
-      isInteresting: isInteresting || false,
-      note: hotspot ? `Near ${hotspot.name}` : undefined,
-      lastSeenMs: state[4] ? state[4] * 1000 : Date.now(),
-    });
-    byType[aircraftType] = (byType[aircraftType] || 0) + 1;
+    const classified = csMatch
+      ? classifyCallsignMatchedFlight({ csMatch, hexMatch, callsign, sourceMeta })
+      : hexMatch
+        ? classifyHexMatchedFlight({ state, hexMatch, callsign, sourceMeta, sourceHints, rejected })
+        : classifyTrustedPlaSourceFlight(trustedPlaSourceOperator, sourceMeta);
+    if (!classified) continue;
+
+    const flight = buildMilitaryFlightRecord(state, {
+      ...classified,
+      callsignMatch: csMatch?.operator || '',
+      hexMatch: hexMatch?.operator || '',
+    }, sourceHints);
+    flights.push(flight);
+    byType[flight.aircraftType] = (byType[flight.aircraftType] || 0) + 1;
   }
 
   return { flights, byType };
@@ -560,7 +1023,35 @@ async function redisSet(url, token, key, value, ttl) {
     body: JSON.stringify(cmd),
     signal: AbortSignal.timeout(10_000),
   });
-  return resp.ok;
+  if (!resp.ok) throw new Error(`Redis SET ${key} failed: HTTP ${resp.status}`);
+}
+
+async function redisGet(url, token, key) {
+  const resp = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  if (!data?.result) return null;
+  try { return unwrapEnvelope(JSON.parse(data.result)).data; } catch { return null; }
+}
+
+async function requestForecastRefreshIfEnabled(runId, assessedAt, source) {
+  if (!CHAIN_FORECAST_SEED) return;
+
+  const { url, token } = getRedisCredentials();
+  const request = {
+    requestedAt: assessedAt,
+    requestedAtIso: new Date(assessedAt).toISOString(),
+    requestedBy: 'military_chain',
+    requester: 'seed-military-flights',
+    requesterRunId: runId,
+    sourceVersion: source || '',
+  };
+  await redisSet(url, token, FORECAST_REFRESH_REQUEST_KEY, request, FORECAST_REFRESH_REQUEST_TTL);
+  console.log('  Forecast refresh requested after military publish');
+  console.log('  Forecast execution is delegated to the forecast service runtime');
 }
 
 // ── Main ───────────────────────────────────────────────────
@@ -626,7 +1117,23 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('FATAL:', err.message || err);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error(`PUBLISH FAILED: ${err.message || err}`);
+    process.exit(1);
+  });
+}
+
+export {
+  isKnownHex,
+  identifyByCallsign,
+  identifyCommercialCallsign,
+  detectAircraftType,
+  detectAircraftTypeFromSourceMeta,
+  deriveSourceHints,
+  deriveOperatorFromSourceMeta,
+  deriveTrustedPlaOperatorFromSourceMeta,
+  filterMilitaryFlights,
+};

@@ -22,6 +22,8 @@ import { fetchOllamaModels as fetchOllamaModelsFromService } from '@/services/ol
 import { t } from '@/services/i18n';
 import { trackFeatureToggle } from '@/services/analytics';
 import { SIGNUP_URLS, PLAINTEXT_KEYS, MASKED_SENTINEL } from '@/services/settings-constants';
+import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
+
 
 interface RuntimeConfigPanelOptions {
   mode?: 'full' | 'alert';
@@ -209,9 +211,9 @@ export class RuntimeConfigPanel extends Panel {
         : t('modals.runtimeConfig.alertTitle.needsKeys');
       const alertClass = missingFeatures > 0 ? 'warn' : 'ok';
 
-      this.show();
-      this.content.innerHTML = `
-        <section class="runtime-alert runtime-alert-${alertClass}">
+      this.setEffectiveVisibility(true);
+      setTrustedHtml(this.content, trustedHtml(`
+        <section class="runtime-alert runtime-alert-${alertClass}" data-alert-state="${alertState}">
           <h3>${alertTitle}</h3>
           <p>
             ${availableFeatures}/${totalFeatures} ${t('modals.runtimeConfig.summary.available')}${configuredCount > 0 ? ` · ${configuredCount} ${t('modals.runtimeConfig.summary.secrets')}` : ''}.
@@ -221,19 +223,19 @@ export class RuntimeConfigPanel extends Panel {
             ${t('modals.runtimeConfig.reserveEarlyAccess')}
           </button>
         </section>
-      `;
+      `, "legacy direct innerHTML migration"));
       this.attachListeners();
       return;
     }
 
-    this.content.innerHTML = `
+    setTrustedHtml(this.content, trustedHtml(`
       <div class="runtime-config-summary">
         ${desktop ? t('modals.runtimeConfig.summary.desktop') : t('modals.runtimeConfig.summary.web')} · ${features.filter(f => isFeatureAvailable(f.id)).length}/${features.length} ${t('modals.runtimeConfig.summary.available')}
       </div>
       <div class="runtime-config-list">
         ${features.map(feature => this.renderFeature(feature)).join('')}
       </div>
-    `;
+    `, "legacy direct innerHTML migration"));
 
     this.attachListeners();
   }
@@ -333,9 +335,9 @@ export class RuntimeConfigPanel extends Panel {
         const url = link.dataset.signupUrl;
         if (!url) return;
         if (isDesktopRuntime()) {
-          void invokeTauri<void>('open_url', { url }).catch(() => window.open(url, '_blank'));
+          void invokeTauri<void>('open_url', { url }).catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
         } else {
-          window.open(url, '_blank');
+          window.open(url, '_blank', 'noopener,noreferrer');
         }
       });
     });
@@ -346,9 +348,9 @@ export class RuntimeConfigPanel extends Panel {
       this.content.querySelector<HTMLButtonElement>('[data-early-access]')?.addEventListener('click', () => {
         const url = 'https://www.worldmonitor.app/pro';
         if (isDesktopRuntime()) {
-          void invokeTauri<void>('open_url', { url }).catch(() => window.open(url, '_blank'));
+          void invokeTauri<void>('open_url', { url }).catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
         } else {
-          window.open(url, '_blank');
+          window.open(url, '_blank', 'noopener,noreferrer');
         }
       });
       return;
@@ -514,7 +516,7 @@ export class RuntimeConfigPanel extends Panel {
       || snapshot.secrets['OLLAMA_API_URL']?.value
       || '';
     if (!ollamaUrl) {
-      select.innerHTML = '<option value="" disabled selected>Set Ollama URL first</option>';
+      setTrustedHtml(select, trustedHtml('<option value="" disabled selected>Set Ollama URL first</option>', "legacy direct innerHTML migration"));
       return;
     }
 
@@ -533,9 +535,9 @@ export class RuntimeConfigPanel extends Panel {
         return;
       }
 
-      select.innerHTML = models.map(name =>
+      setTrustedHtml(select, trustedHtml(models.map(name =>
         `<option value="${escapeHtml(name)}" ${name === currentModel ? 'selected' : ''}>${escapeHtml(name)}</option>`
-      ).join('');
+      ).join(''), "legacy direct innerHTML migration"));
 
       // Auto-select first model if none stored
       if (!currentModel && models.length > 0) {
