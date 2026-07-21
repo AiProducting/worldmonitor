@@ -12,8 +12,9 @@ import type {
   GithubRepo,
 } from '../../../../src/generated/server/worldmonitor/research/v1/service_server';
 
-import { CHROME_UA, clampInt } from '../../../_shared/constants';
-import { cachedFetchJson } from '../../../_shared/redis';
+import { clampInt } from '../../../_shared/constants';
+import { getCachedJson } from '../../../_shared/redis';
+import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
 
 const REDIS_CACHE_KEY = 'research:trending:v1';
 const REDIS_CACHE_TTL = 3600; // 1 hr — daily trending data
@@ -69,17 +70,18 @@ async function fetchTrendingRepos(req: ListTrendingReposRequest): Promise<Github
 // ---------- Handler ----------
 
 export async function listTrendingRepos(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   req: ListTrendingReposRequest,
 ): Promise<ListTrendingReposResponse> {
   try {
-    const cacheKey = `${REDIS_CACHE_KEY}:${req.language || 'python'}:${req.period || 'daily'}:${clampInt(req.pageSize, 50, 1, 100)}`;
-    const result = await cachedFetchJson<ListTrendingReposResponse>(cacheKey, REDIS_CACHE_TTL, async () => {
-      const repos = await fetchTrendingRepos(req);
-      return repos.length > 0 ? { repos, pagination: undefined } : null;
-    });
-    return result || { repos: [], pagination: undefined };
+    const language = req.language || 'python';
+    const period = req.period || 'daily';
+    const pageSize = clampInt(req.pageSize, 50, 1, 100);
+    const seedKey = `${SEED_KEY_PREFIX}:${language}:${period}:50`;
+    const result = await getCachedJson(seedKey, true) as ListTrendingReposResponse | null;
+    if (!result?.repos?.length) return markNoStoreFallbackResponse(ctx.request, { repos: [], pagination: undefined });
+    return { repos: result.repos.slice(0, pageSize), pagination: undefined };
   } catch {
-    return { repos: [], pagination: undefined };
+    return markNoStoreFallbackResponse(ctx.request, { repos: [], pagination: undefined });
   }
 }

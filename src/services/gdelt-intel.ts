@@ -1,13 +1,10 @@
 import type { Hotspot } from '@/types';
-import { getRpcBaseUrl } from '@/services/rpc-client';
+import { createLazyClient, getRpcBaseUrl } from '@/services/rpc-client';
 import { t } from '@/services/i18n';
-import {
-  IntelligenceServiceClient,
-  type GdeltArticle as ProtoGdeltArticle,
-  type SearchGdeltDocumentsResponse,
-} from '@/generated/client/worldmonitor/intelligence/v1/service_client';
+import type { GdeltArticle as ProtoGdeltArticle, SearchGdeltDocumentsResponse, GdeltTimelinePoint } from '@/generated/client/worldmonitor/intelligence/v1/service_client';
 import { createCircuitBreaker } from '@/utils';
 import { getHydratedData } from '@/services/bootstrap';
+import { IntelligenceServiceClient } from '@/services/generated-rpc-clients';
 
 export interface GdeltArticle {
   title: string;
@@ -126,7 +123,7 @@ export function getIntelTopics(): IntelTopic[] {
 
 // ---- Sebuf client ----
 
-const client = new IntelligenceServiceClient(getRpcBaseUrl(), { fetch: (...args) => globalThis.fetch(...args) });
+const getClient = createLazyClient(() => new IntelligenceServiceClient(getRpcBaseUrl(), { fetch: (...args) => globalThis.fetch(...args) }));
 const gdeltBreaker = createCircuitBreaker<SearchGdeltDocumentsResponse>({ name: 'GDELT Intelligence', cacheTtlMs: 10 * 60 * 1000, persistCache: true });
 const positiveGdeltBreaker = createCircuitBreaker<SearchGdeltDocumentsResponse>({ name: 'GDELT Positive', cacheTtlMs: 10 * 60 * 1000, persistCache: true });
 
@@ -134,6 +131,22 @@ const emptyGdeltFallback: SearchGdeltDocumentsResponse = { articles: [], query: 
 
 const CACHE_TTL = 5 * 60 * 1000;
 const articleCache = new Map<string, { articles: GdeltArticle[]; timestamp: number }>();
+const timelineCache = new Map<string, { data: TopicTimeline; timestamp: number }>();
+
+export async function fetchTopicTimeline(topicId: string): Promise<TopicTimeline | null> {
+  const cached = timelineCache.get(topicId);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
+
+  try {
+    const resp = await getClient().getGdeltTopicTimeline({ topic: topicId });
+    if (resp.error || (resp.tone.length === 0 && resp.vol.length === 0)) return null;
+    const data: TopicTimeline = { tone: resp.tone, vol: resp.vol, fetchedAt: resp.fetchedAt };
+    timelineCache.set(topicId, { data, timestamp: Date.now() });
+    return data;
+  } catch {
+    return null;
+  }
+}
 
 /** Map proto GdeltArticle (all required strings) to service GdeltArticle (optional fields) */
 function toGdeltArticle(a: ProtoGdeltArticle): GdeltArticle {
@@ -161,7 +174,7 @@ export async function fetchGdeltArticles(
   }
 
   const resp = await gdeltBreaker.execute(async () => {
-    return client.searchGdeltDocuments({
+    return getClient().searchGdeltDocuments({
       query,
       maxRecords: maxrecords,
       timespan,
@@ -276,7 +289,7 @@ export async function fetchPositiveGdeltArticles(
   }
 
   const resp = await positiveGdeltBreaker.execute(async () => {
-    return client.searchGdeltDocuments({
+    return getClient().searchGdeltDocuments({
       query,
       maxRecords: maxrecords,
       timespan,

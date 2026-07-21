@@ -183,7 +183,7 @@ export function extractSentimentData(rows) {
       date = excelDateToISO(rawDate);
     } else if (typeof rawDate === 'string') {
       const parsed = new Date(rawDate);
-      if (!isNaN(parsed.getTime())) {
+      if (!Number.isNaN(parsed.getTime())) {
         date = parsed.toISOString().slice(0, 10);
       }
     }
@@ -390,6 +390,10 @@ function validate(data) {
   return data?.latest?.bullish != null && data?.weeks?.length > 0;
 }
 
+export function declareRecords(data) {
+  return Array.isArray(data?.weeks) ? data.weeks.length : 0;
+}
+
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/^.*[\\/]/, ''));
 if (isMain) {
   runSeed('market', 'aaii-sentiment', AAII_KEY, fetchAaiiSentiment, {
@@ -397,6 +401,9 @@ if (isMain) {
     ttlSeconds: AAII_TTL,
     recordCount: (data) => data?.weeks?.length ?? 0,
     sourceVersion: 'aaii-xls-html-v1',
+    declareRecords,
+    schemaVersion: 1,
+    maxStaleMin: 20160,
   }).catch((err) => {
     console.error('FATAL:', err.message || err);
     process.exit(1);

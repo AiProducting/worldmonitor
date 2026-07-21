@@ -7,8 +7,10 @@ import type {
   TrendDirection,
 } from './types';
 import { haversineKm } from '@/utils/distance';
-import { IntelligenceServiceClient } from '@/generated/client/worldmonitor/intelligence/v1/service_client';
+
+import { premiumFetch } from '@/services/premium-fetch';
 import { hasPremiumAccess } from '@/services/panel-gating';
+import { IntelligenceServiceClient } from '@/services/generated-rpc-clients';
 
 const LLM_SCORE_THRESHOLD = 60;
 const LLM_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -24,13 +26,16 @@ export class CorrelationEngine {
   private cards: Map<string, ConvergenceCard[]> = new Map();
   private previousClusters: Map<string, ClusterState[]> = new Map();
   private llmCache: Map<string, LlmCacheEntry> = new Map();
-  private intelligenceClient: IntelligenceServiceClient;
+  private intelligenceClient: InstanceType<typeof IntelligenceServiceClient>;
   private running = false;
   private llmInFlight = 0;
 
   constructor() {
-    // Use '' base URL — requests go to current origin, same as other panels
-    this.intelligenceClient = new IntelligenceServiceClient('');
+    // Use '' base URL — requests go to current origin, same as other panels.
+    // premiumFetch — deductSituation is in PREMIUM_RPC_PATHS. globalThis.fetch
+    // (the generated default) would 401 signed-in browser pros so the LLM
+    // assessment never lands. See #3242 review HIGH(new) #1 for the bug class.
+    this.intelligenceClient = new IntelligenceServiceClient('', { fetch: premiumFetch });
   }
 
   registerAdapter(adapter: DomainAdapter): void {

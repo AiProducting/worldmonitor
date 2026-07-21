@@ -6,7 +6,7 @@ import type {
   FredObservation,
 } from '../../../../src/generated/server/worldmonitor/economic/v1/service_server';
 
-import { getCachedJsonBatch, cachedFetchJson } from '../../../_shared/redis';
+import { getCachedJsonBatch } from '../../../_shared/redis';
 import { toUniqueSortedLimited } from '../../../_shared/normalize-list';
 
 const FRED_API_BASE = 'https://api.stlouisfed.org/fred';
@@ -79,23 +79,16 @@ export async function getFredSeriesBatch(
     const normalized = req.seriesIds
       .map((id) => id.trim().toUpperCase())
       .filter((id) => ALLOWED_SERIES.has(id));
-    const limitedList = toUniqueSortedLimited(normalized, 10);
-    const limit = req.limit > 0 ? Math.min(req.limit, 1000) : 120;
+    const limitedList = toUniqueSortedLimited(normalized, 20);
+    const limit = normalizeFredLimit(req.limit);
+
+    const keysById = new Map(limitedList.map((id) => [id, fredSeedKey(id)]));
+    const cachedByKey = await getCachedJsonBatch([...keysById.values()], true);
 
     const results: Record<string, FredSeries> = {};
-    const toFetch: string[] = [];
-
-    const cacheKeys = limitedList.map((id) => `${REDIS_CACHE_KEY}:${id}:${limit}`);
-    const cachedMap = await getCachedJsonBatch(cacheKeys);
-
-    for (let i = 0; i < limitedList.length; i++) {
-      const id = limitedList[i]!;
-      const cached = cachedMap.get(cacheKeys[i]!) as { series?: FredSeries } | undefined;
-      if (cached?.series) {
-        results[id] = cached.series;
-      } else if (cached === undefined) {
-        toFetch.push(id);
-      }
+    for (const id of limitedList) {
+      const cached = cachedByKey.get(keysById.get(id)!) as { series?: FredSeries } | undefined;
+      if (cached?.series) results[id] = applyFredObservationLimit(cached.series, limit);
     }
 
     // Fetch all uncached series in parallel (max 10, each hits separate FRED endpoint)

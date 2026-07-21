@@ -5,16 +5,8 @@ import type {
   TheaterPosture,
 } from '../../../../src/generated/server/worldmonitor/military/v1/service_server';
 
-import { getCachedJson, setCachedJson, cachedFetchJson } from '../../../_shared/redis';
-import {
-  isMilitaryCallsign,
-  isMilitaryHex,
-  detectAircraftType,
-  POSTURE_THEATERS,
-  UPSTREAM_TIMEOUT_MS,
-  type RawFlight,
-} from './_shared';
-import { CHROME_UA } from '../../../_shared/constants';
+import { getCachedJson } from '../../../_shared/redis';
+import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
 
 const CACHE_KEY = 'theater-posture:sebuf:v1';
 const STALE_CACHE_KEY = 'theater-posture:sebuf:stale:v1';
@@ -252,7 +244,7 @@ async function fetchTheaterPostureFresh(): Promise<GetTheaterPostureResponse> {
 }
 
 export async function getTheaterPosture(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   _req: GetTheaterPostureRequest,
 ): Promise<GetTheaterPostureResponse> {
   try {
@@ -264,9 +256,5 @@ export async function getTheaterPosture(
     if (result) return result;
   } catch { /* upstream failed — fall through to stale/backup */ }
 
-  const stale = (await getCachedJson(STALE_CACHE_KEY)) as GetTheaterPostureResponse | null;
-  if (stale) return stale;
-  const backup = (await getCachedJson(BACKUP_CACHE_KEY)) as GetTheaterPostureResponse | null;
-  if (backup) return backup;
-  return { theaters: [] };
+  return markNoStoreFallbackResponse(ctx.request, { theaters: [] });
 }

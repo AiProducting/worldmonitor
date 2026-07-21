@@ -2,109 +2,15 @@ import { Panel } from './Panel';
 import { t } from '@/services/i18n';
 import type { MarketData, CryptoData } from '@/types';
 import { formatPrice, formatChange, getChangeClass, getHeatmapClass } from '@/utils';
-import { escapeHtml } from '@/utils/sanitize';
+import { escapeHtml, unsafeRawHtml } from '@/utils/sanitize';
 import { miniSparkline } from '@/utils/sparkline';
 import { SITE_VARIANT } from '@/config';
-import { getHydratedData } from '@/services/bootstrap';
-import {
-  getMarketWatchlistEntries,
-  parseMarketWatchlistInput,
-  resetMarketWatchlist,
-  setMarketWatchlistEntries,
-} from '@/services/market-watchlist';
+import { createWatchlistButton } from './watchlist-modal';
 
 export class MarketPanel extends Panel {
-  private settingsBtn: HTMLButtonElement | null = null;
-  private overlay: HTMLElement | null = null;
-
   constructor() {
     super({ id: 'markets', title: t('panels.markets'), infoTooltip: t('components.markets.infoTooltip') });
-    this.createSettingsButton();
-  }
-
-  private createSettingsButton(): void {
-    this.settingsBtn = document.createElement('button');
-    this.settingsBtn.className = 'live-news-settings-btn';
-    this.settingsBtn.title = 'Customize market watchlist';
-    this.settingsBtn.textContent = 'Watchlist';
-    this.settingsBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.openWatchlistModal();
-    });
-    this.header.appendChild(this.settingsBtn);
-  }
-
-  private openWatchlistModal(): void {
-    if (this.overlay) return;
-
-    const current = getMarketWatchlistEntries();
-    const currentText = current.length
-      ? current.map((e) => (e.name ? `${e.symbol}|${e.name}` : e.symbol)).join('\n')
-      : '';
-
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay active';
-    overlay.id = 'marketWatchlistModal';
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) this.closeWatchlistModal();
-    });
-
-    const modal = document.createElement('div');
-    modal.className = 'modal unified-settings-modal';
-    modal.style.maxWidth = '680px';
-
-    modal.innerHTML = `
-      <div class="modal-header">
-        <span class="modal-title">Market watchlist</span>
-        <button class="modal-close" aria-label="Close">×</button>
-      </div>
-      <div style="padding:14px 16px 16px 16px">
-        <div style="color:var(--text-dim);font-size:12px;line-height:1.4;margin-bottom:10px">
-          Add extra tickers (comma or newline separated). Friendly labels supported: SYMBOL|Label.
-          Example: TSLA|Tesla, AAPL|Apple, ^GSPC|S&P 500
-          <br/>
-          Tip: keep it under ~30 unless you enjoy scrolling.
-        </div>
-        <textarea id="wmMarketWatchlistInput"
-          style="width:100%;min-height:120px;resize:vertical;background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:10px;font-family:inherit;font-size:12px;outline:none"
-          spellcheck="false"></textarea>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-          <button type="button" class="panels-reset-layout" id="wmMarketResetBtn">Reset</button>
-          <button type="button" class="panels-reset-layout" id="wmMarketCancelBtn">Cancel</button>
-          <button type="button" class="panels-reset-layout" id="wmMarketSaveBtn" style="border-color:var(--text-dim);color:var(--text)">Save</button>
-        </div>
-      </div>
-    `;
-
-    const closeBtn = modal.querySelector('.modal-close') as HTMLButtonElement | null;
-    closeBtn?.addEventListener('click', () => this.closeWatchlistModal());
-
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    this.overlay = overlay;
-
-    const input = modal.querySelector<HTMLTextAreaElement>('#wmMarketWatchlistInput');
-    if (input) input.value = currentText;
-
-    modal.querySelector<HTMLButtonElement>('#wmMarketCancelBtn')?.addEventListener('click', () => this.closeWatchlistModal());
-    modal.querySelector<HTMLButtonElement>('#wmMarketResetBtn')?.addEventListener('click', () => {
-      resetMarketWatchlist();
-      if (input) input.value = ''; // defaults are always included automatically
-      this.closeWatchlistModal();
-    });
-    modal.querySelector<HTMLButtonElement>('#wmMarketSaveBtn')?.addEventListener('click', () => {
-      const raw = input?.value || '';
-      const parsed = parseMarketWatchlistInput(raw);
-      if (parsed.length === 0) resetMarketWatchlist();
-      else setMarketWatchlistEntries(parsed);
-      this.closeWatchlistModal();
-    });
-  }
-
-  private closeWatchlistModal(): void {
-    if (!this.overlay) return;
-    this.overlay.remove();
-    this.overlay = null;
+    this.header.appendChild(createWatchlistButton());
   }
 
   public renderMarkets(data: MarketData[], rateLimited?: boolean): void {
@@ -131,7 +37,7 @@ export class MarketPanel extends Panel {
       )
       .join('');
 
-    this.setContent(html);
+    this.setSafeContent(unsafeRawHtml(html, 'legacy Panel.setContent() migration'));
   }
 }
 
@@ -206,11 +112,11 @@ export class HeatmapPanel extends Panel {
     const tabBar = this._buildTabBar();
 
     if (this._tab === 'valuations' && Object.keys(this._valuations).length > 0) {
-      this.setContent(tabBar + this._renderValuations());
+      this.setSafeContent(unsafeRawHtml(tabBar + this._renderValuations(), 'legacy Panel.setContent() migration'));
       return;
     }
 
-    this.setContent(tabBar + this._renderPerformance());
+    this.setSafeContent(unsafeRawHtml(tabBar + this._renderPerformance(), 'legacy Panel.setContent() migration'));
   }
 
   private _renderPerformance(): string {
@@ -344,7 +250,7 @@ interface EcbFxRateItem {
   change1d?: number | null;
 }
 
-type CommoditiesTab = 'commodities' | 'fx' | 'xau' | 'flow';
+type CommoditiesTab = 'commodities' | 'fx' | 'xau';
 
 // Use the generated types directly — never hand-roll a subset, which silently
 // drifts when the proto gains fields.
@@ -474,8 +380,6 @@ export class CommoditiesPanel extends Panel {
   private _tab: CommoditiesTab = 'commodities';
   private _commodityData: Array<{ display: string; price: number | null; change: number | null; sparkline?: number[]; symbol?: string }> = [];
   private _fxRates: EcbFxRateItem[] = [];
-  private _flow: HyperliquidFlowView | null = null;
-  private _flowLoading = false;
 
   constructor() {
     super({ id: 'commodities', title: t('panels.commodities'), infoTooltip: t('components.commodities.infoTooltip') });
@@ -486,58 +390,12 @@ export class CommoditiesPanel extends Panel {
       if (
         tab === 'commodities' ||
         tab === 'fx' ||
-        tab === 'flow' ||
         (tab === 'xau' && SITE_VARIANT === 'commodity')
       ) {
         this._tab = tab as CommoditiesTab;
         this._render();
       }
     });
-  }
-
-  /**
-   * Fetch Hyperliquid perp positioning flow snapshot.
-   * Called from App.ts primeVisiblePanelData() and refreshScheduler.
-   * Uses bootstrap-hydrated data on first render if available (AGENTS.md mandates
-   * bootstrap hydration for new data sources), then refreshes from RPC.
-   */
-  public async fetchHyperliquidFlow(): Promise<boolean> {
-    if (this._flowLoading) return false;
-    this._flowLoading = true;
-    try {
-      if (!this._flow) {
-        const hydrated = getHydratedData('hyperliquidFlow') as Record<string, unknown> | undefined;
-        if (hydrated && !hydrated.unavailable) {
-          const mapped = mapHyperliquidFlowSeed(hydrated);
-          if (mapped) {
-            this._flow = mapped;
-            if (this._tab === 'flow') this._render();
-          }
-        }
-      }
-
-      const { MarketServiceClient } = await import('@/generated/client/worldmonitor/market/v1/service_client');
-      const { getRpcBaseUrl } = await import('@/services/rpc-client');
-      const client = new MarketServiceClient(getRpcBaseUrl(), {
-        fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
-      });
-      const resp = await client.getHyperliquidFlow({});
-      if (resp.unavailable || !resp.assets || resp.assets.length === 0) {
-        if (!this._flow) this._flow = { ts: 0, warmup: true, fxAssets: [], commodityAssets: [], unavailable: true };
-      } else {
-        this._flow = mapHyperliquidFlowResponse(resp);
-      }
-      if (this._tab === 'flow') this._render();
-      return true;
-    } catch (err) {
-      console.error('[CommoditiesPanel.fetchHyperliquidFlow] RPC failed:', err instanceof Error ? err.message : err);
-      // Don't blow away an existing flow snapshot on transient fetch errors.
-      if (!this._flow) this._flow = { ts: 0, warmup: true, fxAssets: [], commodityAssets: [], unavailable: true };
-      if (this._tab === 'flow') this._render();
-      return false;
-    } finally {
-      this._flowLoading = false;
-    }
   }
 
   public renderCommodities(data: Array<{ symbol?: string; display: string; price: number | null; change: number | null; sparkline?: number[] }>): void {
@@ -550,61 +408,14 @@ export class CommoditiesPanel extends Panel {
     this._render();
   }
 
-  private _buildTabBar(hasFx: boolean, hasXau: boolean, hasFlow: boolean): string {
+  private _buildTabBar(hasFx: boolean, hasXau: boolean): string {
     const firstTabLabel = 'Commodities';
     const tabs: string[] = [
       `<button class="panel-tab${this._tab === 'commodities' ? ' active' : ''}" data-tab="commodities" style="font-size:11px;padding:3px 10px">${firstTabLabel}</button>`,
     ];
     if (hasFx) tabs.push(`<button class="panel-tab${this._tab === 'fx' ? ' active' : ''}" data-tab="fx" style="font-size:11px;padding:3px 10px">EUR FX</button>`);
     if (hasXau) tabs.push(`<button class="panel-tab${this._tab === 'xau' ? ' active' : ''}" data-tab="xau" style="font-size:11px;padding:3px 10px">XAU/FX</button>`);
-    if (hasFlow) tabs.push(`<button class="panel-tab${this._tab === 'flow' ? ' active' : ''}" data-tab="flow" style="font-size:11px;padding:3px 10px" title="Hyperliquid perp positioning stress (24/7 leading indicator)">Perp Flow</button>`);
     return tabs.length > 1 ? `<div style="display:flex;gap:4px;margin-bottom:8px">${tabs.join('')}</div>` : '';
-  }
-
-  private _renderFlow(): string {
-    if (!this._flow) {
-      return `<div style="padding:8px;color:var(--text-dim);font-size:12px">Loading perp flow…</div>`;
-    }
-    if (this._flow.unavailable) {
-      return `<div style="padding:8px;color:var(--text-dim);font-size:12px">Perp flow snapshot unavailable. Warming up — first samples populate within 5–10 minutes.</div>`;
-    }
-    const sections: string[] = [];
-    if (this._flow.warmup) {
-      sections.push(`<div style="padding:6px 8px;background:rgba(230,126,34,0.10);color:#e67e22;border-radius:4px;font-size:10px;margin-bottom:6px">Warming up — volume/OI baselines build over the next ~12 polls (1h).</div>`);
-    }
-    if (this._flow.commodityAssets.length > 0) {
-      sections.push(`<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin:4px 0 2px">Commodities</div>`);
-      sections.push(this._renderFlowGrid(this._flow.commodityAssets));
-    }
-    if (this._flow.fxAssets.length > 0) {
-      sections.push(`<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 2px">FX (Crypto-Native)</div>`);
-      sections.push(this._renderFlowGrid(this._flow.fxAssets));
-    }
-    sections.push(`<div style="margin-top:6px;font-size:9px;color:var(--text-dim)">Composite 0–100 from funding × volume × OI × basis · Hyperliquid /info · 5min cron</div>`);
-    return sections.join('');
-  }
-
-  private _renderFlowGrid(assets: HyperliquidAssetView[]): string {
-    return '<div class="commodities-grid">' + assets.map((a) => {
-      const score = Math.round(a.composite);
-      const scoreColor = score >= 60 ? '#e74c3c' : score >= 40 ? '#e67e22' : score >= 20 ? '#f1c40f' : 'var(--text-dim)';
-      const fundingStr = a.funding != null ? `${(a.funding * 100).toFixed(3)}%` : '—';
-      const fundingColor = a.funding != null && a.funding < 0 ? 'change-negative' : 'change-positive';
-      const oiStr = a.oiDelta1h != null ? `${a.oiDelta1h >= 0 ? '+' : ''}${(a.oiDelta1h * 100).toFixed(1)}%` : '—';
-      const oiColor = a.oiDelta1h != null && a.oiDelta1h < 0 ? 'change-negative' : 'change-positive';
-      const staleBadge = a.stale ? ` <span style="color:#e67e22;font-size:9px">stale</span>` : '';
-      const warmupBadge = a.warmup ? ` <span style="color:#888;font-size:9px">warm</span>` : '';
-      return `
-        <div class="commodity-item" title="${escapeHtml(a.symbol)} · score ${score}/100${a.warmup ? ' · warming up' : ''}${a.stale ? ' · upstream stale' : ''}">
-          <div class="commodity-name">${escapeHtml(a.display)}${staleBadge}${warmupBadge}</div>
-          ${miniSparkline(a.sparkScore, score - 50, 60, 18)}
-          <div class="commodity-price" style="color:${scoreColor};font-weight:600">${score}</div>
-          <div style="display:flex;gap:6px;font-size:10px">
-            <span class="${fundingColor}" title="hourly funding">${escapeHtml(fundingStr)}</span>
-            <span class="${oiColor}" title="OI Δ1h">${escapeHtml(oiStr)}</span>
-          </div>
-        </div>`;
-    }).join('') + '</div>';
   }
 
   private _renderXau(): string {
@@ -641,15 +452,8 @@ export class CommoditiesPanel extends Panel {
   private _render(): void {
     const hasFx = this._fxRates.length > 0;
     const hasXau = SITE_VARIANT === 'commodity' && this._commodityData.some(d => d.symbol === 'GC=F' && d.price !== null);
-    const hasFlow = !!this._flow && (!this._flow.unavailable || this._flow.warmup);
     if (this._tab === 'xau' && !hasXau) this._tab = 'commodities';
-    if (this._tab === 'flow' && !hasFlow) this._tab = 'commodities';
-    const tabBar = this._buildTabBar(hasFx, hasXau, hasFlow);
-
-    if (this._tab === 'flow') {
-      this.setContent(tabBar + this._renderFlow());
-      return;
-    }
+    const tabBar = this._buildTabBar(hasFx, hasXau);
 
     if (this._tab === 'fx' && hasFx) {
       const items = this._fxRates.map(r => {
@@ -662,25 +466,29 @@ export class CommoditiesPanel extends Panel {
           ${changeStr ? `<div class="commodity-change ${escapeHtml(changeClass)}">${escapeHtml(changeStr)}</div>` : ''}
         </div>`;
       }).join('');
-      this.setContent(tabBar + `<div class="commodities-grid">${items}</div><div style="margin-top:6px;font-size:9px;color:var(--text-dim)">Source: ECB</div>`);
+      this.setSafeContent(unsafeRawHtml(tabBar + `<div class="commodities-grid">${items}</div><div style="margin-top:6px;font-size:9px;color:var(--text-dim)">Source: ECB</div>`, 'legacy Panel.setContent() migration'));
       return;
     }
 
     if (this._tab === 'xau' && hasXau) {
-      this.setContent(tabBar + this._renderXau());
+      this.setSafeContent(unsafeRawHtml(tabBar + this._renderXau(), 'legacy Panel.setContent() migration'));
       return;
     }
 
-    // Metals/Commodities tab — exclude FX and spot gold symbols from the display grid
+    // Metals/Commodities tab — exclude FX and spot gold symbols from the display grid.
+    // Require a finite numeric price: the feed sometimes omits `price` (undefined),
+    // and `d.price !== null` lets undefined through to `formatPrice(c.price!)`
+    // (WORLDMONITOR-SH). A finite-price guard also keeps the adjacent `c.change!`
+    // row meaningful (a record with no price carries no usable change either).
     const validData = this._commodityData.filter(
-      (d) => d.price !== null && !d.symbol?.endsWith('=X'),
+      (d) => typeof d.price === 'number' && Number.isFinite(d.price) && !d.symbol?.endsWith('=X'),
     );
     if (validData.length === 0) {
       if (!hasFx) {
         this.showRetrying(t('common.failedCommodities'));
         return;
       }
-      this.setContent(tabBar + `<div style="padding:8px;color:var(--text-dim);font-size:12px">${t('common.failedCommodities')}</div>`);
+      this.setSafeContent(unsafeRawHtml(tabBar + `<div style="padding:8px;color:var(--text-dim);font-size:12px">${t('common.failedCommodities')}</div>`, 'legacy Panel.setContent() migration'));
       return;
     }
 
@@ -694,7 +502,7 @@ export class CommoditiesPanel extends Panel {
         </div>
       `).join('') + '</div>';
 
-    this.setContent(tabBar + grid);
+    this.setSafeContent(unsafeRawHtml(tabBar + grid, 'legacy Panel.setContent() migration'));
   }
 }
 
@@ -727,6 +535,83 @@ export class CryptoPanel extends Panel {
       )
       .join('');
 
-    this.setContent(html);
+    this.setSafeContent(unsafeRawHtml(html, 'legacy Panel.setContent() migration'));
+  }
+}
+
+export class CryptoHeatmapPanel extends Panel {
+  constructor() {
+    super({ id: 'crypto-heatmap', title: 'Crypto Sectors' });
+  }
+
+  public renderSectors(data: Array<{ id: string; name: string; change: number }>): void {
+    if (data.length === 0) {
+      this.showRetrying(t('common.failedSectorData'));
+      return;
+    }
+
+    const html =
+      '<div class="heatmap">' +
+      data
+        .map((sector) => {
+          const change = sector.change ?? 0;
+          return `
+        <div class="heatmap-cell ${getHeatmapClass(change)}">
+          <div class="sector-name">${escapeHtml(sector.name)}</div>
+          <div class="sector-change ${getChangeClass(change)}">${formatChange(change)}</div>
+        </div>
+      `;
+        })
+        .join('') +
+      '</div>';
+
+    this.setSafeContent(unsafeRawHtml(html, 'legacy Panel.setContent() migration'));
+  }
+}
+
+export class TokenListPanel extends Panel {
+  public renderTokens(data: TokenData[]): void {
+    if (data.length === 0) {
+      this.showRetrying(t('common.failedCryptoData'));
+      return;
+    }
+
+    const rows = data
+      .map(
+        (tok) => `
+      <div class="market-item">
+        <div class="market-info">
+          <span class="market-name">${escapeHtml(tok.name)}</span>
+          <span class="market-symbol">${escapeHtml(tok.symbol)}</span>
+        </div>
+        <div class="market-data">
+          <span class="market-price">$${tok.price.toLocaleString(undefined, { maximumFractionDigits: tok.price < 1 ? 6 : 2 })}</span>
+          <span class="market-change ${getChangeClass(tok.change24h)}">${formatChange(tok.change24h)}</span>
+          <span class="market-change market-change--7d ${getChangeClass(tok.change7d)}">${formatChange(tok.change7d)}W</span>
+        </div>
+      </div>
+    `
+      )
+      .join('');
+
+    this.setSafeContent(unsafeRawHtml(rows, 'legacy Panel.setContent() migration'));
+  }
+}
+
+export class DefiTokensPanel extends TokenListPanel {
+  constructor() {
+    super({ id: 'defi-tokens', title: 'DeFi Tokens', infoTooltip: t('components.defiTokens.infoTooltip') });
+  }
+}
+
+export class AiTokensPanel extends TokenListPanel {
+  constructor() {
+    super({ id: 'ai-tokens', title: 'AI Tokens', infoTooltip: t('components.aiTokens.infoTooltip') });
+  }
+}
+
+export class OtherTokensPanel extends TokenListPanel {
+  constructor() {
+    super({ id: 'other-tokens', title: 'Alt Tokens', infoTooltip: t('components.altTokens.infoTooltip') });
   }
 }

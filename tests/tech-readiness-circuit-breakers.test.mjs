@@ -27,8 +27,96 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
+const economicPath = resolve(root, 'src/services/economic/index.ts');
+const techReadinessPanelPath = resolve(root, 'src/components/TechReadinessPanel.ts');
 
-const readSrc = (relPath) => readFileSync(resolve(root, relPath), 'utf-8');
+function loadEconomicSourceFile() {
+  return ts.createSourceFile(
+    economicPath,
+    readFileSync(economicPath, 'utf-8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+}
+
+function loadTechReadinessPanelSource() {
+  return readFileSync(techReadinessPanelPath, 'utf-8');
+}
+
+function walk(node, visit) {
+  visit(node);
+  ts.forEachChild(node, (child) => walk(child, visit));
+}
+
+function findVariableDeclaration(sourceFile, name) {
+  for (const stmt of sourceFile.statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(decl.name) && decl.name.text === name) {
+        return decl;
+      }
+    }
+  }
+  return undefined;
+}
+
+function findFunctionDeclaration(sourceFile, name) {
+  return sourceFile.statements.find(
+    (stmt) => ts.isFunctionDeclaration(stmt) && stmt.name?.text === name,
+  );
+}
+
+function collectCallExpressions(node) {
+  const calls = [];
+  walk(node, (current) => {
+    if (ts.isCallExpression(current)) calls.push(current);
+  });
+  return calls;
+}
+
+function findPropertyAssignment(node, name) {
+  if (!ts.isObjectLiteralExpression(node)) return undefined;
+  return node.properties.find(
+    (prop) => ts.isPropertyAssignment(prop)
+      && ((ts.isIdentifier(prop.name) && prop.name.text === name)
+        || (ts.isStringLiteral(prop.name) && prop.name.text === name)),
+  );
+}
+
+function isIdentifierNamed(node, name) {
+  return ts.isIdentifier(node) && node.text === name;
+}
+
+function isStringLiteralValue(node, value) {
+  return (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text === value;
+}
+
+function getTechIndicatorKeys(sourceFile) {
+  const decl = findVariableDeclaration(sourceFile, 'TECH_INDICATORS');
+  assert.ok(decl?.initializer && ts.isObjectLiteralExpression(decl.initializer), 'TECH_INDICATORS object must exist');
+
+  const keys = new Set();
+  for (const prop of decl.initializer.properties) {
+    if (!ts.isPropertyAssignment(prop)) continue;
+    if (ts.isStringLiteral(prop.name) || ts.isIdentifier(prop.name)) {
+      keys.add(prop.name.text);
+    }
+  }
+  return keys;
+}
+
+function getCreateCircuitBreakerNameInitializer(fn) {
+  const createCall = collectCallExpressions(fn).find((call) => isIdentifierNamed(call.expression, 'createCircuitBreaker'));
+  assert.ok(createCall, 'getWbBreaker must call createCircuitBreaker');
+
+  const optionsArg = createCall.arguments[0];
+  assert.ok(optionsArg && ts.isObjectLiteralExpression(optionsArg), 'createCircuitBreaker must receive an options object');
+
+  const nameProp = findPropertyAssignment(optionsArg, 'name');
+  assert.ok(nameProp, 'createCircuitBreaker options must include a name');
+  return nameProp.initializer;
+}
 
 // ============================================================
 // 1. Static analysis: source structure guarantees
@@ -214,5 +302,30 @@ describe('getTechReadinessRankings — bootstrap-only data flow', () => {
     assert.match(src, /'IT\.CEL\.SETS\.P2'/, 'Mobile Subscriptions indicator must be present');
     assert.match(src, /'IT\.NET\.BBND\.P2'/, 'Fixed Broadband indicator must be present');
     assert.match(src, /'GB\.XPD\.RSDV\.GD\.ZS'/, 'R&D Expenditure indicator must be present');
+  });
+});
+
+// ============================================================
+// 4. TechReadinessPanel: soft-refresh retry UX regressions
+// ============================================================
+
+describe('TechReadinessPanel — empty/error retry UX', () => {
+  const panelSrc = loadTechReadinessPanelSource();
+
+  it('does not set the count badge to 0 before the empty-result soft state', () => {
+    assert.doesNotMatch(
+      panelSrc,
+      /this\.setCount\(result\.length\)/,
+      'empty result must not write count badge 0 before showSoftRefreshing()',
+    );
+    assert.match(panelSrc, /this\.hideCountBadge\(\);[\s\S]*?this\.setSafeContent\(unsafeRawHtml\(`\s*<div class="panel-soft-empty"/);
+    assert.match(panelSrc, /this\.showCountBadge\(this\.rankings\.length\);/);
+  });
+
+  it('resets retry budget only on external refreshes, not scheduled retries', () => {
+    assert.match(panelSrc, /public async refresh\(isRetry = false\): Promise<void>/);
+    assert.match(panelSrc, /if \(!isRetry\) this\.localRetryAttempt = 0;/);
+    assert.match(panelSrc, /void this\.refresh\(true\);/);
+    assert.doesNotMatch(panelSrc, /void this\.refresh\(\);\s*\}, delay\);/);
   });
 });

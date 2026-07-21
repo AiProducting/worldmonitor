@@ -1,6 +1,8 @@
 import { Panel } from './Panel';
+import { t } from '@/services/i18n';
 import type { ConvergenceCard, CorrelationDomain } from '@/services/correlation-engine';
 import { h, replaceChildren } from '@/utils/dom-utils';
+import { readableTextColor } from '@/utils/contrast';
 import { getHydratedData } from '@/services/bootstrap';
 
 let correlationBootstrap: Record<string, ConvergenceCard[]> | null | undefined;
@@ -11,11 +13,15 @@ function getCorrelationBootstrap(): Record<string, ConvergenceCard[]> | null {
   return correlationBootstrap;
 }
 
+// Score-badge BACKGROUND colors. Badge text color is chosen per-background via
+// readableTextColor() so it clears WCAG AA on each: white on the dark `low`
+// badge, dark text on the light/mid critical/high/medium hues (white was 3.41 /
+// 2.39 / 1.51 on those). `low` was also darkened #888888 → #6f6f6f. (#4418/#4421)
 const SCORE_COLORS = {
   critical: '#ff4444',
   high: '#ff8800',
   medium: '#ffcc00',
-  low: '#888888',
+  low: '#6f6f6f',
 };
 
 const TREND_ICONS: Record<string, { symbol: string; color: string }> = {
@@ -41,7 +47,7 @@ export class CorrelationPanel extends Panel {
       this.cards = cards;
       this.requestRender();
     } else {
-      this.showLoading('Waiting for data...');
+      this.showLoading(t('components.correlation.loading'));
     }
 
     this.boundUpdateHandler = ((e: CustomEvent) => {
@@ -87,7 +93,7 @@ export class CorrelationPanel extends Panel {
       replaceChildren(this.content, h('div', {
         className: 'correlation-empty',
         style: 'padding:12px;text-align:center;opacity:0.5;font-size:11px;',
-      }, 'No active convergence detected'));
+      }, t('components.correlation.empty')));
       return;
     }
 
@@ -109,14 +115,14 @@ export class CorrelationPanel extends Panel {
       style: 'display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px;',
     },
       h('span', {
-        style: `display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:10px;font-size:10px;font-weight:700;color:#fff;background:${scoreColor};`,
+        style: `display:inline-block;min-width:28px;text-align:center;padding:2px 6px;border-radius:10px;font-size:10px;font-weight:700;color:${readableTextColor(scoreColor)};background:${scoreColor};`,
       }, String(card.score)),
       h('span', {
         style: 'flex:1;font-size:11px;line-height:1.3;',
       }, card.title),
       h('span', {
         style: 'font-size:9px;opacity:0.6;white-space:nowrap;',
-      }, `${card.signals.length} signals`),
+      }, t('components.correlation.signals', { count: card.signals.length })),
       h('span', {
         style: `font-size:12px;color:${trend.color};`,
       }, trend.symbol),
@@ -163,13 +169,13 @@ export class CorrelationPanel extends Panel {
     } else if (card.score >= 60 && this.hasLiveData) {
       children.push(h('div', {
         style: 'padding:4px;font-size:9px;opacity:0.4;font-style:italic;',
-      }, 'Analyzing...'));
+      }, t('components.correlation.analyzing')));
     }
 
     if (card.location) {
       const mapBtn = h('button', {
         style: 'margin-top:4px;padding:3px 8px;font-size:9px;border:1px solid rgba(255,255,255,0.15);border-radius:3px;background:transparent;color:inherit;cursor:pointer;',
-      }, 'View on map');
+      }, t('components.correlation.viewOnMap'));
       mapBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.onMapNavigate?.(card.location!.lat, card.location!.lon);

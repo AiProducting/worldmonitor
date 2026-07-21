@@ -1,11 +1,32 @@
 import { isDesktopRuntime } from '../services/runtime';
 import { invokeTauri } from '../services/tauri-bridge';
 import { t } from '../services/i18n';
-import { h, replaceChildren, safeHtml } from '../utils/dom-utils';
+import { h, replaceChildren, safeHtml as sanitizeHtmlFragment, setTrustedHtml, trustedHtml } from '../utils/dom-utils';
+import { safeHtmlToString, type SafeHtml } from '@/utils/sanitize';
 import { trackPanelResized } from '@/services/analytics';
 import { getAiFlowSettings } from '@/services/ai-flow-settings';
 import { getSecretState } from '@/services/runtime-config';
 import { PanelGateReason } from '@/services/panel-gating';
+import { dataFreshness, type PanelFreshnessSummary } from '@/services/data-freshness';
+import { formatPanelFreshnessDisplay } from '@/services/panel-freshness-display';
+import {
+  clearPanelColSpan,
+  clearPanelSpan,
+  loadPanelCollapsed,
+  loadPanelColSpans,
+  loadPanelSpans,
+  savePanelCollapsed,
+  savePanelColSpan,
+  savePanelSpan,
+} from '@/utils/panel-storage';
+import {
+  clampColSpan,
+  clearColSpanClass,
+  getExplicitColSpanClass,
+  getMaxColSpan,
+  isPanelGridColumnCountReady,
+  setColSpanClass,
+} from '@/utils/panel-grid';
 
 export type PanelSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
 
@@ -26,125 +47,16 @@ const lockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" 
 
 const upgradeSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="16 12 12 8 8 12"/><line x1="12" y1="16" x2="12" y2="8"/></svg>`;
 
-const PANEL_SPANS_KEY = 'worldmonitor-panel-spans';
-
-function loadPanelSpans(): Record<string, number> {
-  try {
-    const stored = localStorage.getItem(PANEL_SPANS_KEY);
-    return stored ? JSON.parse(stored) : {};
-  } catch {
-    return {};
-  }
-}
-
-function savePanelSpan(panelId: string, span: number): void {
-  const spans = loadPanelSpans();
-  spans[panelId] = span;
-  localStorage.setItem(PANEL_SPANS_KEY, JSON.stringify(spans));
-}
-
-const PANEL_COL_SPANS_KEY = 'worldmonitor-panel-col-spans';
 const ROW_RESIZE_STEP_PX = 80;
 const COL_RESIZE_STEP_PX = 80;
-const PANELS_GRID_MIN_TRACK_PX = 280;
-
-function loadPanelColSpans(): Record<string, number> {
-  try {
-    const stored = localStorage.getItem(PANEL_COL_SPANS_KEY);
-    return stored ? JSON.parse(stored) : {};
-  } catch {
-    return {};
-  }
-}
-
-function savePanelColSpan(panelId: string, span: number): void {
-  const spans = loadPanelColSpans();
-  spans[panelId] = span;
-  localStorage.setItem(PANEL_COL_SPANS_KEY, JSON.stringify(spans));
-}
-
-const PANEL_COLLAPSED_KEY = 'worldmonitor-panel-collapsed';
-
-function loadPanelCollapsed(): Record<string, boolean> {
-  try {
-    const stored = localStorage.getItem(PANEL_COLLAPSED_KEY);
-    return stored ? JSON.parse(stored) : {};
-  } catch {
-    return {};
-  }
-}
-
-function savePanelCollapsed(panelId: string, collapsed: boolean): void {
-  const map = loadPanelCollapsed();
-  if (collapsed) {
-    map[panelId] = true;
-  } else {
-    delete map[panelId];
-  }
-  if (Object.keys(map).length === 0) {
-    localStorage.removeItem(PANEL_COLLAPSED_KEY);
-  } else {
-    localStorage.setItem(PANEL_COLLAPSED_KEY, JSON.stringify(map));
-  }
-}
-
-function clearPanelColSpan(panelId: string): void {
-  const spans = loadPanelColSpans();
-  if (!(panelId in spans)) return;
-  delete spans[panelId];
-  if (Object.keys(spans).length === 0) {
-    localStorage.removeItem(PANEL_COL_SPANS_KEY);
-    return;
-  }
-  localStorage.setItem(PANEL_COL_SPANS_KEY, JSON.stringify(spans));
-}
+const FRESHNESS_BADGE_REFRESH_MS = 60_000;
 
 function getDefaultColSpan(element: HTMLElement): number {
   return element.classList.contains('panel-wide') ? 2 : 1;
 }
 
 function getColSpan(element: HTMLElement): number {
-  if (element.classList.contains('col-span-3')) return 3;
-  if (element.classList.contains('col-span-2')) return 2;
-  if (element.classList.contains('col-span-1')) return 1;
-  return getDefaultColSpan(element);
-}
-
-function getGridColumnCount(element: HTMLElement): number {
-  const grid = (element.closest('.panels-grid') || element.closest('.map-bottom-grid')) as HTMLElement | null;
-  if (!grid) return 3;
-  const style = window.getComputedStyle(grid);
-  const template = style.gridTemplateColumns;
-  if (!template || template === 'none') return 3;
-
-  if (template.includes('repeat(')) {
-    const repeatCountMatch = template.match(/repeat\(\s*(\d+)\s*,/i);
-    if (repeatCountMatch) {
-      const parsed = Number.parseInt(repeatCountMatch[1] ?? '0', 10);
-      if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    }
-
-    // For repeat(auto-fill/auto-fit, minmax(...)), infer count from rendered width.
-    const autoRepeatMatch = template.match(/repeat\(\s*auto-(fill|fit)\s*,/i);
-    if (autoRepeatMatch) {
-      const gap = Number.parseFloat(style.columnGap || '0') || 0;
-      const width = grid.getBoundingClientRect().width;
-      if (width > 0) {
-        return Math.max(1, Math.floor((width + gap) / (PANELS_GRID_MIN_TRACK_PX + gap)));
-      }
-    }
-  }
-
-  const columns = template.trim().split(/\s+/).filter(Boolean);
-  return columns.length > 0 ? columns.length : 3;
-}
-
-function getMaxColSpan(element: HTMLElement): number {
-  return Math.max(1, Math.min(3, getGridColumnCount(element)));
-}
-
-function clampColSpan(span: number, maxSpan: number): number {
-  return Math.max(1, Math.min(maxSpan, span));
+  return getExplicitColSpanClass(element) ?? getDefaultColSpan(element);
 }
 
 function persistPanelColSpan(panelId: string, element: HTMLElement): void {
@@ -165,15 +77,6 @@ function deltaToColSpan(startSpan: number, deltaX: number, maxSpan = 3): number 
     ? Math.floor(deltaX / COL_RESIZE_STEP_PX)
     : Math.ceil(deltaX / COL_RESIZE_STEP_PX);
   return clampColSpan(startSpan + spanDelta, maxSpan);
-}
-
-function clearColSpanClass(element: HTMLElement): void {
-  element.classList.remove('col-span-1', 'col-span-2', 'col-span-3');
-}
-
-function setColSpanClass(element: HTMLElement, span: number): void {
-  clearColSpanClass(element);
-  element.classList.add(`col-span-${span}`);
 }
 
 function getRowSpan(element: HTMLElement): number {
@@ -203,6 +106,9 @@ export class Panel {
   protected countEl: HTMLElement | null = null;
   protected statusBadgeEl: HTMLElement | null = null;
   protected newBadgeEl: HTMLElement | null = null;
+  private freshnessBadgeEl: HTMLElement | null = null;
+  private freshnessUnsubscribe: (() => void) | null = null;
+  private freshnessRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private severityDotEl: HTMLElement | null = null;
   private currentSeverity: PanelSeverity = 'none';
   protected panelId: string;
@@ -233,13 +139,27 @@ export class Panel {
   private readonly contentDebounceMs = 150;
   private pendingContentHtml: string | null = null;
   private contentDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingContentCallback: (() => void) | null = null;
   private retryCallback: (() => void) | null = null;
   private retryCountdownTimer: ReturnType<typeof setInterval> | null = null;
   private retryAttempt = 0;
   private _fetching = false;
   private _locked = false;
+  // Snapshot of this.content's children at the moment showLocked /
+  // showGatedCta replaces them with a lock CTA. unlockPanel re-attaches
+  // these nodes so subclasses whose UI is constructed once (typically in
+  // the ctor — chips, input rows, static chrome) don't end up with a
+  // permanently empty body after a FREE→PRO auth-state cycle. The cache
+  // holds the actual DOM nodes; reattaching preserves any listeners and
+  // any subclass references like `this.inputEl`.
+  private _savedContent: ChildNode[] | null = null;
   private _collapsed = false;
   private _collapseBtn: HTMLButtonElement | null = null;
+  private viewportObserver: IntersectionObserver | null = null;
+  private viewportObserverRegistered = false;
+  private connectedCallbacks: Array<() => void> = [];
+  private connectedFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  private destroyed = false;
 
   constructor(options: PanelOptions) {
     this.panelId = options.id;
@@ -263,11 +183,24 @@ export class Panel {
     this.severityDotEl.setAttribute('aria-hidden', 'true');
     headerLeft.appendChild(this.severityDotEl);
 
+    const initialFreshness = dataFreshness.getPanelFreshness(this.panelId);
+    if (initialFreshness) {
+      this.freshnessBadgeEl = document.createElement('span');
+      this.freshnessBadgeEl.className = 'panel-freshness-badge';
+      headerLeft.appendChild(this.freshnessBadgeEl);
+      this.updateFreshnessBadge(initialFreshness);
+      this.freshnessUnsubscribe = dataFreshness.subscribe(() => this.updateFreshnessBadge());
+      this.freshnessRefreshTimer = setInterval(
+        () => this.updateFreshnessBadge(),
+        FRESHNESS_BADGE_REFRESH_MS,
+      );
+    }
+
     if (options.infoTooltip) {
       const infoBtn = h('button', { className: 'panel-info-btn', 'aria-label': t('components.panel.showMethodologyInfo') }, '?');
 
       const tooltip = h('div', { className: 'panel-info-tooltip' });
-      tooltip.appendChild(safeHtml(options.infoTooltip));
+      tooltip.appendChild(sanitizeHtmlFragment(options.infoTooltip));
 
       infoBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -395,8 +328,11 @@ export class Panel {
     }
 
     const tryReconcile = (remaining: number) => {
-      if (!this.element.isConnected || !this.element.parentElement) {
-        if (remaining <= 0) return;
+      if (!this.element.isConnected || !this.element.parentElement || !isPanelGridColumnCountReady(this.element)) {
+        if (remaining <= 0) {
+          this.colSpanReconcileRaf = null;
+          return;
+        }
         this.colSpanReconcileRaf = requestAnimationFrame(() => tryReconcile(remaining - 1));
         return;
       }
@@ -694,6 +630,20 @@ export class Panel {
     this.statusBadgeEl.style.display = 'none';
   }
 
+  private updateFreshnessBadge(summary: PanelFreshnessSummary | null = dataFreshness.getPanelFreshness(this.panelId)): void {
+    if (!this.freshnessBadgeEl) return;
+    if (!summary) {
+      this.freshnessBadgeEl.style.display = 'none';
+      return;
+    }
+    const display = formatPanelFreshnessDisplay(summary);
+    this.freshnessBadgeEl.textContent = display.label;
+    this.freshnessBadgeEl.className = `panel-freshness-badge panel-freshness-${summary.status}`;
+    this.freshnessBadgeEl.title = display.title;
+    this.freshnessBadgeEl.setAttribute('aria-label', display.ariaLabel);
+    this.freshnessBadgeEl.style.display = 'inline-flex';
+  }
+
   protected insertLiveCountBadge(count: number): void {
     const headerLeft = this.header.querySelector('.panel-header-left');
     if (!headerLeft) return;
@@ -750,6 +700,121 @@ export class Panel {
 
   public getElement(): HTMLElement {
     return this.element;
+  }
+
+  /**
+   * True when this panel can host live media right now: attached, enabled (not hidden via the
+   * disable path), and expanded (not collapsed). The play-all cascade gates on this so a
+   * collapsed or disabled panel never creates/queues media work inside a hidden content area.
+   */
+  public canHostLiveMedia(): boolean {
+    return this.element.isConnected
+      && !this.element.classList.contains('hidden')
+      && !this._collapsed;
+  }
+
+  protected runWhenConnected(callback: () => void): boolean {
+    if (this.destroyed) return false;
+    if (this.element.isConnected) {
+      callback();
+      return true;
+    }
+
+    this.connectedCallbacks.push(callback);
+    this.scheduleConnectedFallbackIfNeeded();
+    return false;
+  }
+
+  public notifyConnected(): void {
+    this.flushConnectedCallbacks();
+  }
+
+  private scheduleConnectedFallbackIfNeeded(): void {
+    // Modern dashboard mounts call notifyConnected() from panel-layout. The timer is
+    // only for old/no-MutationObserver environments where that signal may not exist.
+    if (this.connectedFallbackTimer !== null || typeof MutationObserver !== 'undefined') return;
+    this.connectedFallbackTimer = globalThis.setTimeout(() => {
+      this.connectedFallbackTimer = null;
+      if (this.destroyed || this.connectedCallbacks.length === 0) return;
+      if (this.element.isConnected) {
+        this.flushConnectedCallbacks();
+        return;
+      }
+      this.scheduleConnectedFallbackIfNeeded();
+    }, 50);
+  }
+
+  private flushConnectedCallbacks(): void {
+    if (this.destroyed || !this.element.isConnected || this.connectedCallbacks.length === 0) return;
+    const callbacks = this.connectedCallbacks.splice(0);
+    if (this.connectedFallbackTimer !== null) {
+      clearTimeout(this.connectedFallbackTimer);
+      this.connectedFallbackTimer = null;
+    }
+
+    const errors: unknown[] = [];
+    for (const cb of callbacks) {
+      try {
+        cb();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      globalThis.setTimeout(() => { throw errors[0]; }, 0);
+    } else if (errors.length > 1) {
+      const error = new Error('Panel connected callbacks failed') as Error & { errors?: unknown[] };
+      error.errors = errors;
+      globalThis.setTimeout(() => { throw error; }, 0);
+    }
+  }
+
+  /**
+   * Fire `callback` once when this panel's element scrolls within
+   * `marginPx` of the viewport. Uses IntersectionObserver where
+   * available; falls back to an idle-callback tick when not (Node/SSR
+   * or very old browsers). Idempotent — repeat calls are ignored
+   * once an observation is registered. Disconnected automatically on
+   * destroy() and on first firing (loadAllData is idempotent and the
+   * refresh scheduler owns repeat fetches, so re-firing is wasted
+   * work). (#3990)
+   */
+  public observeNearViewport(callback: () => void, marginPx = 200): void {
+    if (this.viewportObserverRegistered) return;
+    if (typeof IntersectionObserver === 'undefined' || typeof window === 'undefined') {
+      this.viewportObserverRegistered = true;
+      const tick = (): void => {
+        if (this.element.isConnected) callback();
+      };
+      // typeof window === 'undefined' takes the fallback branch alone (no IO + no
+      // window), so the requestIdleCallback lookup must be gated separately —
+      // dereferencing `window` here without that guard would ReferenceError in
+      // pure Node/SSR. Greptile #4001/P1.
+      const ric = typeof window !== 'undefined'
+        ? (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+        : undefined;
+      if (typeof ric === 'function') ric(tick);
+      else setTimeout(tick, 0);
+      return;
+    }
+    this.viewportObserverRegistered = true;
+    this.viewportObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          this.unobserveViewport();
+          callback();
+          return;
+        }
+      }
+    }, { rootMargin: `${marginPx}px` });
+    this.viewportObserver.observe(this.element);
+  }
+
+  private unobserveViewport(): void {
+    if (this.viewportObserver) {
+      this.viewportObserver.disconnect();
+      this.viewportObserver = null;
+    }
   }
 
   public isNearViewport(marginPx = 400): boolean {
@@ -831,6 +896,7 @@ export class Panel {
   public showLocked(features: string[] = []): void {
     this._locked = true;
     this.clearRetryCountdown();
+    this._snapshotContentForRestore();
 
     for (let child = this.header.nextElementSibling; child && child !== this.content; child = child.nextElementSibling) {
       (child as HTMLElement).style.display = 'none';
@@ -838,7 +904,7 @@ export class Panel {
     this.element.classList.add('panel-is-locked');
 
     const iconEl = h('div', { className: 'panel-locked-icon' });
-    iconEl.innerHTML = lockSvg;
+    setTrustedHtml(iconEl, trustedHtml(lockSvg, 'legacy direct innerHTML migration'));
 
     const lockedChildren: (HTMLElement | string)[] = [
       iconEl,
@@ -855,11 +921,11 @@ export class Panel {
 
     const ctaBtn = h('button', { type: 'button', className: 'panel-locked-cta' }, 'Upgrade to Pro');
     if (isDesktopRuntime()) {
-      ctaBtn.addEventListener('click', () => void invokeTauri<void>('open_url', { url: 'https://worldmonitor.app/pro' }).catch(() => window.open('https://worldmonitor.app/pro', '_blank')));
+      ctaBtn.addEventListener('click', () => void invokeTauri<void>('open_url', { url: 'https://worldmonitor.app/pro' }).catch(() => window.open('https://worldmonitor.app/pro', '_blank', 'noopener,noreferrer')));
     } else {
       ctaBtn.addEventListener('click', () => {
         import('@/services/checkout').then(m => import('@/config/products').then(p => m.startCheckout(p.DEFAULT_UPGRADE_PRODUCT))).catch(() => {
-          window.open('https://worldmonitor.app/pro', '_blank');
+          window.open('https://worldmonitor.app/pro', '_blank', 'noopener,noreferrer');
         });
       });
     }
@@ -869,15 +935,6 @@ export class Panel {
   }
 
   public showGatedCta(reason: PanelGateReason, onAction: () => void): void {
-    this._locked = true;
-    this.clearRetryCountdown();
-
-    // Hide elements between header and content (same as showLocked)
-    for (let child = this.header.nextElementSibling; child && child !== this.content; child = child.nextElementSibling) {
-      (child as HTMLElement).style.display = 'none';
-    }
-    this.element.classList.add('panel-is-locked');
-
     const config: Record<string, { icon: string; desc: string; cta: string }> = {
       [PanelGateReason.ANONYMOUS]: {
         icon: lockSvg,
@@ -894,8 +951,22 @@ export class Panel {
     const entry = config[reason];
     if (!entry) return; // PanelGateReason.NONE should never reach here
 
+    // Bail-out done — now commit to the locked state. Doing this AFTER the
+    // guard avoids a half-locked DOM (header siblings hidden, panel-is-locked
+    // class set, _savedContent populated) on the acknowledged-impossible
+    // NONE-reason path. PR #3814 review (Greptile P2).
+    this._locked = true;
+    this.clearRetryCountdown();
+    this._snapshotContentForRestore();
+
+    // Hide elements between header and content (same as showLocked)
+    for (let child = this.header.nextElementSibling; child && child !== this.content; child = child.nextElementSibling) {
+      (child as HTMLElement).style.display = 'none';
+    }
+    this.element.classList.add('panel-is-locked');
+
     const iconEl = h('div', { className: 'panel-locked-icon' });
-    iconEl.innerHTML = entry.icon;
+    setTrustedHtml(iconEl, trustedHtml(entry.icon, 'legacy direct innerHTML migration'));
 
     const descEl = h('div', { className: 'panel-locked-desc' }, entry.desc);
 
@@ -913,8 +984,44 @@ export class Panel {
     for (let child = this.header.nextElementSibling; child && child !== this.content; child = child.nextElementSibling) {
       (child as HTMLElement).style.display = '';
     }
-    // Clear the locked state content
-    replaceChildren(this.content);
+    // Restore the pre-lock content if we have it. The saved nodes are the
+    // ORIGINAL DOM nodes the subclass built — reattaching preserves event
+    // listeners and any references the subclass holds (this.inputEl etc.),
+    // and fixes constructor-only subclasses (DeductionPanel,
+    // ChatAnalystPanel, …) that would otherwise end up with an empty body.
+    // Fall back to the legacy empty-content behaviour if nothing was saved.
+    if (this._savedContent !== null) {
+      replaceChildren(this.content, ...this._savedContent);
+      this._savedContent = null;
+    } else {
+      replaceChildren(this.content);
+    }
+  }
+
+  /**
+   * Remove sensitive panel payloads from both the visible DOM and the
+   * pre-lock restoration snapshot. Pro panels call this on sign-out or
+   * downgrade so unlockPanel() cannot resurrect data captured before the
+   * entitlement changed.
+   */
+  protected clearSensitiveContent(): void {
+    this._savedContent = null;
+    this.pendingContentHtml = null;
+    this.pendingContentCallback = null;
+    if (this.contentDebounceTimer) {
+      clearTimeout(this.contentDebounceTimer);
+      this.contentDebounceTimer = null;
+    }
+    if (!this._locked) replaceChildren(this.content);
+  }
+
+  // Capture this.content's current child nodes so unlockPanel can put them
+  // back. Only snapshots on the FIRST transition into a lock state — a
+  // re-entrant showLocked / showGatedCta must not overwrite the cache with
+  // the locked-state CTA. The cache is cleared by unlockPanel on restore.
+  private _snapshotContentForRestore(): void {
+    if (this._savedContent !== null) return;
+    this._savedContent = Array.from(this.content.childNodes);
   }
 
   public showRetrying(message?: string, countdownSeconds?: number): void {
@@ -1008,16 +1115,26 @@ export class Panel {
     }
   }
 
-  public setContent(html: string): void {
+  public setSafeContent(html: SafeHtml, afterUpdate?: () => void): void {
+    this.setContentHtml(safeHtmlToString(html), afterUpdate);
+  }
+
+  private setContentHtml(html: string, afterUpdate?: () => void): void {
     if (this._locked) return;
     this.setErrorState(false);
     this.clearRetryCountdown();
     this.retryAttempt = 0;
-    if (this.pendingContentHtml === html || this.content.innerHTML === html) {
+    if (this.pendingContentHtml === html) {
+      if (afterUpdate) this.pendingContentCallback = afterUpdate;
+      return;
+    }
+    if (this.content.innerHTML === html) {
+      afterUpdate?.();
       return;
     }
 
     this.pendingContentHtml = html;
+    this.pendingContentCallback = afterUpdate ?? null;
     if (this.contentDebounceTimer) {
       clearTimeout(this.contentDebounceTimer);
     }
@@ -1036,9 +1153,12 @@ export class Panel {
     }
 
     this.pendingContentHtml = null;
+    const afterUpdate = this.pendingContentCallback;
+    this.pendingContentCallback = null;
     if (this.content.innerHTML !== html) {
-      this.content.innerHTML = html;
+      setTrustedHtml(this.content, trustedHtml(html, 'legacy direct innerHTML migration'));
     }
+    afterUpdate?.();
   }
 
   public show(): void {
@@ -1113,9 +1233,7 @@ export class Panel {
    */
   public resetHeight(): void {
     this.element.classList.remove('resized', 'span-1', 'span-2', 'span-3', 'span-4');
-    const spans = loadPanelSpans();
-    delete spans[this.panelId];
-    localStorage.setItem(PANEL_SPANS_KEY, JSON.stringify(spans));
+    clearPanelSpan(this.panelId);
   }
 
   public resetWidth(): void {
@@ -1132,8 +1250,23 @@ export class Panel {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     this.abortController.abort();
     this.clearRetryCountdown();
+    this.unobserveViewport();
+    if (this.connectedFallbackTimer !== null) {
+      clearTimeout(this.connectedFallbackTimer);
+      this.connectedFallbackTimer = null;
+    }
+    this.connectedCallbacks = [];
+    if (this.freshnessUnsubscribe) {
+      this.freshnessUnsubscribe();
+      this.freshnessUnsubscribe = null;
+    }
+    if (this.freshnessRefreshTimer) {
+      clearInterval(this.freshnessRefreshTimer);
+      this.freshnessRefreshTimer = null;
+    }
     if (this.colSpanReconcileRaf !== null) {
       cancelAnimationFrame(this.colSpanReconcileRaf);
       this.colSpanReconcileRaf = null;
@@ -1143,6 +1276,11 @@ export class Panel {
       this.contentDebounceTimer = null;
     }
     this.pendingContentHtml = null;
+    this.pendingContentCallback = null;
+    // Drop the snapshot of pre-lock children so a panel destroyed while
+    // still in the locked state doesn't retain the detached DOM subtree
+    // for the lifetime of the Panel instance. PR #3814 review (Greptile P2).
+    this._savedContent = null;
 
     if (this.tooltipCloseHandler) {
       document.removeEventListener('click', this.tooltipCloseHandler);

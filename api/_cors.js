@@ -1,6 +1,10 @@
 const ALLOWED_ORIGIN_PATTERNS = [
   /^https:\/\/(.*\.)?worldmonitor\.app$/,
-  /^https:\/\/worldmonitor-[a-z0-9-]+-elie-[a-z0-9]+\.vercel\.app$/,
+  // Vercel preview deployments under the "eliewm" team scope, e.g.
+  //   worldmonitor-git-<branch>-eliewm.vercel.app  (git-branch alias)
+  //   worldmonitor-<hash>-eliewm.vercel.app        (deployment URL)
+  // Tight on purpose: never a bare *.vercel.app (this is a security allowlist).
+  /^https:\/\/worldmonitor-[a-z0-9-]+-eliewm\.vercel\.app$/,
   /^https?:\/\/tauri\.localhost(:\d+)?$/,
   /^https?:\/\/[a-z0-9-]+\.tauri\.localhost(:\d+)?$/i,
   /^tauri:\/\/localhost$/,
@@ -12,6 +16,46 @@ const ALLOWED_ORIGIN_PATTERNS = [
   ]),
 ];
 
+const ALLOWED_HEADERS = [
+  'Content-Type',
+  'Authorization',
+  'X-WorldMonitor-Key',
+  'X-Api-Key',
+  'X-Widget-Key',
+  'X-Pro-Key',
+  'X-WorldMonitor-Desktop-Timestamp',
+  'X-WorldMonitor-Desktop-Signature',
+  'Idempotency-Key',
+  'Mcp-Session-Id',
+  'MCP-Protocol-Version',
+  'Last-Event-ID',
+].join(', ');
+
+const EXPOSED_HEADERS = [
+  'Mcp-Session-Id',
+  'WWW-Authenticate',
+  'Retry-After',
+  'Idempotency-Key',
+  'Idempotent-Replayed',
+  // IETF RateLimit fields (draft-ietf-httpapi-ratelimit-headers): RateLimit-Policy
+  // + RateLimit-Limit are advertised on every API response (vercel.json); the
+  // combined RateLimit member and RateLimit-Remaining/Reset appear on a 429.
+  // Exposed so browser-context agents can read them cross-origin and self-throttle.
+  'RateLimit',
+  'RateLimit-Policy',
+  'RateLimit-Limit',
+  'RateLimit-Remaining',
+  'RateLimit-Reset',
+  // Legacy X-RateLimit-* retained for back-compat with existing consumers.
+  'X-RateLimit-Limit',
+  'X-RateLimit-Remaining',
+  'X-RateLimit-Reset',
+  'X-WorldMonitor-Bbox',
+  'X-WorldMonitor-Bbox-Missing',
+  'X-WorldMonitor-Bbox-Invalid',
+  'X-Military-Bbox',
+].join(', ');
+
 function isAllowedOrigin(origin) {
   return Boolean(origin) && ALLOWED_ORIGIN_PATTERNS.some((pattern) => pattern.test(origin));
 }
@@ -21,8 +65,10 @@ export function getCorsHeaders(req, methods = 'GET, OPTIONS') {
   const allowOrigin = isAllowedOrigin(origin) ? origin : 'https://worldmonitor.app';
   return {
     'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': methods,
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-WorldMonitor-Key, X-Widget-Key, X-Pro-Key',
+    'Access-Control-Allow-Headers': ALLOWED_HEADERS,
+    'Access-Control-Expose-Headers': EXPOSED_HEADERS,
     'Access-Control-Max-Age': '3600',
     'Vary': 'Origin',
   };
@@ -40,7 +86,8 @@ export function getPublicCorsHeaders(methods = 'GET, OPTIONS') {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': methods,
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-WorldMonitor-Key, X-Widget-Key, X-Pro-Key',
+    'Access-Control-Allow-Headers': ALLOWED_HEADERS,
+    'Access-Control-Expose-Headers': EXPOSED_HEADERS,
     'Access-Control-Max-Age': '3600',
   };
 }

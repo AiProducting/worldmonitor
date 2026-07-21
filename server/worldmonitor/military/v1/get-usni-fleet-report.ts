@@ -16,6 +16,35 @@ const USNI_STALE_CACHE_KEY = 'usni-fleet:sebuf:stale:v1';
 const USNI_CACHE_TTL = 21600; // 6 hours
 const USNI_STALE_TTL = 604800; // 7 days
 
+export function buildUSNIFleetReportForceRefreshResponse(): GetUSNIFleetReportResponse {
+  return {
+    report: undefined,
+    cached: false,
+    stale: false,
+    error: 'forceRefresh is no longer supported (data is seeded by Railway relay)',
+  };
+}
+
+export function buildUSNIFleetReportCacheResponse(
+  report: USNIFleetReport | null,
+  stale: USNIFleetReport | null,
+): GetUSNIFleetReportResponse {
+  if (report) {
+    return { report, cached: true, stale: false, error: '' };
+  }
+
+  if (stale) {
+    return { report: stale, cached: true, stale: true, error: 'Using cached data' };
+  }
+
+  return {
+    report: undefined,
+    cached: false,
+    stale: false,
+    error: 'No USNI fleet data in cache (waiting for seed)',
+  };
+}
+
 // ========================================================================
 // USNI parsing helpers
 // ========================================================================
@@ -402,6 +431,10 @@ export async function getUSNIFleetReport(
   _ctx: ServerContext,
   req: GetUSNIFleetReportRequest,
 ): Promise<GetUSNIFleetReportResponse> {
+  if (req.forceRefresh) {
+    return buildUSNIFleetReportForceRefreshResponse();
+  }
+
   try {
     if (req.forceRefresh) {
       // Bypass cachedFetchJson — fetch fresh and write both caches
@@ -416,10 +449,11 @@ export async function getUSNIFleetReport(
       USNI_CACHE_KEY, USNI_CACHE_TTL, fetchUSNIReport,
     );
     if (report) {
-      return { report, cached: source === 'cache', stale: false, error: '' };
+      return buildUSNIFleetReportCacheResponse(report, null);
     }
 
-    return { report: undefined, cached: false, stale: false, error: 'No USNI fleet tracker articles found' };
+    const stale = (await getCachedJson(USNI_STALE_CACHE_KEY)) as USNIFleetReport | null;
+    return buildUSNIFleetReportCacheResponse(null, stale);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn('[USNI Fleet] Error:', message);

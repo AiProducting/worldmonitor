@@ -3,17 +3,19 @@ import type { CountryScore } from '@/services/country-instability';
 import type { PredictionMarket } from '@/services/prediction';
 import type { NewsItem } from '@/types';
 import type { GetCountryChokepointIndexResponse, SectorExposureSummary, CountryProductsResponse, MultiSectorShockResponse } from '@/services/supply-chain';
+import type { BriefSource } from '@/utils/brief-sources';
 
 export interface CountryIntelData {
   brief: string;
   country: string;
   code: string;
   cached?: boolean;
-  generatedAt?: string;
+  generatedAt?: string | number;
   error?: string;
   skipped?: boolean;
   reason?: string;
   fallback?: boolean;
+  sources?: BriefSource[];
 }
 
 export interface StockIndexData {
@@ -65,6 +67,28 @@ export interface CountryDeepDiveEconomicIndicator {
   value: string;
   trend: TrendDirection;
   source?: string;
+}
+
+export type ChinaCountrySummaryGroupId = 'macro-policy' | 'market-credit' | 'trade-supply' | 'energy' | 'availability';
+export type ChinaCountrySummaryState = 'loading' | 'available' | 'partial' | 'stale' | 'unavailable';
+
+export interface ChinaCountrySummarySignal {
+  label: string;
+  value: string;
+  source: string;
+  observedAt?: string;
+  stale: boolean;
+}
+
+export interface ChinaCountrySummaryGroup {
+  id: ChinaCountrySummaryGroupId;
+  state: ChinaCountrySummaryState;
+  signals: ChinaCountrySummarySignal[];
+  unavailableReason?: string;
+}
+
+export interface ChinaCountrySummaryData {
+  groups: ChinaCountrySummaryGroup[];
 }
 
 export interface CountryFactsData {
@@ -180,6 +204,7 @@ export interface CountryBriefPanel {
   updateSignalDetails?(details: CountryDeepDiveSignalDetails): void;
   updateMilitaryActivity?(summary: CountryDeepDiveMilitarySummary): void;
   updateEconomicIndicators?(indicators: CountryDeepDiveEconomicIndicator[]): void;
+  updateChinaCountrySummary?(data: ChinaCountrySummaryData): void;
   updateCountryFacts?(data: CountryFactsData): void;
   updateEnergyProfile?(data: CountryEnergyProfileData): void;
   updateMaritimeActivity?(data: CountryPortActivityData): void;

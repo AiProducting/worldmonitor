@@ -11,6 +11,7 @@ import {
   withRetry,
 } from './_seed-utils.mjs';
 import { resolveIso2 } from './_country-resolver.mjs';
+import { unwrapEnvelope } from './_seed-envelope-source.mjs';
 
 loadEnvFile(import.meta.url);
 
@@ -61,7 +62,7 @@ function parseDelimitedRow(line, delimiter) {
 function parseDelimitedText(text, delimiter) {
   const lines = text
     .replace(/^\uFEFF/, '')
-    .split(/\r?\n/)
+    .split(/\r\n|\r|\n/) // tolerate LF, CRLF, and bare CR (Ember switched to CR-only Jun 2026)
     .map((line) => line.trim())
     .filter(Boolean);
   if (lines.length < 2) return [];
@@ -76,6 +77,24 @@ function parseDelimitedText(text, delimiter) {
 function safeFloat(value) {
   const n = parseFloat(value);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Normalize an Ember date cell to canonical YYYY-MM-DD so downstream
+ * lexicographic max/equality/slice stay correct.
+ * Handles legacy ISO (YYYY-MM-DD) and the Jun-2026 DD/MM/YYYY format.
+ * @param {string} value
+ * @returns {string} canonical YYYY-MM-DD, or '' when unrecognized
+ */
+function normalizeDate(value) {
+  const s = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmy) {
+    const [, dd, mm, yyyy] = dmy;
+    return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+  }
+  return '';
 }
 
 /**
@@ -115,7 +134,7 @@ export function parseEmberCsv(csvText) {
     if (value === null) continue;
 
     const series = String(row[COLS.series] || '').trim();
-    const date = String(row[COLS.date] || '').trim();
+    const date = normalizeDate(row[COLS.date]);
     if (!series || !date) continue;
 
     if (!byIso3.has(iso3)) byIso3.set(iso3, []);
@@ -221,7 +240,7 @@ async function redisGet(key) {
   });
   if (!resp.ok) return null;
   const data = await resp.json();
-  return data.result ? JSON.parse(data.result) : null;
+  return data.result ? unwrapEnvelope(JSON.parse(data.result)).data : null;
 }
 
 async function preservePreviousSnapshot(errorMsg, stashedAllMap = null, newCountryKeys = null, dataWritten = false) {
