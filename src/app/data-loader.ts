@@ -845,7 +845,11 @@ export class DataLoaderManager implements AppModule {
           }
           const data = givingResult.data;
           this.callPanel('giving', 'setData', data);
-          if (data.platforms.length > 0) dataFreshness.recordUpdate('giving', data.platforms.length);
+          if (givingResult.state === 'cached-refresh-unavailable') {
+            dataFreshness.recordError('giving', `Giving refresh unavailable (${givingResult.refreshFailure ?? 'unknown'})`);
+          } else if (data.platforms.length > 0) {
+            dataFreshness.recordUpdate('giving', data.platforms.length);
+          }
         }),
       });
     }
@@ -3830,11 +3834,11 @@ export class DataLoaderManager implements AppModule {
 
   private async loadRenewableData(): Promise<void> {
     const { fetchRenewableEnergyData, fetchEnergyCapacity } = await import('@/services/renewable-energy-data');
-    const data = await fetchRenewableEnergyData();
-    this.callPanel('renewable', 'setData', data);
-    if (SITE_VARIANT === 'happy' && data?.globalPercentage) {
+    const result = await fetchRenewableEnergyData();
+    this.callPanel('renewable', 'setData', result);
+    if (SITE_VARIANT === 'happy' && result.state === 'live' && result.data?.globalPercentage) {
       checkMilestones({
-        renewablePercent: data.globalPercentage,
+        renewablePercent: result.data.globalPercentage,
       });
     }
     try {
