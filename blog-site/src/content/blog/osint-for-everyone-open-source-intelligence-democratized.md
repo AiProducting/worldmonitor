@@ -1,11 +1,12 @@
 ---
 title: "OSINT for Everyone: Open Source Intelligence with World Monitor"
-description: "World Monitor brings professional-grade OSINT to everyone. 435+ feeds, live tracking, AI threat analysis, and 45 data layers in one free open source dashboard."
+description: "World Monitor brings professional-grade OSINT to everyone. 500+ feeds, live tracking, AI threat analysis, and 56 map layers in one free open source dashboard."
 metaTitle: "OSINT for Everyone: Free Intelligence Dashboard"
 keywords: "OSINT tools free, open source intelligence software, OSINT dashboard, intelligence gathering tools, OSINT for beginners"
 audience: "OSINT researchers, security analysts, journalists, hobbyist investigators"
 heroImage: "/blog/images/blog/osint-for-everyone-open-source-intelligence-democratized.jpg"
 pubDate: "2026-02-17"
+modifiedDate: "2026-07-22"
 ---
 
 Open source intelligence used to require a dozen subscriptions, custom scrapers, and years of domain expertise. A professional OSINT analyst's browser might have 50+ tabs open at any given time: flight trackers, ship trackers, earthquake monitors, conflict databases, Telegram channels, RSS readers, and satellite imagery viewers.
@@ -31,9 +32,9 @@ Each tool has its own interface, its own refresh cycle, its own learning curve. 
 
 World Monitor integrates all of these data sources (and many more) into a single, layered map with real-time updates.
 
-## 435+ Intelligence Feeds, Zero Configuration
+## 500+ Intelligence Feeds, Zero Configuration
 
-World Monitor aggregates **435+ RSS feeds** organized across 15 categories:
+World Monitor aggregates **500+ curated RSS feeds** organized across 15 categories:
 
 - Geopolitics and defense
 - Middle East and North Africa
@@ -126,6 +127,17 @@ No account needed. No API keys required for the web version. For local AI analys
 Closed-source intelligence tools are black boxes. You can't verify how they score threats, where their data comes from, or whether their algorithms have blind spots.
 
 World Monitor's AGPL-3.0 license means every scoring algorithm, every data pipeline, and every AI prompt is open for inspection. Security researchers can audit it. Academics can cite it. Developers can extend it. And anyone can self-host it for complete operational security.
+
+## Frequently Asked Questions
+
+**Is World Monitor really free for OSINT research?**
+Yes. Every feature, data source, and AI capability is available at no cost with no account required. The platform is open source under AGPL-3.0, so you can also self-host it.
+
+**Do I need technical skills to use World Monitor for OSINT?**
+No. The interface is designed for analysts of all skill levels. Toggle layers on the sidebar, click data points for details, and use the Command Palette (Cmd+K) to search across all intelligence sources instantly.
+
+**How does World Monitor compare to traditional OSINT tools?**
+World Monitor consolidates 500+ feeds, live tracking, AI analysis, and 56 map layers into one dashboard. Traditional tools require juggling dozens of separate platforms. See our [detailed comparison with traditional intelligence tools](/blog/posts/worldmonitor-vs-traditional-intelligence-tools/).
 
 ---
 
