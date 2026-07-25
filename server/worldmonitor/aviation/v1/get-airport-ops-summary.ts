@@ -6,7 +6,9 @@ import type {
     FlightDelaySeverity,
 } from '../../../../src/generated/server/worldmonitor/aviation/v1/service_server';
 import { MONITORED_AIRPORTS } from '../../../../src/config/airports';
-import { cachedFetchJson } from '../../../_shared/redis';
+import { getCachedJson } from '../../../_shared/redis';
+// @ts-expect-error — JS module, no declaration file
+import { captureSilentError } from '../../../../api/_sentry-edge.js';
 import {
     fetchAviationStackDelays,
     determineSeverity,
@@ -131,9 +133,105 @@ export async function getAirportOpsSummary(
 
                 return { summaries };
             }
-        );
+        } catch (err) {
+            // Degrade to "no delay telemetry" (healthy stays false) but surface
+            // the cause — otherwise a broken cache read is indistinguishable
+            // from an empty seed.
+            console.warn(`[Aviation] Ops summary seed read failed: ${err instanceof Error ? err.message : 'unknown'}`);
+            void captureSilentError(err, { tags: { route: 'aviation/get-airport-ops-summary', step: 'seed-read' } });
+        }
 
-        return { summaries: result?.summaries ?? [], cacheHit: false };
+        // Fetch NOTAM closures via shared loader
+        let notamClosedIcaos = new Set<string>();
+        let notamRestrictedIcaos = new Set<string>();
+        let notamReasons: Record<string, string> = {};
+        try {
+            const notamResult = await loadNotamClosures();
+            if (notamResult) {
+                notamClosedIcaos = new Set(notamResult.closedIcaos);
+                notamRestrictedIcaos = new Set(notamResult.restrictedIcaos ?? []);
+                notamReasons = notamResult.reasons;
+            }
+        } catch (err) {
+            console.warn(`[Aviation] Ops summary NOTAM load failed: ${err instanceof Error ? err.message : 'unknown'}`);
+            void captureSilentError(err, { tags: { route: 'aviation/get-airport-ops-summary', step: 'notam-load' } });
+        }
+
+        for (const airport of airports) {
+            const alert = alerts.find(a => a.iata === airport.iata);
+            const isClosed = notamClosedIcaos.has(airport.icao);
+            const isRestricted = notamRestrictedIcaos.has(airport.icao);
+            const notamText = notamReasons[airport.icao];
+
+            const delayPct = alert?.delayedFlightsPct ?? 0;
+            const avgDelay = alert?.avgDelayMinutes ?? 0;
+            const cancelledFlights = alert?.cancelledFlights ?? 0;
+            const totalFlights = alert?.totalFlights ?? 0;
+            const cancelRate = totalFlights > 0 ? (cancelledFlights / totalFlights) * 100 : 0;
+
+            const cancelSev = severityFromCancelRate(cancelRate);
+            const delaySev = determineSeverity(avgDelay, delayPct);
+            const notamFloor = isClosed
+                ? (totalFlights === 0 ? 'severe' : 'moderate')
+                : isRestricted ? 'minor' : 'normal';
+            const sevOrder = ['normal', 'minor', 'moderate', 'major', 'severe'];
+            const sevStr = sevOrder[Math.max(
+                sevOrder.indexOf(cancelSev),
+                sevOrder.indexOf(delaySev),
+                sevOrder.indexOf(notamFloor),
+            )] ?? 'normal';
+            const severity = `FLIGHT_DELAY_SEVERITY_${sevStr.toUpperCase()}` as FlightDelaySeverity;
+
+            const notamFlags: string[] = [];
+            if (isClosed) notamFlags.push('CLOSED');
+            if (isRestricted) notamFlags.push('RESTRICTED');
+            if (notamText) notamFlags.push('NOTAM');
+
+            const topDelayReasons: string[] = [];
+            if (alert?.reason) topDelayReasons.push(alert.reason);
+            if ((isClosed || isRestricted) && notamText) topDelayReasons.push(notamText.slice(0, 80));
+
+            summaries.push({
+                iata: airport.iata,
+                icao: airport.icao,
+                name: airport.name,
+                timezone: 'UTC',
+                delayPct,
+                avgDelayMinutes: avgDelay,
+                cancellationRate: Math.round(cancelRate * 10) / 10,
+                totalFlights,
+                closureStatus: isClosed,
+                notamFlags,
+                severity,
+                topDelayReasons,
+                source: healthy ? 'aviationstack' : 'degraded',
+                updatedAt: now,
+            });
+        }
+
+        // Add requested airports not found in MONITORED_AIRPORTS
+        for (const iata of requested) {
+            if (!summaries.find(s => s.iata === iata)) {
+                summaries.push({
+                    iata,
+                    icao: '',
+                    name: iata,
+                    timezone: 'UTC',
+                    delayPct: 0,
+                    avgDelayMinutes: 0,
+                    cancellationRate: 0,
+                    totalFlights: 0,
+                    closureStatus: false,
+                    notamFlags: [],
+                    severity: 'FLIGHT_DELAY_SEVERITY_NORMAL',
+                    topDelayReasons: [],
+                    source: 'unknown',
+                    updatedAt: now,
+                });
+            }
+        }
+
+        return { summaries, cacheHit: false };
     } catch (err) {
         console.warn(`[Aviation] GetAirportOpsSummary failed: ${err instanceof Error ? err.message : err}`);
         return { summaries: [], cacheHit: false };
