@@ -14,18 +14,9 @@ import {
 } from '../../../../src/config/airports';
 import { CHROME_UA } from '../../../_shared/constants';
 import { cachedFetchJson, getCachedJson } from '../../../_shared/redis';
-
-/**
- * Defensive parser for repeated-string query params.
- * The sebuf codegen assigns `params.get("airports")` (a string) to a field
- * typed as `string[]`.  At runtime `req.airports` may therefore be a
- * comma-separated string rather than an actual array.
- */
-export function parseStringArray(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.filter(Boolean);
-  if (typeof raw === 'string' && raw.length > 0) return raw.split(',').filter(Boolean);
-  return [];
-}
+// @ts-expect-error — JS module, no declaration file
+import { captureSilentError } from '../../../../api/_sentry-edge.js';
+export { parseStringArray } from '../../../_shared/parse-string-array';
 
 // ---------- Constants ----------
 
@@ -543,7 +534,10 @@ export async function loadNotamClosures(): Promise<LoadedNotamResult | null> {
       notamResult = seedNotam;
       fromSeed = true;
     }
-  } catch {}
+  } catch (err) {
+    console.warn(`[Aviation] NOTAM seed read failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    void captureSilentError(err, { tags: { route: 'aviation/notam', step: 'seed-read' } });
+  }
 
   if (!fromSeed && process.env.ICAO_API_KEY) {
     try {
@@ -560,6 +554,7 @@ export async function loadNotamClosures(): Promise<LoadedNotamResult | null> {
       );
     } catch (err) {
       console.warn(`[Aviation] NOTAM fetch failed: ${err instanceof Error ? err.message : 'unknown'}`);
+      void captureSilentError(err, { tags: { route: 'aviation/notam', step: 'live-fetch' } });
     }
   }
 
