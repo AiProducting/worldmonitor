@@ -18,6 +18,7 @@ import {
 } from './wingbits';
 import { isFeatureAvailable } from './runtime-config';
 import { isDesktopRuntime, toApiUrl } from './runtime';
+import type { BreakerDataState } from '@/utils/circuit-breaker';
 import { MilitaryServiceClient } from '@/services/generated-rpc-clients';
 
 const militaryClient = new MilitaryServiceClient(getRpcBaseUrl(), {
@@ -113,6 +114,7 @@ function mapProtoFlight(pf: ProtoMilitaryFlight, nowDate: Date): MilitaryFlight 
 
   return {
     id: pf.id,
+    source: pf.source || undefined,
     callsign: pf.callsign,
     hexCode: pf.hexCode,
     registration: pf.registration || undefined,
@@ -155,9 +157,10 @@ function mapProtoFlight(pf: ProtoMilitaryFlight, nowDate: Date): MilitaryFlight 
 const MAX_REGION_PAGES = 50;
 
 async function fetchViaProto(): Promise<MilitaryFlight[]> {
-  // Iterate the same PACIFIC/WESTERN regions the server-side seed cron uses
-  // so dashboard coverage matches the analytic pipeline. The proto handler
-  // caches per-bbox, so parallel region calls warm independent cache keys.
+  // Request one full-world region so the seed cron's global OpenSky snapshot
+  // reaches the dashboard without being clipped back to the legacy boxes. The
+  // handler falls through to request-specific recovery when a seed snapshot
+  // declares only regional coverage.
   const results = await Promise.all(
     MILITARY_QUERY_REGIONS.map(async (region) => {
       // The server now bounds every response to a page, so follow next_cursor
@@ -550,15 +553,23 @@ startFlightHistoryCleanup();
 export async function fetchMilitaryFlights(): Promise<{
   flights: MilitaryFlight[];
   clusters: MilitaryFlightCluster[];
+  dataState: BreakerDataState;
 }> {
   const desktop = isDesktopRuntime();
-  if (desktop && !isFeatureAvailable('openskyRelay')) return { flights: [], clusters: [] };
-  if (!desktop && !isFeatureAvailable('militaryFlights')) return { flights: [], clusters: [] };
+  const fallback = { flights: [] as MilitaryFlight[], clusters: [] as MilitaryFlightCluster[] };
+  const unavailable: BreakerDataState = { mode: 'unavailable', timestamp: null, offline: false };
+  if ((desktop && !isFeatureAvailable('openskyRelay')) || (!desktop && !isFeatureAvailable('militaryFlights'))) {
+    return { ...fallback, dataState: unavailable };
+  }
+  let completed: typeof fallback | undefined;
+  let completedState: BreakerDataState | undefined;
 
-  return breaker.execute(async () => {
+  const result = await breaker.execute(async () => {
     if (flightCache && Date.now() - flightCache.timestamp < CACHE_TTL) {
       const clusters = clusterFlights(flightCache.data);
-      return { flights: flightCache.data, clusters };
+      completed = { flights: flightCache.data, clusters };
+      completedState = { mode: 'cached', timestamp: flightCache.timestamp, offline: false };
+      return completed;
     }
 
     let flights = desktop ? await fetchFromOpenSky() : await fetchViaProto();
@@ -576,8 +587,14 @@ export async function fetchMilitaryFlights(): Promise<{
     // Generate clusters
     const clusters = clusterFlights(flights);
 
-    return { flights, clusters };
-  }, { flights: [], clusters: [] });
+    completed = { flights, clusters };
+    completedState = { mode: 'live', timestamp: flightCache.timestamp, offline: false };
+    return completed;
+  }, fallback);
+  const dataState: BreakerDataState = result === fallback ? unavailable
+    : result === completed && completedState ? completedState
+      : { mode: 'cached', timestamp: null, offline: breaker.getDataState().offline };
+  return { ...result, dataState };
 }
 
 /**

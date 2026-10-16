@@ -1,7 +1,9 @@
 import type { MapLayers } from '@/types';
 import { CURATED_COUNTRIES } from '@/config/countries';
-import { getCurrentLanguage, t } from '@/services/i18n';
+// boundary-ignore: commands are built lazily at runtime via getAllCommands()
+import { getCurrentLanguage, getCurrentLanguageTag, t } from '@/services/i18n';
 import { toFlagEmoji } from '@/utils/country-flag';
+import { EMERGENCY_CODES } from '../../shared/aircraft-emergencies';
 
 export interface Command {
   id: string;
@@ -26,6 +28,7 @@ export const LAYER_KEY_MAP: Record<string, keyof MapLayers> = {
   gps: 'gpsJamming',
   cii: 'ciiChoropleth',
   iran: 'iranAttacks',
+  radiation: 'radiationWatch',
   natural: 'natural',
 };
 
@@ -52,6 +55,7 @@ export const COMMANDS: Command[] = [
   // Individual layer toggles
   { id: 'layer:ais', keywords: ['ais', 'ships', 'vessels', 'maritime'], label: 'Toggle AIS vessel tracking', icon: '\u{1F6A2}', category: 'layers' },
   { id: 'layer:flights', keywords: ['flights', 'aviation', 'aircraft', 'planes', 'airport', 'delays', 'notam', 'closures'], label: 'Toggle aviation layer', icon: '\u2708\uFE0F', category: 'layers' },
+  { id: 'layer:aircraftEmergencies', keywords: ['aircraft emergencies', 'squawk', ...EMERGENCY_CODES], label: 'Aircraft emergencies', icon: '\u2708\uFE0F', category: 'layers' },
   { id: 'layer:conflicts', keywords: ['conflicts', 'battles'], label: 'Toggle conflict zones', icon: '\u2694\uFE0F', category: 'layers' },
   { id: 'layer:hotspots', keywords: ['hotspots', 'crises'], label: 'Toggle intel hotspots', icon: '\u{1F4CD}', category: 'layers' },
   { id: 'layer:protests', keywords: ['protests', 'unrest', 'riots'], label: 'Toggle protests & unrest', icon: '\u270A', category: 'layers' },
@@ -66,13 +70,14 @@ export const COMMANDS: Command[] = [
   { id: 'layer:cyber', keywords: ['cyber', 'cyber threats'], label: 'Toggle cyber threats', icon: '\u{1F6E1}\uFE0F', category: 'layers' },
   { id: 'layer:displacement', keywords: ['displacement', 'refugees', 'idp'], label: 'Toggle displacement flows', icon: '\u{1F3C3}', category: 'layers' },
   { id: 'layer:climate', keywords: ['climate', 'anomalies'], label: 'Toggle climate anomalies', icon: '\u{1F321}\uFE0F', category: 'layers' },
-  { id: 'layer:outages', keywords: ['outages', 'internet outages'], label: 'Toggle internet outages', icon: '\u{1F4E1}', category: 'layers' },
+  { id: 'layer:outages', keywords: ['outages', 'internet outages', 'internet disruptions', 'disruptions'], label: 'Toggle internet disruptions', icon: '\u{1F4E1}', category: 'layers' },
   { id: 'layer:tradeRoutes', keywords: ['trade routes', 'shipping lanes', 'trade'], label: 'Toggle trade routes', icon: '\u{1F6A2}', category: 'layers' },
   { id: 'layer:gps', keywords: ['gps', 'gps jamming', 'jamming', 'spoofing'], label: 'Toggle GPS jamming', icon: '\u{1F4E1}', category: 'layers' },
   { id: 'layer:satellites', keywords: ['satellites', 'orbital', 'surveillance', 'space'], label: 'Toggle orbital surveillance', icon: '\u{1F6F0}\uFE0F', category: 'layers' },
   { id: 'layer:ucdp', keywords: ['ucdp', 'armed conflict', 'armed conflict events'], label: 'Toggle armed conflict events', icon: '\u2694\uFE0F', category: 'layers' },
   { id: 'layer:iran', keywords: ['iran', 'iran attacks'], label: 'Toggle Iran attacks', icon: '\u{1F3AF}', category: 'layers' },
   { id: 'layer:irradiators', keywords: ['irradiators', 'gamma', 'radiation'], label: 'Toggle gamma irradiators', icon: '\u2623\uFE0F', category: 'layers' },
+  { id: 'layer:radiation', keywords: ['radiation', 'radnet', 'safecast', 'anomalies'], label: 'Toggle radiation anomalies', icon: '\u2622\uFE0F', category: 'layers' },
   { id: 'layer:spaceports', keywords: ['spaceports', 'launch sites', 'rockets'], label: 'Toggle spaceports', icon: '\u{1F680}', category: 'layers' },
   { id: 'layer:datacenters', keywords: ['datacenters', 'data centers', 'ai data'], label: 'Toggle AI data centers', icon: '\u{1F5A5}\uFE0F', category: 'layers' },
   { id: 'layer:military', keywords: ['military activity', 'mil activity'], label: 'Toggle military activity', icon: '\u{1F396}\uFE0F', category: 'layers' },
@@ -80,7 +85,7 @@ export const COMMANDS: Command[] = [
   { id: 'layer:waterways', keywords: ['waterways', 'chokepoints', 'straits', 'canals'], label: 'Toggle strategic waterways', icon: '\u2693', category: 'layers' },
   { id: 'layer:economic', keywords: ['economic centers', 'gdp'], label: 'Toggle economic centers', icon: '\u{1F4B0}', category: 'layers' },
   { id: 'layer:minerals', keywords: ['minerals', 'rare earth', 'critical minerals', 'lithium'], label: 'Toggle critical minerals', icon: '\u{1F48E}', category: 'layers' },
-  { id: 'layer:cii', keywords: ['cii', 'instability index', 'country instability'], label: 'Toggle CII instability', icon: '\u{1F30E}', category: 'layers' },
+  { id: 'layer:cii', keywords: ['cii', 'instability index', 'country instability'], label: 'Toggle country instability', icon: '\u{1F30E}', category: 'layers' },
   { id: 'layer:dayNight', keywords: ['day night', 'terminator', 'shadow', 'day/night'], label: 'Toggle day/night overlay', icon: '\u{1F31C}', category: 'layers' },
   { id: 'layer:sanctions', keywords: ['sanctions', 'embargoes'], label: 'Toggle sanctions', icon: '\u{1F6AB}', category: 'layers' },
 
@@ -92,6 +97,7 @@ export const COMMANDS: Command[] = [
   { id: 'panel:cascade', keywords: ['cascade', 'infrastructure cascade', 'cascading failure', 'contagion'], label: 'Panel: Infrastructure Cascade', icon: '\u{1F517}', category: 'panels' },
   { id: 'panel:strategic-risk', keywords: ['risk', 'strategic risk', 'threat level'], label: 'Panel: Strategic Risk', icon: '\u26A0\uFE0F', category: 'panels' },
   { id: 'panel:threat-timeline', keywords: ['threat timeline', 'threat levels', 'threat trend', 'security escalation'], label: 'Panel: Threat Timeline', icon: '\u26A0\uFE0F', category: 'panels' },
+  { id: 'panel:toronto-safety', keywords: ['toronto safety', 'tps crime', 'calls attended', 'major crime indicators'], label: 'Panel: Toronto Safety', icon: '\u{1F6E1}\uFE0F', category: 'panels' },
   { id: 'panel:cross-source-signals', keywords: ['cross source', 'signal aggregator', 'composite escalation', 'multi signal'], label: 'Panel: Cross-Source Signals', icon: '\u{1F4E1}', category: 'panels' },
   { id: 'panel:politics', keywords: ['world news', 'politics', 'geopolitics'], label: 'Panel: World News', icon: '\u{1F30D}', category: 'panels' },
   { id: 'panel:us', keywords: ['united states', 'us news', 'america news'], label: 'Panel: United States', icon: '\u{1F1FA}\u{1F1F8}', category: 'panels' },
@@ -115,10 +121,14 @@ export const COMMANDS: Command[] = [
   { id: 'panel:polymarket', keywords: ['predictions', 'polymarket', 'forecasts'], label: 'Panel: Predictions', icon: '\u{1F52E}', category: 'panels' },
   { id: 'panel:commodities', keywords: ['commodities', 'gold', 'silver'], label: 'Panel: Commodities', icon: '\u{1F4E6}', category: 'panels' },
   { id: 'panel:markets', keywords: ['markets', 'stocks', 'indices'], label: 'Panel: Markets', icon: '\u{1F4C8}', category: 'panels' },
+  { id: 'panel:news-market-correlation', keywords: ['news market correlation', 'gdelt markets', 'lead lag', 'market returns'], label: 'Panel: News ↔ Markets', icon: '\u{1F4C8}', category: 'panels' },
   { id: 'panel:economic', keywords: ['economic', 'economy', 'fred'], label: 'Panel: Economic Indicators', icon: '\u{1F4CA}', category: 'panels' },
   { id: 'panel:global-procurement', keywords: ['procurement', 'tenders', 'contracts', 'rfp', 'opportunities', 'government bids'], label: 'Panel: Global Procurement', icon: '\u{1F4CB}', category: 'panels' },
   { id: 'panel:trade-policy', keywords: ['trade', 'tariffs', 'wto', 'trade policy', 'sanctions', 'restrictions'], label: 'Panel: Trade Policy', icon: '\u{1F4CA}', category: 'panels' },
+  { id: 'panel:sanctions-pressure', keywords: ['sanctions pressure', 'ofac', 'designation', 'sanctions'], label: 'Panel: Sanctions Pressure', icon: '\u{1F6AB}', category: 'panels' },
   { id: 'panel:supply-chain', keywords: ['supply chain', 'shipping', 'chokepoint', 'minerals', 'freight', 'logistics'], label: 'Panel: Supply Chain', icon: '\u{1F6A2}', category: 'panels' },
+  { id: 'panel:china-corridors', keywords: ['china corridors', 'logistics control tower', 'yangtze', 'greater bay area', 'bohai', 'western land sea'], label: 'Panel: China Logistics Corridors', icon: '\u{1F5FA}', category: 'panels' },
+  { id: 'panel:china-activity-nowcast', keywords: ['china nowcast', 'official proxies', 'activity comparison', 'opacity resistant'], label: 'Panel: China Activity Nowcast', icon: '\u{1F4CA}', category: 'panels' },
   { id: 'panel:chokepoint-strip', keywords: ['chokepoint', 'chokepoints', 'strait', 'hormuz', 'suez', 'malacca', 'bab el mandeb', 'shipping chokepoints'], label: 'Panel: Chokepoint Status', icon: '\u{1F6A2}', category: 'panels' },
   { id: 'panel:geo-hubs', keywords: ['geopolitical hubs', 'geo hubs', 'power centers', 'capitals', 'geopolitical centers'], label: 'Panel: Geopolitical Hubs', icon: '\u{1F30D}', category: 'panels' },
   { id: 'panel:tech-hubs', keywords: ['tech hubs', 'hot tech hubs', 'innovation hubs', 'silicon valley', 'tech cities'], label: 'Panel: Hot Tech Hubs', icon: '\u{1F984}', category: 'panels' },
@@ -165,6 +175,7 @@ export const COMMANDS: Command[] = [
   { id: 'panel:security-advisories', keywords: ['advisories', 'travel advisory', 'security advisory', 'travel warning'], label: 'Panel: Security Advisories', icon: '\u{1F6C2}', category: 'panels' },
   { id: 'panel:oref-sirens', keywords: ['sirens', 'oref', 'israel sirens', 'red alert', 'iron dome'], label: 'Panel: Israel Sirens', icon: '\u{1F6A8}', category: 'panels' },
   { id: 'panel:telegram-intel', keywords: ['telegram', 'telegram intel', 'osint'], label: 'Panel: Telegram Intel', icon: '\u{1F4E8}', category: 'panels' },
+  { id: 'panel:x-intel', keywords: ['x news', 'twitter', 'x accounts', 'news accounts'], label: 'Panel: X News Accounts', icon: '\u{1F426}', category: 'panels' },
   { id: 'panel:airline-intel', keywords: ['airline', 'airline intelligence', 'aviation intel', 'flight news'], label: 'Panel: Airline Intelligence', icon: '\u2708\uFE0F', category: 'panels' },
   { id: 'panel:tech-readiness', keywords: ['tech readiness', 'digital readiness', 'technology index'], label: 'Panel: Tech Readiness Index', icon: '\u{1F4F1}', category: 'panels' },
   { id: 'panel:world-clock', keywords: ['clock', 'world clock', 'time zones', 'timezone'], label: 'Panel: World Clock', icon: '\u{1F570}\uFE0F', category: 'panels' },
@@ -183,12 +194,22 @@ export const COMMANDS: Command[] = [
   { id: 'panel:consumer-prices@world', keywords: ['inflation', 'global inflation', 'inflation by country', 'country inflation', 'inflation ranking', 'world inflation', 'imf inflation', 'highest inflation', 'cpi by country'], label: 'Panel: Global Inflation (by country)', icon: '\u{1F4C8}', category: 'panels' },
   { id: 'panel:grocery-basket', keywords: ['grocery', 'grocery basket', 'grocery index', 'food prices', 'supermarket'], label: 'Panel: Grocery Index', icon: '\u{1F96C}', category: 'panels' },
   { id: 'panel:bigmac', keywords: ['bigmac', 'big mac', 'big mac index', 'purchasing power parity', 'ppp'], label: 'Panel: Big Mac Index', icon: '\u{1F354}', category: 'panels' },
+  // Deliberately shares NO keyword with `panel:forex` (:240), which opens the
+  // currency NEWS feed under the same 'fx'/'currencies'/'exchange rates' terms.
+  // Duplicating those would put two same-icon entries side by side in CMD+K
+  // with nothing to tell them apart, so this one owns only the rate- and
+  // crisis-specific phrasing — the queries no headline feed can answer.
+  { id: 'panel:fx', keywords: ['fx rates', 'spot rates', 'currency stress', 'currency crisis', 'devaluation', 'depreciation', 'fx stress', 'drawdown'], label: 'Panel: FX Rates', icon: '\u{1F4C9}', category: 'panels' },
   { id: 'panel:fuel-prices', keywords: ['fuel prices', 'gas prices', 'gasoline', 'diesel', 'petrol', 'fuel cost', 'pump prices'], label: 'Panel: Fuel Prices', icon: '\u26FD', category: 'panels' },
   { id: 'panel:fao-food-price-index', keywords: ['fao', 'food price index', 'ffpi', 'food prices', 'cereals', 'fao food', 'global food prices', 'food inflation'], label: 'Panel: FAO Food Price Index', icon: '\u{1F33E}', category: 'panels' },
   { id: 'panel:national-debt', keywords: ['national debt', 'debt clock', 'government debt', 'deficit'], label: 'Panel: National Debt Clock', icon: '\u{1F4B8}', category: 'panels' },
   { id: 'panel:fsi', keywords: ['fsi', 'financial stress', 'financial stress indicator', 'systemic risk'], label: 'Panel: Financial Stress Indicator', icon: '\u{1F4C9}', category: 'panels' },
+  { id: 'panel:nq-pulse', keywords: ['nq pulse', 'nasdaq futures', 'emini nasdaq', 'nq=f', 'vxn', 'qqq context'], label: 'Panel: NQ Pulse', icon: '\u{1F4C8}', category: 'panels' },
+  { id: 'panel:nq-catalysts', keywords: ['nq catalysts', 'nasdaq earnings', 'us macro calendar', 'fomc nq', 'influence basket'], label: 'Panel: NQ Catalysts', icon: '\u{1F4C5}', category: 'panels' },
+  { id: 'panel:nq-news', keywords: ['nq news', 'nasdaq futures news', 'qqq headlines', 'fed press', 'semiconductor news'], label: 'Panel: NQ News', icon: '\u{1F4F0}', category: 'panels' },
   { id: 'panel:yield-curve', keywords: ['yield curve', 'rates', 'treasury', 'ecb rates', 'bond yield', 'inversion'], label: 'Panel: Yield Curve & Rates', icon: '\u{1F4C8}', category: 'panels' },
   { id: 'panel:earnings-calendar', keywords: ['earnings', 'earnings calendar', 'eps', 'quarterly results'], label: 'Panel: Earnings Calendar', icon: '\u{1F4C5}', category: 'panels' },
+  { id: 'panel:material-events', keywords: ['sec', '8-k', 'material events', 'filings', 'disclosures'], label: 'Panel: SEC Material Events', icon: '\u{1F4C4}', category: 'panels' },
   { id: 'panel:economic-calendar', keywords: ['economic calendar', 'macro events', 'nonfarm payrolls', 'gdp release', 'fomc'], label: 'Panel: Economic Calendar', icon: '\u{1F4C6}', category: 'panels' },
   { id: 'panel:cot-positioning', keywords: ['cot', 'cot positioning', 'commitments of traders', 'futures positioning', 'cftc'], label: 'Panel: CFTC COT Positioning', icon: '\u{1F4CA}', category: 'panels' },
   { id: 'panel:liquidity-shifts', keywords: ['liquidity', 'liquidity shifts', 'oil gold silver', 'top stocks', 'positioning'], label: 'Panel: Liquidity Shifts', icon: '\u{1F4B0}', category: 'panels' },
@@ -331,7 +352,12 @@ function injectLocalizedKeywords(commands: Command[]): Command[] {
 }
 
 function buildCountryCommands(): Command[] {
-  const lang = getCurrentLanguage();
+  // Script-sensitive, so the full tag: Intl.DisplayNames renders `zh` as
+  // Simplified — 美国, and 韩国 where Traditional readers say 南韓, a different
+  // word rather than a different character. The memo key reads the same
+  // accessor on purpose; keying it on the stripped code would let whichever
+  // catalogue built first answer for both.
+  const lang = getCurrentLanguageTag();
   if (lang === _cachedLang && _cachedCountryCommands.length > 0) {
     return _cachedCountryCommands;
   }

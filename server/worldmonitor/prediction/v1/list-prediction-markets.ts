@@ -1,14 +1,11 @@
 /**
- * ListPredictionMarkets RPC -- proxies the Gamma API for Polymarket prediction
- * markets and the Kalshi API for Kalshi markets.
- *
- * Critical constraint: Gamma API is behind Cloudflare JA3 fingerprint detection
- * that blocks server-side TLS connections. The handler tries the fetch and
- * gracefully returns empty on failure. JA3 blocking is expected, not an error.
+ * ListPredictionMarkets RPC -- reads Railway-seeded prediction market data
+ * from Redis. All external API calls (Polymarket Gamma, Kalshi) happen on
+ * Railway seed scripts, never on Vercel.
  */
 
 import {
-  MarketSource,
+  type MarketSource,
   type PredictionServiceHandler,
   type ServerContext,
   type ListPredictionMarketsRequest,
@@ -17,12 +14,12 @@ import {
 } from '../../../../src/generated/server/worldmonitor/prediction/v1/service_server';
 
 import filterParamContracts from '../../../../shared/openapi-filter-param-contracts.json';
-import { clampInt } from '../../../_shared/constants';
+import { resolvePageSize } from '../../../_shared/constants';
 import { getCachedJson } from '../../../_shared/redis';
 
-const REDIS_CACHE_KEY = 'prediction:markets:v1';
-const REDIS_CACHE_TTL = 600; // 10 min
 const BOOTSTRAP_KEY = 'prediction:markets-bootstrap:v1';
+const COUNTRY_INDEX_KEY = 'prediction:markets-country-index:v1';
+const COUNTRY_CATEGORY_PREFIX = 'country:';
 
 const TECH_CATEGORY_TAGS = filterParamContracts.predictionMarketTechCategories;
 const FINANCE_CATEGORY_TAGS = filterParamContracts.predictionMarketFinanceCategories;
@@ -34,6 +31,7 @@ interface BootstrapMarket {
   url: string;
   endDate?: string;
   source?: 'kalshi' | 'polymarket';
+  displayUrl?: string;
 }
 
 interface BootstrapData {
@@ -43,128 +41,53 @@ interface BootstrapData {
   fetchedAt?: number;
 }
 
-function isExcluded(title: string): boolean {
-  const lower = title.toLowerCase();
-  return predictionTags.excludeKeywords.some(kw => lower.includes(kw));
+interface CountryIndexData {
+  countries?: Record<string, BootstrapMarket[]>;
+  fetchedAt?: number;
 }
 
-const KALSHI_VOLUME_THRESHOLD = 5000;
+const DEGENERATE_MARKET_SLUGS = new Set(['undefined', 'null', 'nan', '']);
 
-// ---------- Helpers ----------
+function bootstrapMarketIdentity(market: BootstrapMarket): string {
+  const url = String(market?.url ?? '').trim();
+  if (url) {
+    const path = url.split(/[?#]/)[0] ?? '';
+    const slug = path.replace(/\/+$/, '').split('/').pop() ?? '';
+    if (!DEGENERATE_MARKET_SLUGS.has(slug.toLowerCase())) return `url:${url}`;
+  }
+  return `title:${String(market?.title ?? '').trim().toLowerCase()}`;
+}
 
-/** Parse the yes-side price from a Gamma market's outcomePrices JSON string (0-1 scale). */
-function parseYesPrice(market: GammaMarket): number {
-  try {
-    const pricesStr = market.outcomePrices;
-    if (pricesStr) {
-      const prices: string[] = JSON.parse(pricesStr);
-      if (prices.length >= 1) {
-        const parsed = parseFloat(prices[0]!);
-        if (!isNaN(parsed)) return parsed; // 0-1 scale for proto
-      }
+function dedupeBootstrapMarkets(markets: BootstrapMarket[]): BootstrapMarket[] {
+  const best = new Map<string, BootstrapMarket>();
+  for (const market of markets) {
+    const identity = bootstrapMarketIdentity(market);
+    const incumbent = best.get(identity);
+    if (!incumbent) {
+      best.set(identity, market);
+      continue;
     }
-  } catch {
-    /* keep default */
+    const incumbentVolume = Number(incumbent.volume);
+    const challengerVolume = Number(market.volume);
+    const incumbentRank = Number.isFinite(incumbentVolume) ? incumbentVolume : -Infinity;
+    const challengerRank = Number.isFinite(challengerVolume) ? challengerVolume : -Infinity;
+    if (challengerRank > incumbentRank) best.set(identity, market);
   }
-  return 0.5;
+  return [...best.values()];
 }
 
-/** Map a GammaEvent to a proto PredictionMarket (picks top market by volume). */
-function mapEvent(event: GammaEvent, category: string): PredictionMarket {
-  const topMarket = event.markets?.[0];
-  const endDateStr = topMarket?.endDate ?? event.endDate;
-  const closesAtMs = endDateStr ? Date.parse(endDateStr) : 0;
-
+function toProtoMarket(m: BootstrapMarket, category: string): PredictionMarket {
   return {
-    id: event.id || '',
-    title: topMarket?.question || event.title,
-    yesPrice: topMarket ? parseYesPrice(topMarket) : 0.5,
-    volume: event.volume ?? 0,
-    url: `https://polymarket.com/event/${event.slug}`,
-    closesAt: Number.isFinite(closesAtMs) ? closesAtMs : 0,
-    category: category || '',
-    source: MarketSource.MARKET_SOURCE_POLYMARKET,
-
+    id: m.url?.split('/').pop() || '',
+    title: m.title,
+    yesPrice: (m.yesPrice ?? 50) / 100,
+    volume: m.volume ?? 0,
+    url: (m.source === 'kalshi' ? m.displayUrl ?? m.url : m.url) ?? '',
+    closesAt: m.endDate ? Date.parse(m.endDate) : 0,
+    category,
+    source: m.source === 'kalshi' ? 'MARKET_SOURCE_KALSHI' as MarketSource : 'MARKET_SOURCE_POLYMARKET' as MarketSource,
   };
 }
-
-/** Map a GammaMarket to a proto PredictionMarket. */
-function mapMarket(market: GammaMarket): PredictionMarket {
-  const closesAtMs = market.endDate ? Date.parse(market.endDate) : 0;
-  return {
-    id: market.slug || '',
-    title: market.question,
-    yesPrice: parseYesPrice(market),
-    volume: (market.volumeNum ?? (market.volume ? parseFloat(market.volume) : 0)) || 0,
-    url: `https://polymarket.com/market/${market.slug}`,
-    closesAt: Number.isFinite(closesAtMs) ? closesAtMs : 0,
-    category: '',
-    source: MarketSource.MARKET_SOURCE_POLYMARKET,
-
-  };
-}
-
-/** Map a KalshiMarket to a proto PredictionMarket. Caller must pre-filter for active binary markets. */
-function mapKalshiMarket(market: KalshiMarket, category: string, eventTitle?: string): PredictionMarket {
-  const closesAtMs = market.close_time ? Date.parse(market.close_time) : 0;
-  const yesPrice = parseFloat(market.last_price_dollars || '0.5');
-  return {
-    id: market.ticker,
-    title: market.yes_sub_title || market.title || eventTitle || '',
-    yesPrice: Number.isFinite(yesPrice) ? yesPrice : 0.5,
-    volume: parseFloat(market.volume_fp || '0'),
-    url: `https://kalshi.com/markets/${market.ticker}`,
-    closesAt: Number.isFinite(closesAtMs) ? closesAtMs : 0,
-    category: category || '',
-    source: MarketSource.MARKET_SOURCE_KALSHI,
-  };
-}
-
-/** Fetch open markets from the Kalshi API. Returns null on failure. */
-async function fetchKalshiMarkets(): Promise<PredictionMarket[] | null> {
-  if (!KALSHI_ENABLED) return null;
-  try {
-    const result = await cachedFetchJson<PredictionMarket[]>(
-      KALSHI_CACHE_KEY,
-      REDIS_CACHE_TTL,
-      async () => {
-        const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': CHROME_UA };
-        if (KALSHI_API_KEY) headers.Authorization = `Bearer ${KALSHI_API_KEY}`;
-        const response = await fetch(
-          `${KALSHI_BASE}/events?status=open&with_nested_markets=true&limit=40`,
-          {
-            headers,
-            signal: AbortSignal.timeout(FETCH_TIMEOUT),
-          },
-        );
-        if (!response.ok) return null;
-
-        const data = (await response.json()) as { events: KalshiEvent[]; cursor: string };
-        const markets: PredictionMarket[] = [];
-        for (const event of data.events) {
-          if (!event.markets) continue;
-          if (isExcluded(event.title)) continue;
-          let topMarket: KalshiMarket | null = null;
-          let topVol = 0;
-          for (const m of event.markets) {
-            if (m.market_type !== 'binary' || m.status !== 'active') continue;
-            const vol = parseFloat(m.volume_fp || '0');
-            if (vol > topVol) { topMarket = m; topVol = vol; }
-          }
-          if (topMarket && topVol > KALSHI_VOLUME_THRESHOLD) {
-            markets.push(mapKalshiMarket(topMarket, event.category || '', event.title));
-          }
-        }
-        return markets.length > 0 ? markets : null;
-      },
-    );
-    return result || null;
-  } catch {
-    return null;
-  }
-}
-
-// ---------- RPC ----------
 
 export const listPredictionMarkets: PredictionServiceHandler['listPredictionMarkets'] = async (
   _ctx: ServerContext,
@@ -173,19 +96,72 @@ export const listPredictionMarkets: PredictionServiceHandler['listPredictionMark
   try {
     const category = (req.category || '').slice(0, 50);
     const query = (req.query || '').slice(0, 100);
-    const limit = clampInt(req.pageSize, 50, 1, 100);
-    const includeKalshi = !category || KALSHI_CATEGORIES.includes(category);
+    const limit = resolvePageSize(req.pageSize, 50, 100);
+    const isCountryCategory = category.startsWith(COUNTRY_CATEGORY_PREFIX);
+    const countryCode = isCountryCategory
+      ? category.slice(COUNTRY_CATEGORY_PREFIX.length).trim().toUpperCase()
+      : '';
 
-    const bootstrap = await getCachedJson(BOOTSTRAP_KEY) as BootstrapData | null;
+    if (isCountryCategory) {
+      if (!/^[A-Z]{2}$/.test(countryCode)) {
+        return { markets: [], pagination: undefined, fetchedAt: 0, dataAvailable: false };
+      }
+      const countryIndex = await getCachedJson(COUNTRY_INDEX_KEY, true) as CountryIndexData | null;
+      if (countryIndex) {
+        const countryMarkets = Array.isArray(countryIndex.countries?.[countryCode])
+          ? countryIndex.countries[countryCode]
+          : [];
+        let markets = countryMarkets.map((market) => toProtoMarket(market, ''));
+        if (query) {
+          const q = query.toLowerCase();
+          markets = markets.filter((m) => m.title.toLowerCase().includes(q));
+        }
+        return {
+          markets: markets.slice(0, limit),
+          pagination: undefined,
+          fetchedAt: Number(countryIndex.fetchedAt ?? 0),
+          dataAvailable: true,
+        };
+      }
+      return { markets: [], pagination: undefined, fetchedAt: 0, dataAvailable: false };
+    }
+
+    const bootstrap = await getCachedJson(BOOTSTRAP_KEY, true) as BootstrapData | null;
     if (!bootstrap) return { markets: [], pagination: undefined, fetchedAt: 0, dataAvailable: false };
 
     const fetchedAt = Number(bootstrap.fetchedAt ?? 0);
 
     const isTech = category && TECH_CATEGORY_TAGS.includes(category);
     const isFinance = !isTech && category && FINANCE_CATEGORY_TAGS.includes(category);
+    // `category` is optional on this public endpoint, and omitting it must keep
+    // meaning "every market" (#5733). Before the producer's pools were made
+    // disjoint, `bootstrap.geopolitical` WAS every market, so the no-category
+    // caller and an explicit geopolitical-ish category (the site variant sends
+    // 'politics') could share one branch. Now they must not: the pool is
+    // strictly geopolitical, so an empty category has to union all three or the
+    // documented default response silently narrows to geo-only.
+    //
+    // The union is DEDUPED, not just concatenated: for up to the seeder's cron
+    // interval after this ships, Redis still holds a pre-#5733 payload whose
+    // pools are near-duplicates, and a naive concat would answer the default
+    // request with the same market three times. Deduping keeps the response
+    // correct for either payload vintage. Volume-sorted so it stays ranked
+    // rather than ordered pool-by-pool.
+    const unionAllPools = () => {
+      return dedupeBootstrapMarkets([
+        ...(bootstrap.geopolitical ?? []),
+        ...(bootstrap.tech ?? []),
+        ...(bootstrap.finance ?? []),
+      ]).sort((a, b) => (Number(b?.volume) || 0) - (Number(a?.volume) || 0));
+    };
+
+    // A finance request must NOT fall back to the geopolitical pool. That was
+    // harmless while geopolitical was a superset of every market; now it would
+    // answer "give me finance" with conflict and election markets.
     const variant = isTech ? bootstrap.tech
-      : isFinance ? (bootstrap.finance ?? bootstrap.geopolitical)
-      : bootstrap.geopolitical;
+      : isFinance ? bootstrap.finance
+      : category ? bootstrap.geopolitical
+      : unionAllPools();
 
     if (!variant || variant.length === 0) return { markets: [], pagination: undefined, fetchedAt, dataAvailable: false };
 

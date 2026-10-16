@@ -37,7 +37,7 @@ The system returns available satellite passes, ranked by relevance, with preview
 
 ### Conflict Verification
 
-News reports claim a military buildup near a border. The conflict layer shows increased news activity. ADS-B shows military flight patterns. Now pull satellite imagery to see if there are new vehicle concentrations, field camps, or infrastructure construction.
+News reports claim a military buildup near a border. The conflict layer shows increased news activity. ADS-B shows [military flight patterns](/blog/posts/military-flight-tracking-osint/). Now pull satellite imagery to see if there are new vehicle concentrations, field camps, or infrastructure construction.
 
 Satellite imagery provides the physical evidence that other intelligence signals suggest.
 
@@ -63,7 +63,7 @@ World Monitor maps nuclear facilities worldwide. Satellite imagery adds visual v
 
 ## Cross-Layer Integration
 
-The orbital layer becomes most powerful when combined with World Monitor's other 44 data layers:
+The orbital layer becomes most powerful when combined with World Monitor's other registered data layers:
 
 | Situation | Intelligence Layers | + Satellite Adds |
 |-----------|-------------------|------------------|
@@ -88,7 +88,7 @@ Coverage depends on satellite revisit rates and cloud conditions. Equatorial reg
 
 ## Desktop-Enhanced Experience
 
-The orbital surveillance layer is available across all platforms, with the desktop app providing the smoothest experience for high-resolution imagery browsing. The Tauri app's local Node.js sidecar handles STAC API queries efficiently, and CSP (Content Security Policy) is configured to allow satellite preview image loading from trusted sources.
+The orbital surveillance layer is available across all platforms, with the [desktop app](https://www.worldmonitor.app/docs/desktop-app) providing the smoothest experience for high-resolution imagery browsing. The Tauri app's local Node.js sidecar handles STAC API queries efficiently, and CSP (Content Security Policy) is configured to allow satellite preview image loading from trusted sources.
 
 ## How to Use It
 
@@ -104,7 +104,7 @@ The orbital surveillance layer is available across all platforms, with the deskt
 
 Commercial satellite constellations are growing rapidly. More satellites mean more frequent revisits, higher resolution, and faster delivery. As this data becomes more accessible, tools like World Monitor that integrate imagery into multi-source intelligence workflows will become essential.
 
-The days of satellite intelligence being locked in classified systems are ending. World Monitor puts orbital surveillance alongside 44 other intelligence layers, in your browser, for free.
+The days of satellite intelligence being locked in classified systems are ending. World Monitor puts orbital surveillance alongside the rest of its intelligence-layer registry, in your browser, for free.
 
 ---
 

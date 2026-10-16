@@ -1,7 +1,24 @@
+/**
+ * Premium access, panel gate reasons, and CTA routing.
+ *
+ * Per-gate logic does NOT live here (#5813). Each gate owns a pure resolver
+ * leaf plus a reader beside it under `gates/` — `gates/export.ts` (data export
+ * + dashboard tab cap) and `gates/playback.ts` (historical playback). A fourth
+ * gate gets its own pair there, not another `readX`/`evaluateX` in this file.
+ *
+ * What stays here is what every gate shares: the access predicate
+ * (`hasPremiumAccess`), the reason enum and its billing-aware refinement, and
+ * the CTA action resolver. Gate modules import from this file; it imports from
+ * none of them, so the dependency runs one way.
+ */
+
+import { WEB_APP_ORIGIN } from '@/config/web-origin';
 import type { AuthSession } from './auth-state';
-import { getSubscription } from './billing';
-import { deriveBillingUxState, getBillingGateOverride } from './billing-state';
+import { getSubscription, openBillingPortal, prereserveBillingPortalTab } from './billing';
+import { deriveBillingUxState, getBillingGateOverride, getReactivationHref } from './billing-state';
 import { getEntitlementState } from './entitlements';
+import { openExternalUrl } from './external-navigation';
+import type { ClientEntitlementBelief } from './premium-denial';
 import { getSecretState } from './runtime-config';
 import { isProUser } from './widget-store';
 
@@ -36,10 +53,50 @@ export enum PanelGateReason {
  * signals that aren't already covered by isProUser.
  */
 export function hasPremiumAccess(authState?: AuthSession): boolean {
-  if (getSecretState('WORLDMONITOR_API_KEY').present) return true;
-  if (isProUser()) return true;
-  if (authState?.user?.role === 'pro') return true;
-  return false;
+  return readPremiumAccessGrant(authState) !== 'none';
+}
+
+/** Which arm of `hasPremiumAccess` answered. `none` means no arm did. */
+export type PremiumAccessGrant = 'api_key' | 'pro_user' | 'auth_role' | 'none';
+
+/**
+ * The same union as `hasPremiumAccess`, reported rather than collapsed.
+ * TELEMETRY ONLY — no gate may branch on the arm, or the arms stop being
+ * interchangeable and this becomes a second, subtly different access rule.
+ *
+ * It exists because the boolean is lossy exactly where it matters. `api_key`
+ * and the tester-key half of `pro_user` unlock panels from browser-local
+ * state and, as the comment above says, assert nothing about the signed-in
+ * account — so a `true` does NOT imply the premium fetch will carry a
+ * user-bound credential. WORLDMONITOR-147 is that gap: the scorecard widget
+ * only fetches when this returns premium, yet one request reached the gateway
+ * as `auth_kind: anon` (against 51 `clerk_jwt` 200s on the same route in the
+ * same 22h) and came back 401. The event could not say which arm had granted
+ * access, so a second occurrence would have proved no more than the first.
+ *
+ * `hasPremiumAccess` is defined in terms of this function so the two can never
+ * drift on the membership or the ORDER of the union — the order is load-bearing
+ * for the report, since earlier arms shadow later ones.
+ */
+export function readPremiumAccessGrant(authState?: AuthSession): PremiumAccessGrant {
+  if (getSecretState('WORLDMONITOR_API_KEY').present) return 'api_key';
+  if (isProUser()) return 'pro_user';
+  if (authState?.user?.role === 'pro') return 'auth_role';
+  return 'none';
+}
+
+/**
+ * Snapshot what the CLIENT believes about this account's plan, for
+ * `classifyPremiumDenial` (#5608). Deliberately narrower than
+ * hasPremiumAccess: the desktop API key and the browser tester keys unlock
+ * panels locally but assert nothing about the signed-in Clerk account, so
+ * they must not suppress a legitimate upgrade CTA.
+ */
+export function readClientEntitlementBelief(authState: AuthSession): ClientEntitlementBelief {
+  return {
+    entitlementTier: getEntitlementState()?.features.tier ?? null,
+    authRole: authState.user?.role ?? null,
+  };
 }
 
 /**
@@ -84,5 +141,59 @@ export function resolveBillingAwareGateReason(reason: PanelGateReason): PanelGat
       return PanelGateReason.LAPSED;
     default:
       return reason;
+  }
+}
+
+/**
+ * Every locked surface routes its CTA through here. Extracted from
+ * `PanelLayoutManager.getGateAction` (which was private and closed over
+ * `ctx.authModal`) so the export gate, the panel gate and future gates cannot
+ * drift — the auth-modal opener is injected instead.
+ */
+export interface GateActionDeps {
+  /** Opens the sign-in modal for the ANONYMOUS reason. */
+  openAuthModal: () => void;
+  /**
+   * Plan key used to preselect the pricing page's billing period on the LAPSED
+   * reason. Defaults to the live subscription row.
+   */
+  planKey?: string | null;
+}
+
+// Absolute origin (WEB_APP_ORIGIN): the desktop runtime's webview has no
+// worldmonitor.app origin, so a relative href would resolve against
+// tauri://localhost. `openExternalUrl` then routes it to the OS browser on
+// desktop rather than opening another WebView window (#5911).
+function openProPage(path: string): void {
+  void openExternalUrl(`${WEB_APP_ORIGIN}${path}`);
+}
+
+/** Return the action callback for a given gate reason. */
+export function resolveGateAction(reason: PanelGateReason, deps: GateActionDeps): () => void {
+  switch (reason) {
+    case PanelGateReason.ANONYMOUS:
+      return () => deps.openAuthModal();
+    case PanelGateReason.FREE_TIER:
+      return () => openProPage('/pro');
+    case PanelGateReason.PAYMENT_ON_HOLD:
+    case PanelGateReason.RENEWAL_FAILED:
+      // Pre-reserve the portal tab synchronously inside the click gesture
+      // so the async portal-session fetch survives the popup blocker
+      // (same pattern as payment-failure-banner.ts).
+      return () => {
+        const reservedWin = prereserveBillingPortalTab();
+        void openBillingPortal(reservedWin);
+      };
+    case PanelGateReason.RENEWAL_PENDING:
+      // Verification resolves server-side; a reload re-pulls entitlements
+      // for users who don't want to wait for the reactive update.
+      return () => window.location.reload();
+    case PanelGateReason.LAPSED:
+      // A returning subscriber lands on the pricing anchor with their previous
+      // billing period preselected — the bare /pro redirect this replaced
+      // dropped both signals.
+      return () => openProPage(getReactivationHref(deps.planKey ?? getSubscription()?.planKey));
+    default:
+      return () => {};
   }
 }

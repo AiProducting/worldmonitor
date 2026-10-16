@@ -32,6 +32,7 @@ import {
   scoreStateContinuity,
   scoreInflationStability,
   scoreTradePolicy,
+  weightedBlend,
   roundScore,
   sqrtCount,
   summarizeCyber,
@@ -39,6 +40,7 @@ import {
   CYBER_SNAPSHOT_WEIGHT_CAP,
 } from '../server/worldmonitor/resilience/v1/_dimension-scorers.ts';
 import { RESILIENCE_FIXTURES, fixtureReader } from './helpers/resilience-fixtures.mts';
+import { createIndicatorTraceCollector } from '../server/worldmonitor/resilience/v1/_indicator-trace.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -192,6 +194,27 @@ describe('resilience dimension scorers', () => {
     assert.equal(result.observedWeight, 5);
     assert.equal(result.imputedWeight, 0);
     assert.equal(result.imputationClass, null);
+  });
+
+  it('weightedBlend retains a known malformed slot without renormalizing its weight', () => {
+    const complete = weightedBlend([
+      { score: 100, weight: 0.5 },
+      { score: 0, weight: 0.5 },
+    ]);
+    const malformed = weightedBlend([
+      { score: 100, weight: 0.5 },
+      { score: null, weight: 0.5, fallbackScore: 0 },
+    ]);
+    const genuinelyAbsent = weightedBlend([
+      { score: 100, weight: 0.5 },
+      { score: null, weight: 0.5 },
+    ]);
+
+    assert.equal(complete.score, 50);
+    assert.equal(malformed.score, complete.score, 'a malformed low slot must not free weight onto the high survivor');
+    assert.equal(malformed.coverage, 0.5, 'the retained malformed slot must still reduce coverage');
+    assert.equal(malformed.observedWeight, 0.5, 'the fallback must not masquerade as observed data');
+    assert.equal(genuinelyAbsent.score, 100, 'legitimate absence keeps the existing coverage-weighted behavior');
   });
 
   it('returns all serialized dimensions with bounded scores and coverage', async () => {
@@ -1890,6 +1913,14 @@ describe('resilience source-failure aggregation (T1.7)', () => {
       assert.equal(score.imputationClass, null, 'observed path must not carry imputation class');
     });
 
+    it('uses the oldest contributing year when a re-export adjustment is applied', async () => {
+      const trace = createIndicatorTraceCollector();
+      await scoreLiquidReserveAdequacy('AE', makeReader(5.18, 0.355), { trace });
+      const row = trace.readDimension('liquidReserveAdequacy')?.contributions[0];
+      assert.equal(row?.sourceYear, 2023);
+      assert.equal(row?.observedSources.length, 2);
+    });
+
     it('clamps to anchor ceiling when adjusted months exceed 12', async () => {
       const reader = makeReader(10, 0.4); // 10 / 0.6 = 16.67 → clamped to 12 → 100
       const score = await scoreLiquidReserveAdequacy('AE', reader);
@@ -1936,6 +1967,43 @@ describe('resilience source-failure aggregation (T1.7)', () => {
       assert.equal(score.imputedWeight, 1);
       assert.equal(score.score, 50);
     });
+
+    for (const reason of ['missing WB imports', 'no fund AUM matched']) {
+      it(`Qatar remains imputed when an expected fund has ${reason}`, async () => {
+        const reader = async (_key: string) => ({
+          countries: {},
+          summary: { countryStatuses: [{ country: 'QA', status: 'missing', expected: 1, matched: 0, reason }] },
+        });
+        const score = await scoreSovereignFiscalBuffer('qa', reader);
+        assert.equal(score.score, IMPUTE.recoverySovereignFiscalBuffer.score);
+        assert.equal(score.coverage, IMPUTE.recoverySovereignFiscalBuffer.certaintyCoverage);
+        assert.equal(score.observedWeight, 0);
+        assert.equal(score.imputedWeight, 1);
+        assert.equal(score.imputationClass, 'unmonitored');
+        const outsideScope = await scoreSovereignFiscalBuffer('US', reader);
+        assert.equal(outsideScope.imputationClass, 'not-applicable');
+        assert.equal(outsideScope.imputedWeight, 0);
+      });
+    }
+
+    for (const { label, expected } of [
+      { label: 'fractional', expected: 0.5 },
+      { label: 'JSON overflow', expected: JSON.parse('1e400') },
+      { label: 'unsafe integer', expected: Number.MAX_SAFE_INTEGER + 1 },
+    ]) {
+      it(`invalid ${label} expected count retains the not-applicable fallback`, async () => {
+        const reader = async (_key: string) => ({
+          countries: {},
+          summary: { countryStatuses: [{ country: 'QA', expected }] },
+        });
+        const score = await scoreSovereignFiscalBuffer('QA', reader);
+        assert.equal(score.score, 0);
+        assert.equal(score.coverage, 0);
+        assert.equal(score.observedWeight, 0);
+        assert.equal(score.imputedWeight, 0);
+        assert.equal(score.imputationClass, 'not-applicable');
+      });
+    }
 
     it('path 3: country not in manifest → score=0, coverage=0 (dim-not-applicable, plan 2026-04-26-001 §U3)', async () => {
       // Plan 2026-04-26-001 §U3 reframed Path 3 from "substantive
@@ -2008,6 +2076,58 @@ describe('resilience source-failure aggregation (T1.7)', () => {
     assert.ok(no.score > 70, `NO should score >70 on state continuity, got ${no.score}`);
     assert.ok(no.observedWeight > 0, 'state continuity must have observed weight from WGI');
     assert.equal(no.imputationClass, null, 'NO has real data, no imputation class');
+  });
+
+  it('scoreStateContinuity traces the oldest year and only actual WGI contributors', async () => {
+    const trace = createIndicatorTraceCollector();
+    const reader: ResilienceSeedReader = async (key) => key === 'resilience:static:XX'
+      ? {
+          wgi: {
+            indicators: {
+              'VA.EST': { value: 1.0, year: 2024 },
+              'PV.EST': { value: 0.5, year: 2019 },
+              'GE.EST': { value: null, year: 2018 },
+            },
+          },
+        }
+      : null;
+    await scoreStateContinuity('XX', reader, { trace });
+    const row = trace.readDimension('stateContinuity')?.contributions.find(
+      (entry) => entry.indicatorId === 'recoveryWgiContinuity',
+    );
+    assert.equal(row?.sourceYear, 2019);
+    assert.deepEqual(
+      row?.observedSources.map((source) => source.sourceUrl),
+      [
+        'https://api.worldbank.org/v2/country/all/indicator/GOV_WGI_VA.EST',
+        'https://api.worldbank.org/v2/country/all/indicator/GOV_WGI_PV.EST',
+      ],
+    );
+  });
+
+  it('scoreStateContinuity distinguishes a missing UCDP feed from an observed empty feed without changing the score', async () => {
+    const staticRecord = { wgi: { indicators: { 'VA.EST': { value: 1, year: 2024 } } } };
+    const scoreWithUcdp = async (ucdpRaw: unknown) => {
+      const trace = createIndicatorTraceCollector();
+      const reader: ResilienceSeedReader = async (key) => {
+        if (key === 'resilience:static:XX') return staticRecord;
+        if (key === 'conflict:ucdp-events:v1') return ucdpRaw;
+        return null;
+      };
+      const traced = await scoreStateContinuity('XX', reader, { trace });
+      const publicOnly = await scoreStateContinuity('XX', reader);
+      return { traced, publicOnly, row: trace.readDimension('stateContinuity')?.contributions.find((entry) => entry.indicatorId === 'recoveryConflictPressure') };
+    };
+
+    const missing = await scoreWithUcdp(null);
+    assert.deepEqual(missing.traced, missing.publicOnly);
+    assert.equal(missing.row?.state, 'fallback');
+    assert.equal(missing.row?.rawValue, null);
+
+    const observedEmpty = await scoreWithUcdp({ events: [] });
+    assert.deepEqual(observedEmpty.traced, observedEmpty.publicOnly);
+    assert.equal(observedEmpty.row?.state, 'observed');
+    assert.equal(observedEmpty.row?.rawValue, 0);
   });
 
   // PR 3 §3.5: fuelStockDays retired permanently from the core score.

@@ -9,6 +9,7 @@
  *   - ListStablecoinMarkets (CoinGecko stablecoin peg health)
  *   - ListEtfFlows          (Yahoo Finance BTC spot ETF flow estimates)
  *   - GetCountryStockIndex  (Yahoo Finance national stock indices)
+ *   - GetPriceHistory       (Yahoo Finance dated daily closes for tracked symbols)
  *   - ListGulfQuotes        (Yahoo Finance GCC indices, currencies, oil)
  */
 
@@ -20,6 +21,7 @@ import { getSectorSummary } from './get-sector-summary';
 import { listStablecoinMarkets } from './list-stablecoin-markets';
 import { listEtfFlows } from './list-etf-flows';
 import { getCountryStockIndex } from './get-country-stock-index';
+import { getPriceHistory } from './get-price-history';
 import { listGulfQuotes } from './list-gulf-quotes';
 import { analyzeStock } from './analyze-stock';
 import { getStockAnalysisHistory } from './get-stock-analysis-history';
@@ -36,15 +38,20 @@ import { getInsiderTransactions } from './get-insider-transactions';
 import { getMarketBreadthHistory } from './get-market-breadth-history';
 import { getGoldIntelligence } from './get-gold-intelligence';
 import { getHyperliquidFlow } from './get-hyperliquid-flow';
+import { getPhysicalPremiums } from './get-physical-premiums';
+import { getPhysicalDivergenceIndex } from './get-physical-divergence-index';
 
 export const marketHandler: MarketServiceHandler = {
   listMarketQuotes,
   listCryptoQuotes,
   listCommodityQuotes,
+  getPhysicalPremiums,
+  getPhysicalDivergenceIndex,
   getSectorSummary,
   listStablecoinMarkets,
   listEtfFlows,
   getCountryStockIndex,
+  getPriceHistory,
   listGulfQuotes,
   analyzeStock,
   getStockAnalysisHistory,

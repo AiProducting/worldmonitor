@@ -41,13 +41,33 @@ import type { McpPromptArgument, McpPromptDef } from '../types';
 // `data.` prefix needed.
 export const PROMPT_REGISTRY: McpPromptDef[] = [
   {
+    name: 'country-view',
+    description:
+      'Interactive country brief with assessment, resilience, energy, trade, security and source evidence. Text-only clients can use the existing data tools.',
+    arguments: [
+      {
+        name: 'iso2',
+        description: 'Country designator, substituted into the tools\' country_code: an ISO 3166-1 alpha-2 code (e.g. "DE"), an alpha-3 code ("DEU"), or an English country name ("Germany"). Case-insensitive.',
+        required: true,
+      },
+    ],
+    steps: [{
+      tool: 'open_country_brief',
+      args: { country_code: '${iso2}' },
+      jmespath: '{countryCode: countryCode, topic: topic}',
+      purpose: 'Open the embedded country interface. Its sections load through the authenticated host and keep their observation dates and source states.',
+    }],
+    intro:
+      'Open the WorldMonitor country brief for ${iso2} with the linked interactive view. Use its topic tabs and evidence rather than replacing the interface with paragraphs. If the user explicitly requests text only or the host cannot render apps, use get_country_risk, get_country_brief and get_country_macro for a labeled text assessment.',
+  },
+  {
     name: 'country-briefing',
     description:
       'Multi-tool country brief: quantitative risk score + LLM-synthesised intelligence brief + macro indicators for a single ISO 3166-1 alpha-2 country.',
     arguments: [
       {
         name: 'iso2',
-        description: 'ISO 3166-1 alpha-2 country code (e.g. "DE", "US", "CN", "IR"). Case-sensitive — pass uppercase.',
+        description: 'Country designator, substituted into the tools\' country_code: an ISO 3166-1 alpha-2 code (e.g. "DE"), an alpha-3 code ("DEU"), or an English country name ("Germany"). Case-insensitive.',
         required: true,
       },
     ],
@@ -55,13 +75,13 @@ export const PROMPT_REGISTRY: McpPromptDef[] = [
       {
         tool: 'get_country_risk',
         args: { country_code: '${iso2}' },
-        jmespath: '{cii: cii, components: components, travelAdvisory: travelAdvisory, sanctionsExposure: sanctionsExposure}',
-        purpose: 'Quantitative Composite Instability Index (CII) + component breakdown + travel advisory + OFAC sanctions exposure.',
+        jmespath: '{cii: cii.combinedScore, trend: cii.trend, components: cii.components, advisoryLevel: advisoryLevel, sanctionsActive: sanctionsActive, sanctionsCount: sanctionsCount, upstreamUnavailable: upstreamUnavailable}',
+        purpose: 'Quantitative Composite Instability Index (CII) + component breakdown + travel advisory + OFAC sanctions exposure. upstreamUnavailable is projected so an all-upstreams-down response is not read as a calm country.',
       },
       {
         tool: 'get_country_brief',
         args: { country_code: '${iso2}' },
-        jmespath: '{country_code: country_code, brief: brief}',
+        jmespath: '{countryCode: countryCode, brief: brief}',
         purpose: 'LLM-synthesised geopolitical + economic narrative grounded on the latest headlines.',
       },
       {
@@ -108,7 +128,10 @@ export const PROMPT_REGISTRY: McpPromptDef[] = [
       {
         tool: 'get_market_data',
         args: { asset_class: ['equity', 'commodity', 'crypto'] },
-        jmespath: '{equity: data."stocks-bootstrap".quotes[*].{symbol: symbol, changePercent: changePercent}, commodity: data."commodities-bootstrap".quotes[*].{symbol: symbol, changePercent: changePercent}, crypto: data.crypto.quotes[*].{symbol: symbol, changePercent: changePercent}}',
+        // The served key is `change` and it is already a percent; the
+        // projection renames it so the agent reading the result cannot mistake
+        // it for an absolute price delta.
+        jmespath: '{equity: data."stocks-bootstrap".quotes[*].{symbol: symbol, changePercent: change}, commodity: data."commodities-bootstrap".quotes[*].{symbol: symbol, changePercent: change}, crypto: data.crypto.quotes[*].{symbol: symbol, changePercent: change}}',
         purpose: 'Per-asset-class quote pairs (symbol + changePercent only). Skip ETF flows / sectors / Gulf / fear-greed — they belong in a deeper drill-down, not a session-opening read.',
       },
     ],

@@ -20,6 +20,18 @@ function quotedList(values) {
 
 export const OPENAPI_FILTER_PARAM_SCHEMA_OVERRIDES = [
   {
+    path: '/api/news/v1/list-country-headlines',
+    method: 'get',
+    name: 'country_codes',
+    schema: { type: 'array', minItems: 1, maxItems: 250, items: { type: 'string' } },
+  },
+  {
+    path: '/api/infrastructure/v1/get-bootstrap-data',
+    method: 'get',
+    name: 'keys',
+    schema: { type: 'array', maxItems: 100, items: { type: 'string', minLength: 1 } },
+  },
+  {
     path: '/api/conflict/v1/get-humanitarian-summary',
     method: 'get',
     name: 'country_code',
@@ -33,6 +45,13 @@ export const OPENAPI_FILTER_PARAM_SCHEMA_OVERRIDES = [
     schema: { type: 'string', enum: FILTER_PARAM_CONTRACTS.economicBlsSeriesIds },
   },
   {
+    path: '/api/economic/v1/get-fred-series',
+    method: 'get',
+    name: 'series_id',
+    description: `FRED series ID. Supported values: ${quotedList(FILTER_PARAM_CONTRACTS.economicFredSeriesIds)}.`,
+    schema: { type: 'string', enum: FILTER_PARAM_CONTRACTS.economicFredSeriesIds },
+  },
+  {
     path: '/api/forecast/v1/get-forecasts',
     method: 'get',
     name: 'domain',
@@ -43,6 +62,12 @@ export const OPENAPI_FILTER_PARAM_SCHEMA_OVERRIDES = [
     method: 'get',
     name: 'type',
     schema: { type: 'string', enum: FILTER_PARAM_CONTRACTS.infrastructureTemporalBaselineTypes },
+  },
+  {
+    path: '/api/infrastructure/v1/get-temporal-baseline',
+    method: 'get',
+    name: 'region',
+    schema: { type: 'string', enum: ['global', ''] },
   },
   {
     path: '/api/intelligence/v1/compute-energy-shock',
@@ -199,14 +224,19 @@ function quoteYaml(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function schemaLines(schema) {
-  const lines = ['                  schema:'];
-  if (schema.type) lines.push(`                    type: ${schema.type}`);
+function schemaLines(schema, indent = 18, name = 'schema') {
+  const lines = [`${' '.repeat(indent)}${name}:`];
+  const pad = ' '.repeat(indent + 2);
+  if (schema.type) lines.push(`${pad}type: ${schema.type}`);
   if (Array.isArray(schema.enum)) {
-    lines.push('                    enum:');
-    for (const value of schema.enum) lines.push(`                        - ${quoteYaml(value)}`);
+    lines.push(`${pad}enum:`);
+    for (const value of schema.enum) lines.push(`${pad}    - ${quoteYaml(value)}`);
   }
-  if (schema.pattern) lines.push(`                    pattern: ${quoteYaml(schema.pattern)}`);
+  if (schema.pattern) lines.push(`${pad}pattern: ${quoteYaml(schema.pattern)}`);
+  if (Number.isInteger(schema.maxItems)) lines.push(`${pad}maxItems: ${schema.maxItems}`);
+  if (Number.isInteger(schema.minItems)) lines.push(`${pad}minItems: ${schema.minItems}`);
+  if (Number.isInteger(schema.minLength)) lines.push(`${pad}minLength: ${schema.minLength}`);
+  if (schema.items) lines.push(...schemaLines(schema.items, indent + 2, 'items'));
   return lines;
 }
 

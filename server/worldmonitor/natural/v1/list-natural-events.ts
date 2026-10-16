@@ -8,11 +8,10 @@ import type {
   ServerContext,
   ListNaturalEventsRequest,
   ListNaturalEventsResponse,
-  NaturalEvent,
 } from '../../../../src/generated/server/worldmonitor/natural/v1/service_server';
 
-import { CHROME_UA } from '../../../_shared/constants';
-import { cachedFetchJson, getCachedJson } from '../../../_shared/redis';
+import { getCachedJson } from '../../../_shared/redis';
+import { projectNaturalEventsRetention } from '../../../../api/_natural-events-dashboard.js';
 
 const SEED_CACHE_KEY = 'natural:events:v1';
 const SEED_META_KEY = 'seed-meta:natural:events';
@@ -25,18 +24,18 @@ export const listNaturalEvents: NaturalServiceHandler['listNaturalEvents'] = asy
   _ctx: ServerContext,
   _req: ListNaturalEventsRequest,
 ): Promise<ListNaturalEventsResponse> => {
-
   try {
     const [result, meta] = await Promise.all([
       getCachedJson(SEED_CACHE_KEY, true) as Promise<Partial<ListNaturalEventsResponse> | null>,
       getCachedJson(SEED_META_KEY, true) as Promise<SeedMeta | null>,
     ]);
     if (!result) return { events: [], fetchedAt: 0, dataAvailable: false };
+    const available = projectNaturalEventsRetention(result);
 
     return {
-      events: result.events ?? [],
-      fetchedAt: Number(result.fetchedAt || meta?.fetchedAt || 0),
-      dataAvailable: true,
+      events: available.events ?? [],
+      fetchedAt: Number(available.fetchedAt || meta?.fetchedAt || 0),
+      dataAvailable: available.dataAvailable !== false,
     };
   } catch {
     return { events: [], fetchedAt: 0, dataAvailable: false };

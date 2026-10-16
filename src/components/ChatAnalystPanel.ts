@@ -4,7 +4,17 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { postProcessAnalystHtml } from '@/utils/analyst-markdown';
 import { yieldToMain } from '@/utils/after-paint';
+import { LatestRequestGuard } from '@/utils/latest-request-guard';
 import { premiumFetch } from '@/services/premium-fetch';
+import { getAuthState } from '@/services/auth-state';
+import { readClientEntitlementBelief } from '@/services/panel-gating';
+import {
+  analystDenialMessage,
+  isBillingVerificationDenial,
+  PRO_VERIFICATION_RETRY_MESSAGE,
+} from '@/services/analyst-denial';
+import { classifyDenialResponse, type ClientEntitlementBelief } from '@/services/premium-denial';
+import { reportEntitlementDesync } from '@/services/entitlement-desync-telemetry';
 import { trackAnalystControlAction } from '@/services/analytics';
 import { h, replaceChildren, setTrustedHtml, trustedHtml, type TrustedHtml } from '@/utils/dom-utils';
 import {
@@ -52,6 +62,40 @@ interface MetaEvent {
 
 type DashboardControlStatus = 'applied' | 'denied' | 'invalid' | 'skipped';
 
+/**
+ * Turn a failed /api/chat-analyst response into user-facing copy.
+ *
+ * A 403 has several causes and only one of them is "you need to buy Pro":
+ * the route 403s on a missing plan (api/chat-analyst.ts:126), and the shared
+ * gateway also 403s an unidentified caller and a failed entitlement lookup.
+ * Telling a customer who paid minutes ago to buy a subscription — which is
+ * what the old blanket `status === 403` branch did during the #5600 poison
+ * window — is worse than saying nothing (#5608).
+ *
+ * Consumes the response body, so it is only called on the !ok path where the
+ * stream is never read.
+ */
+async function describeDenial(
+  res: Response,
+  requestBelief: ClientEntitlementBelief,
+  requestUserId: string | null,
+): Promise<string> {
+  const requestIdentityChanged = () => (getAuthState().user?.id ?? null) !== requestUserId;
+  if (requestIdentityChanged()) throw new DOMException('account changed during analyst request', 'AbortError');
+  // #5622: the route now answers an entitlement it could not VERIFY with a
+  // retryable 503 + `X-Billing-Verification` instead of flattening it into the
+  // 403 upsell. Both this check and the verdict-to-copy mapping live in
+  // src/services/analyst-denial.ts so they are reachable from a test — this
+  // module imports DOMPurify at scope and cannot be loaded by `tsx --test`.
+  if (isBillingVerificationDenial(res.status, res.headers.get('X-Billing-Verification'))) {
+    return PRO_VERIFICATION_RETRY_MESSAGE;
+  }
+  const verdict = await classifyDenialResponse(res, requestBelief);
+  if (requestIdentityChanged()) throw new DOMException('account changed while reading analyst denial', 'AbortError');
+  if (verdict === 'entitlement_desync') reportEntitlementDesync('chat-analyst');
+  return analystDenialMessage(res.status, verdict);
+}
+
 interface DashboardControlResult {
   ok: boolean;
   status: DashboardControlStatus;
@@ -62,7 +106,9 @@ interface DashboardControlResult {
   targets: Array<{ target: string; status: DashboardControlStatus; reason?: string }>;
 }
 
-type DashboardActionHandler = (action: DashboardControlAction) => DashboardControlResult;
+type DashboardActionHandler = (
+  action: DashboardControlAction,
+) => DashboardControlResult | Promise<DashboardControlResult>;
 
 // Narrow allowlist: text formatting + tables only. No img/a/iframe so
 // prompt-injected or hallucinated URLs cannot trigger third-party requests.
@@ -101,6 +147,7 @@ export class ChatAnalystPanel extends Panel {
   private history: ChatMessage[] = [];
   private domainFocus = 'all';
   private streamAbort: AbortController | null = null;
+  private streamGuard = new LatestRequestGuard();
   private isStreaming = false;
   private dashboardActionHandler: DashboardActionHandler | null = null;
   private dashboardControlEnabled = loadDashboardControlEnabled();
@@ -179,7 +226,9 @@ export class ChatAnalystPanel extends Panel {
     wrapper.appendChild(quickBar);
     wrapper.appendChild(inputRow);
 
-    replaceChildren(this.content, wrapper);
+    // Route through the sanctioned helper (#6557): the chat UI IS the panel's
+    // authoritative content — atomic replace with error-state clear.
+    this.setContentNodes(wrapper);
 
     this.showWelcome();
     this.updateDashboardControlUi();
@@ -387,7 +436,7 @@ export class ChatAnalystPanel extends Panel {
 
     const parsedAction = parsed.action;
     if (isDashboardControlAction(parsedAction)) {
-      this.renderDashboardControlAction(bubble, parsedAction);
+      void this.renderDashboardControlAction(bubble, parsedAction);
       return;
     }
     if (parsedAction.type !== 'suggest-widget') return;
@@ -406,7 +455,7 @@ export class ChatAnalystPanel extends Panel {
     else bubble.appendChild(chip);
   }
 
-  private renderDashboardControlAction(bubble: HTMLElement, action: DashboardControlAction): void {
+  private async renderDashboardControlAction(bubble: HTMLElement, action: DashboardControlAction): Promise<void> {
     let result: DashboardControlResult;
     if (!this.dashboardControlEnabled) {
       result = this.skippedDashboardAction(action, 'control_disabled', 'Dashboard control is off.');
@@ -415,7 +464,7 @@ export class ChatAnalystPanel extends Panel {
     } else if (!this.dashboardActionHandler) {
       result = this.skippedDashboardAction(action, 'context_unavailable', 'Dashboard context is unavailable.');
     } else {
-      result = this.dashboardActionHandler(action);
+      result = await this.dashboardActionHandler(action);
     }
 
     if (result.actionType) {
@@ -486,7 +535,12 @@ export class ChatAnalystPanel extends Panel {
     const { bubble, body: streamingBody } = this.appendStreamingBubble();
     let accumulatedText = '';
 
-    this.streamAbort = new AbortController();
+    const controller = new AbortController();
+    const generation = this.streamGuard.begin();
+    this.streamAbort = controller;
+    const requestAuthState = getAuthState();
+    const requestUserId = requestAuthState.user?.id ?? null;
+    const requestBelief = readClientEntitlementBelief(requestAuthState);
 
     try {
       const res = await premiumFetch(API_URL, {
@@ -499,12 +553,18 @@ export class ChatAnalystPanel extends Panel {
           // geoContext (ISO-2 country focus) is supported by the API but wired in Phase 2
           // when the panel can read the map's selected country. Agent callers can pass it directly.
         }),
-        signal: this.streamAbort.signal,
+        signal: controller.signal,
       });
 
+      if (!this.streamGuard.isCurrent(generation)) return;
       if (!res.ok) {
-        const err = res.status === 403 ? 'Pro subscription required.' : `Error ${res.status}`;
-        this.finalizeStreamingBubble(streamingBody, `⚠ ${err}`, false);
+        const denial = await describeDenial(res, requestBelief, requestUserId);
+        if (!this.streamGuard.isCurrent(generation)) return;
+        this.finalizeStreamingBubble(
+          streamingBody,
+          `⚠ ${denial}`,
+          false,
+        );
         return;
       }
 
@@ -514,7 +574,8 @@ export class ChatAnalystPanel extends Panel {
         return;
       }
 
-      const finished = await this.readStream(reader, bubble, streamingBody, (text) => { accumulatedText = text; });
+      const finished = await this.readStream(reader, bubble, streamingBody, (text) => { accumulatedText = text; }, generation);
+      if (!this.streamGuard.isCurrent(generation)) return;
       if (finished === 'error') return;
       if (finished === 'done') {
         this.finalizeStreamingBubble(streamingBody, accumulatedText, true);
@@ -530,6 +591,7 @@ export class ChatAnalystPanel extends Panel {
         this.finalizeStreamingBubble(streamingBody, '⚠ Response cut off. Try again.', false);
       }
     } catch (err) {
+      if (!this.streamGuard.isCurrent(generation)) return;
       if (err instanceof Error && err.name === 'AbortError') {
         if (accumulatedText) {
           this.finalizeStreamingBubble(streamingBody, `${accumulatedText}\n\n*Response cut off.*`, true);
@@ -540,9 +602,17 @@ export class ChatAnalystPanel extends Panel {
         this.finalizeStreamingBubble(streamingBody, '⚠ Network error. Try again.', false);
       }
     } finally {
-      this.streamAbort = null;
-      this.isStreaming = false;
-      this.setSendDisabled(false);
+      // Only tear down the shared streaming state if we still OWN it. Every
+      // exit path here follows an await, and clear() resets isStreaming, so a
+      // user who clears mid-flight can start a second send before this block
+      // runs — unconditionally nulling streamAbort would then cancel-proof the
+      // NEW stream and leave the send button stuck. Keying on controller
+      // identity makes a superseded invocation clean up only its own bubble.
+      if (this.streamAbort === controller) {
+        this.streamAbort = null;
+        this.isStreaming = false;
+        this.setSendDisabled(false);
+      }
       bubble.classList.remove('chat-msg-streaming');
     }
   }
@@ -558,6 +628,7 @@ export class ChatAnalystPanel extends Panel {
     bubble: HTMLElement,
     bodyEl: HTMLElement,
     onToken: (text: string) => void,
+    generation = this.streamGuard.begin(),
   ): Promise<'done' | 'error' | 'incomplete'> {
     const decoder = new TextDecoder();
     let buf = '';
@@ -565,11 +636,13 @@ export class ChatAnalystPanel extends Panel {
 
     while (true) {
       const { done, value } = await reader.read();
+      if (!this.streamGuard.isCurrent(generation)) return 'incomplete';
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split('\n');
       buf = lines.pop() ?? '';
       for (const line of lines) {
+        if (!this.streamGuard.isCurrent(generation)) return 'incomplete';
         if (!line.startsWith('data: ')) continue;
         try {
           const payload = JSON.parse(line.slice(6)) as {
@@ -624,6 +697,7 @@ export class ChatAnalystPanel extends Panel {
   }
 
   clear(): void {
+    this.streamGuard.begin();
     this.history = [];
     this.streamAbort?.abort();
     this.streamAbort = null;
@@ -662,7 +736,19 @@ export class ChatAnalystPanel extends Panel {
     }
   }
 
+  public override clearSensitiveContent(): void {
+    this.streamGuard.begin();
+    this.history = [];
+    this.streamAbort?.abort();
+    this.streamAbort = null;
+    this.isStreaming = false;
+    // An unsent draft belongs to the previous account too.
+    if (this.inputEl) this.inputEl.value = '';
+    super.clearSensitiveContent();
+  }
+
   override destroy(): void {
+    this.streamGuard.begin();
     this.streamAbort?.abort();
     this.streamAbort = null;
     super.destroy();

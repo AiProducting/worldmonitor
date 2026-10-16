@@ -13,6 +13,7 @@ export const config = { runtime: 'edge' };
 
 // @ts-expect-error — JS module, no declaration file
 import { captureSilentError } from '../../_sentry-edge.js';
+import { callbackMatchesBrowser, parseChannelOAuthState } from '../../../server/_shared/channel-oauth-state';
 
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID ?? '';
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET ?? '';
@@ -20,12 +21,13 @@ const SLACK_REDIRECT_URI = process.env.SLACK_REDIRECT_URI ?? '';
 const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL ?? '';
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN ?? '';
 const CONVEX_SITE_URL = process.env.CONVEX_SITE_URL ?? (process.env.CONVEX_URL ?? '').replace('.convex.cloud', '.convex.site');
-const RELAY_SHARED_SECRET = process.env.RELAY_SHARED_SECRET ?? '';
+const CONVEX_TENANT_RELAY_SECRET = process.env.CONVEX_TENANT_RELAY_SECRET ?? '';
 const NOTIFICATION_ENCRYPTION_KEY = process.env.NOTIFICATION_ENCRYPTION_KEY ?? '';
-// Use '*' targetOrigin so the message is delivered regardless of which WM subdomain or
-// preview URL the opener is running on. There are no secrets in the payload (channelName,
-// teamName are not sensitive), and the frontend listener already validates e.origin.
-const APP_ORIGIN = '*';
+// Errors carry only an error code and can be sent before the state (and so
+// the opener's origin) is known, so they go to any opener. A success carries
+// the channel and workspace names and goes only to the app origin that
+// started the flow (server/_shared/channel-oauth-state.ts).
+const ANY_OPENER = '*';
 
 // AES-256-GCM: matches crypto.cjs decrypt format
 // v1:<base64(iv[12] | tag[16] | ciphertext)>
@@ -43,22 +45,18 @@ async function encryptWebhook(url: string): Promise<string> {
   return `v1:${btoa(binary)}`;
 }
 
-async function upstashGet(key: string): Promise<string | null> {
-  const res = await fetch(`${UPSTASH_URL}/get/${encodeURIComponent(key)}`, {
-    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+async function upstashGetDel(key: string): Promise<string | null> {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) throw new Error('Redis not configured');
+  const res = await fetch(`${UPSTASH_URL}/getdel/${encodeURIComponent(key)}`, {
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'User-Agent': 'worldmonitor-edge/1.0' },
     signal: AbortSignal.timeout(5000),
-  }).catch(() => null);
-  if (!res?.ok) return null;
-  const json = await res.json() as { result: string | null };
-  return json.result;
-}
-
-async function upstashDel(key: string): Promise<void> {
-  await fetch(`${UPSTASH_URL}/del/${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
-    signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
+  });
+  if (!res.ok) throw new Error(`Redis HTTP ${res.status}`);
+  const json = await res.json() as { result?: string | null };
+  if (!json || !Object.prototype.hasOwnProperty.call(json, 'result')) {
+    throw new Error('Redis returned a malformed GETDEL response');
+  }
+  return json.result ?? null;
 }
 
 function escapeHtml(s: string): string {
@@ -86,11 +84,12 @@ async function publishWelcome(userId: string, channelType: string): Promise<void
     // keeps that chain pending until Sentry delivery completes.
     await captureSilentError(err, {
       tags: { route: 'api/slack/oauth/callback', step: 'publish-welcome' },
+      fingerprint: ['api/slack/oauth/callback', 'publish-welcome', err instanceof Error ? err.name : 'Error'],
     });
   }
 }
 
-function htmlResponse(script: string, body: string): Response {
+function htmlResponse(script: string, body: string, status = 200): Response {
   return new Response(
     `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Slack OAuth</title></head><body>
 <p style="font-family:system-ui;padding:20px">${body}</p>
@@ -98,7 +97,7 @@ function htmlResponse(script: string, body: string): Response {
 (function(){try{${script}}catch(e){}})();
 </script>
 </body></html>`,
-    { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+    { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
   );
 }
 
@@ -108,19 +107,20 @@ function safeJsonInScript(data: unknown): string {
   return JSON.stringify(data).replace(/<\//g, '<\\/');
 }
 
-function postAndClose(data: Record<string, unknown>): Response {
+function postAndClose(data: Record<string, unknown>, openerOrigin: string): Response {
   const msg = safeJsonInScript(data);
   return htmlResponse(
-    `window.opener&&window.opener.postMessage(${msg},'${APP_ORIGIN}');window.close();`,
+    `window.opener&&window.opener.postMessage(${msg},${safeJsonInScript(openerOrigin)});window.close();`,
     'Connected to Slack. You can close this window.',
   );
 }
 
-function errorAndClose(error: string): Response {
+function errorAndClose(error: string, status = 200): Response {
   const msg = safeJsonInScript({ type: 'wm:slack_error', error });
   return htmlResponse(
-    `window.opener&&window.opener.postMessage(${msg},'${APP_ORIGIN}');window.close();`,
+    `window.opener&&window.opener.postMessage(${msg},'${ANY_OPENER}');window.close();`,
     `Slack connection failed: ${escapeHtml(error)}. You can close this window.`,
+    status,
   );
 }
 
@@ -133,15 +133,26 @@ export default async function handler(req: Request, ctx: { waitUntil: (p: Promis
   if (errorParam) return errorAndClose(errorParam);
   if (!code || !state) return errorAndClose('missing_params');
 
-  if (!UPSTASH_URL || !SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET || !CONVEX_SITE_URL || !RELAY_SHARED_SECRET || !NOTIFICATION_ENCRYPTION_KEY) {
+  if (!UPSTASH_URL || !SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET || !CONVEX_SITE_URL || !CONVEX_TENANT_RELAY_SECRET || !NOTIFICATION_ENCRYPTION_KEY) {
     return errorAndClose('misconfigured');
   }
 
   // Validate and consume state
   const stateKey = `wm:slack:oauth:${state}`;
-  const userId = await upstashGet(stateKey);
-  if (!userId) return errorAndClose('invalid_state');
-  await upstashDel(stateKey); // consume — prevents replay
+  let rawState: string | null;
+  try {
+    rawState = await upstashGetDel(stateKey);
+  } catch (error) {
+    console.error('[slack-oauth] state store unavailable:', error instanceof Error ? error.message : error);
+    await captureSilentError(error, { tags: { route: 'api/slack/oauth/callback', step: 'state-consume' }, fingerprint: ['api/slack/oauth/callback', 'state-consume', error instanceof Error ? error.name : 'Error'], ctx });
+    return errorAndClose('service_unavailable', 503);
+  }
+  const oauthState = parseChannelOAuthState(rawState);
+  if (!oauthState) return errorAndClose('invalid_state');
+  // The state is single-use and already consumed: a link forwarded to another
+  // browser cannot attach that browser's channel to the starter's account.
+  if (!(await callbackMatchesBrowser('slack', req, oauthState))) return errorAndClose('browser_mismatch');
+  const { userId, openerOrigin } = oauthState;
 
   // Exchange code for token
   const tokenRes = await fetch('https://slack.com/api/oauth.v2.access', {
@@ -184,7 +195,7 @@ export default async function handler(req: Request, ctx: { waitUntil: (p: Promis
   // Store via Convex relay
   const convexRes = await fetch(`${CONVEX_SITE_URL}/relay/notification-channels`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RELAY_SHARED_SECRET}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CONVEX_TENANT_RELAY_SECRET}` },
     body: JSON.stringify({
       action: 'set-slack-oauth',
       userId,
@@ -206,5 +217,5 @@ export default async function handler(req: Request, ctx: { waitUntil: (p: Promis
     type: 'wm:slack_connected',
     channelName: tokenData.incoming_webhook.channel,
     teamName: tokenData.team?.name ?? '',
-  });
+  }, openerOrigin);
 }

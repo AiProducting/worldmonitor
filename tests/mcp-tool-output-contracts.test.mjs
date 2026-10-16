@@ -23,10 +23,11 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
+import Ajv2020 from 'ajv/dist/2020.js';
+
+import { TOOL_REGISTRY } from '../api/mcp/registry/index.ts';
+import { assembleRawSignals, failedRawSignal, RAW_SIGNAL_FAMILIES } from '../shared/country-raw-signals.ts';
 import { validate } from './helpers/json-schema-mini.mjs';
 import {
   HMAC_SECRET,
@@ -43,26 +44,37 @@ const originalEnv = { ...process.env };
 // before reaching dispatch. Values are deliberately benign and aligned with
 // each tool's documented format (e.g. ISO 3166-1 alpha-2 for country_code).
 const REQUIRED_ARGS = {
+  classify_event: { text: 'Iran closes Strait of Hormuz to tanker traffic' },
   get_country_brief: { country_code: 'US' },
+  open_country_brief: { country_code: 'US' },
   get_country_risk: { country_code: 'US' },
   get_consumer_prices: { country_code: 'US' },
   get_airspace: { country_code: 'US' },
   get_maritime_activity: { country_code: 'US' },
   analyze_situation: { query: 'test query' },
+  search_intel_history: { query: 'test query' },
+  // `situation` carries a 10-char proto minimum, so the placeholder clears it.
+  get_similar_events: { situation: 'a test situation description' },
   search_flights: { origin: 'JFK', destination: 'LHR', departure_date: '2026-06-01' },
   search_flight_prices_by_date: {
     origin: 'JFK', destination: 'LHR', start_date: '2026-06-01', end_date: '2026-06-10',
   },
   describe_tool: { tool_name: 'get_market_data' },
+  get_macro_history: { dataset: 'us-cpi' },
+  get_internet_activity: { dataset: 'traffic' },
+  get_stock_research: { operation: 'analysis', symbols: ['AAPL'] },
+  get_supply_chain_cost_shock: { mode: 'energy', country: 'JP', chokepoint_id: 'suez' },
+  compute_energy_shock: { country: 'JP', chokepoint_id: 'suez' },
 };
 
 // Generate the smallest concrete value satisfying a JSON-Schema-subset
 // description. Used to fabricate minimal-shape responses for RPC `_execute`
 // overrides. The implementation is intentionally narrow — it mirrors the
 // vocabulary the registry actually emits (`type`, `properties`, `required`,
-// `items`).
+// `items`, `enum`).
 function minimalShape(schema) {
   if (!schema || typeof schema !== 'object') return null;
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0];
   const types = Array.isArray(schema.type)
     ? schema.type
     : (schema.type ? [schema.type] : []);
@@ -81,7 +93,38 @@ function minimalShape(schema) {
   return null;
 }
 
-describe('api/mcp.ts — per-tool output contract (envelope-shape, all 41 tools)', () => {
+// `minimalShape` reads only `type` / `properties` / `required` / `items` /
+// `enum`. A schema that constrains its root with `oneOf` + `const` needs a
+// hand-written payload, or the stub is not a valid instance of the very schema
+// it was derived from — which the Ajv check below would (rightly) reject.
+const STUB_FIXTURES = {
+  get_country_brief_section: assembleRawSignals('US', Object.fromEntries(RAW_SIGNAL_FAMILIES.map(family =>
+    [family, failedRawSignal(family, 'unavailable', '2026-10-05T12:00:00Z', 'Controlled failure')])), '2026-10-05T12:00:00Z'),
+  get_stock_research: { operation: 'analysis', data: { available: false, symbol: 'AAPL' } },
+  get_five_factor_scorecard: { unavailable: true, unavailableReason: 'country-unavailable' },
+  list_five_factor_scorecards: {
+    methodologyVersion: '', computedAt: '', scorecards: [], unavailable: true, unavailableReason: 'scorecard-snapshot-unavailable',
+  },
+};
+
+// What a strict MCP client does: validate `structuredContent` against the
+// schema `tools/list` ADVERTISED, with a full JSON Schema validator. The mini
+// validator above skips `oneOf`, `const`, `pattern` and numeric bounds, all of
+// which the registry uses, so equality with the text alone would let a response
+// violate its published schema and still pass. Same Ajv options as
+// tests/mcp-output-schema-coverage.test.mjs.
+const ajv = new Ajv2020({
+  allErrors: true, allowUnionTypes: true, strict: true, strictRequired: false, validateFormats: false,
+});
+const advertisedValidators = new Map();
+function advertisedValidator(publicTool) {
+  if (!advertisedValidators.has(publicTool.name)) {
+    advertisedValidators.set(publicTool.name, ajv.compile(publicTool.outputSchema));
+  }
+  return advertisedValidators.get(publicTool.name);
+}
+
+describe('api/mcp.ts — per-tool output contract (envelope-shape, all registry tools)', () => {
   let mod;
   let mcpHandler;
   let originalExecutes;
@@ -123,26 +166,10 @@ describe('api/mcp.ts — per-tool output contract (envelope-shape, all 41 tools)
     Object.assign(process.env, originalEnv);
   });
 
-  // node-test registers test cases during synchronous `describe()`
-  // evaluation, so per-tool `it()` generation needs the tool list before
-  // any `await`. Reading the source file is the cheapest synchronous way
-  // to enumerate the registry without forking the source-of-truth (the
-  // `_execute` presence is determined at runtime inside each `it()` via
-  // the freshly-imported module).
-  const REGISTRY_DIR = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '..', 'api', 'mcp', 'registry',
-  );
-  const TOOL_NAMES = (() => {
-    const cacheSrc = readFileSync(path.join(REGISTRY_DIR, 'cache-tools.ts'), 'utf8');
-    const rpcSrc = readFileSync(path.join(REGISTRY_DIR, 'rpc-tools.ts'), 'utf8');
-    const src = cacheSrc + '\n' + rpcSrc;
-    assert.ok(src.includes('CACHE_TOOLS'), 'CACHE_TOOLS declaration not found in api/mcp/registry/cache-tools.ts');
-    assert.ok(src.includes('RPC_TOOLS'), 'RPC_TOOLS declaration not found in api/mcp/registry/rpc-tools.ts');
-    const matches = [...src.matchAll(/^\s{4}name:\s+'([a-z0-9_]+)'/gm)];
-    return matches.map((m) => m[1]);
-  })();
-  assert.ok(TOOL_NAMES.length >= 41, `expected >= 41 tools, got ${TOOL_NAMES.length}`);
+  // Register one test per tool from the executable source of truth. Source
+  // text parsing can silently lose coverage after formatting or a module move.
+  const TOOL_NAMES = TOOL_REGISTRY.map((tool) => tool.name);
+  assert.ok(TOOL_NAMES.length > 0, 'expected at least one tool in the registry');
 
   for (const name of TOOL_NAMES) {
     it(`${name} — tools/call response validates against declared outputSchema`, async () => {
@@ -159,12 +186,34 @@ describe('api/mcp.ts — per-tool output contract (envelope-shape, all 41 tools)
       // is restored in `afterEach`.
       if (!isCacheTool) {
         originalExecutes.set(tool, tool._execute);
-        const stubReturn = minimalShape(tool.outputSchema);
+        const stubReturn = STUB_FIXTURES[name] ?? minimalShape(tool.outputSchema);
         tool._execute = async () => stubReturn;
       }
 
-      const args = REQUIRED_ARGS[name] ?? {};
-      const { deps } = makeProDeps();
+      let args = REQUIRED_ARGS[name] ?? {};
+      const { deps, pipe } = makeProDeps();
+      let originalForecast;
+      if (name === 'get_forecast_case' || name === 'get_forecast_theaters') {
+        const generatedAt = Date.now();
+        originalForecast = { id: 'contract-case', title: 'Controlled original forecast', caseFile: { baseCase: 'Original case evidence' } };
+        globalThis.fetch = async url => {
+          const parsedUrl = new URL(url);
+          assert.equal(parsedUrl.hostname, 'stub.upstash', 'contract fixture must never fetch a live service');
+          if (!parsedUrl.pathname.startsWith('/get/')) return Response.json({ result: [9999, 10000] });
+          const key = decodeURIComponent(parsedUrl.pathname.slice('/get/'.length));
+          assert.ok(['forecast:predictions:v2', 'seed-meta:forecast:predictions'].includes(key), key);
+          return Response.json({ result: JSON.stringify(key === 'forecast:predictions:v2'
+            ? { generatedAt, predictions: [originalForecast] }
+            : { fetchedAt: generatedAt }) });
+        };
+        const opening = await mcpHandler(proReq('POST', callBody('get_forecast_predictions', {})), deps);
+        const openingBody = await opening.json();
+        const receipt = openingBody.result?.structuredContent?.panelRequest;
+        assert.equal(receipt?.panel, 'forecasts', 'original evidence fixture must obtain a real signed admission');
+        args = name === 'get_forecast_case'
+          ? { forecast_id: originalForecast.id, generated_at: String(generatedAt), panel_request: receipt.token }
+          : { panel_request: receipt.token };
+      }
       const res = await mcpHandler(proReq('POST', callBody(name, args)), deps);
 
       assert.equal(res.status, 200, `tools/call must return 200 for ${name}`);
@@ -174,6 +223,12 @@ describe('api/mcp.ts — per-tool output contract (envelope-shape, all 41 tools)
         `tools/call response for ${name} missing content[0].text`,
       );
       const parsed = JSON.parse(body.result.content[0].text);
+      if (name === 'get_forecast_case') {
+        assert.equal(parsed.data.forecastCase.status, 'ready');
+        assert.deepEqual(parsed.data.forecastCase.forecast, originalForecast);
+        assert.equal(pipe.count, 1, 'opening and original case share one daily allocation');
+      }
+      if (name === 'get_forecast_theaters') assert.equal(pipe.count, 1, 'opening and original theaters share one daily allocation');
 
       // Cache tools must always carry the envelope keys, regardless of the
       // schema's per-tool `data.properties`. Asserting these explicitly here
@@ -189,6 +244,23 @@ describe('api/mcp.ts — per-tool output contract (envelope-shape, all 41 tools)
       assert.deepEqual(
         errors, [],
         `${name}: response fails outputSchema:\n  ${errors.join('\n  ')}`,
+      );
+
+      // A strict client reads `structuredContent`, not the text, and rejects
+      // the call when it is missing (#8328). For an unprojected call it is the
+      // same document the text serializes, so the validation above covers it.
+      assert.deepEqual(
+        body.result.structuredContent, parsed,
+        `${name}: structuredContent must be the document content[0].text serializes`,
+      );
+
+      const publicTool = mod.TOOL_LIST_RESPONSE.find((t) => t.name === name);
+      assert.ok(publicTool, `${name} missing from tools/list`);
+      const validateAdvertised = advertisedValidator(publicTool);
+      assert.ok(
+        validateAdvertised(body.result.structuredContent),
+        `${name}: structuredContent fails the ADVERTISED outputSchema (a strict client throws -32602):\n  ${
+          (validateAdvertised.errors ?? []).slice(0, 5).map((e) => `${e.instancePath || '/'} ${e.message}`).join('\n  ')}`,
       );
     });
   }

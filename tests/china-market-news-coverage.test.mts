@@ -4,17 +4,24 @@ import { dirname, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { VARIANT_FEEDS } from '../server/worldmonitor/news/v1/_feeds.ts';
+import {
+  orderServerFeedEntries,
+  VARIANT_FEEDS,
+} from '../server/worldmonitor/news/v1/_feeds.ts';
+import { __testing__ as digestTesting } from '../server/worldmonitor/news/v1/list-feed-digest.ts';
 import { SOURCE_PROPAGANDA_RISK } from '../shared/source-provenance.ts';
+import { parseMiitNews, renderMiitRss } from '../api/miit-news.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const readText = (path: string) => readFileSync(resolve(root, path), 'utf8');
 const readJson = <T>(path: string): T => JSON.parse(readText(path)) as T;
+const { buildDigestFeedBatches } = digestTesting;
 
 interface StockEntry {
   symbol: string;
   name: string;
   display: string;
+  region: string;
 }
 
 interface StockConfig {
@@ -23,17 +30,17 @@ interface StockConfig {
 }
 
 const CHINA_BASKET: StockEntry[] = [
-  { symbol: '000001.SS', name: 'Shanghai Composite', display: 'SSEC' },
-  { symbol: '^HSI', name: 'Hang Seng', display: 'HSI' },
-  { symbol: '600519.SS', name: 'Kweichow Moutai', display: 'MOUTAI' },
-  { symbol: '601318.SS', name: 'Ping An Insurance', display: 'PINGAN-A' },
-  { symbol: '600900.SS', name: 'China Yangtze Power', display: 'CYPC' },
-  { symbol: '300750.SZ', name: 'CATL', display: 'CATL' },
-  { symbol: '688981.SS', name: 'SMIC', display: 'SMIC-A' },
-  { symbol: '0700.HK', name: 'Tencent', display: 'TENCENT' },
-  { symbol: '1211.HK', name: 'BYD', display: 'BYD-H' },
-  { symbol: '0939.HK', name: 'China Construction Bank', display: 'CCB-H' },
-  { symbol: '0857.HK', name: 'PetroChina', display: 'PETROCHINA-H' },
+  { symbol: '000001.SS', name: 'Shanghai Composite', display: 'SSEC', region: 'asia' },
+  { symbol: '^HSI', name: 'Hang Seng', display: 'HSI', region: 'asia' },
+  { symbol: '600519.SS', name: 'Kweichow Moutai', display: 'MOUTAI', region: 'asia' },
+  { symbol: '601318.SS', name: 'Ping An Insurance', display: 'PINGAN-A', region: 'asia' },
+  { symbol: '600900.SS', name: 'China Yangtze Power', display: 'CYPC', region: 'asia' },
+  { symbol: '300750.SZ', name: 'CATL', display: 'CATL', region: 'asia' },
+  { symbol: '688981.SS', name: 'SMIC', display: 'SMIC-A', region: 'asia' },
+  { symbol: '0700.HK', name: 'Tencent', display: 'TENCENT', region: 'asia' },
+  { symbol: '1211.HK', name: 'BYD', display: 'BYD-H', region: 'asia' },
+  { symbol: '0939.HK', name: 'China Construction Bank', display: 'CCB-H', region: 'asia' },
+  { symbol: '0857.HK', name: 'PetroChina', display: 'PETROCHINA-H', region: 'asia' },
 ];
 
 const CLIENT_VARIANT_BLOCKS: Record<string, string> = {
@@ -91,11 +98,20 @@ describe('China A/H-share market coverage (#5272)', () => {
     assert.deepEqual(railwayMirror, canonical);
   });
 
+  it('keeps both seeders on the complete shared catalog instead of private symbol lists', () => {
+    const relay = readText('scripts/ais-relay.cjs');
+    const standalone = readText('scripts/seed-market-quotes.mjs');
+    assert.match(relay, /loadMarketSeedUniverse\(_stockCfg\)/);
+    assert.match(standalone, /loadMarketSeedUniverse\(stocksConfig\)/);
+    assert.equal(canonical.symbols.length, 93);
+    assert.ok(canonical.symbols.every((entry) => entry.region), 'every catalog symbol needs region metadata');
+  });
+
   it('makes the long-running Railway relay consume stock symbols and metadata from the shared config', () => {
     const relay = readText('scripts/ais-relay.cjs');
     assert.match(relay, /const _stockCfg = requireShared\('stocks\.json'\)/);
-    assert.match(relay, /const MARKET_SYMBOLS = _stockCfg\.symbols\.map\(\(s\) => s\.symbol\)/);
-    assert.match(relay, /const MARKET_META = new Map\(_stockCfg\.symbols\.map/);
+    assert.match(relay, /loadMarketSeedUniverse\(_stockCfg\)/);
+    assert.match(relay, /const MARKET_META = _stockUniverse\.metaBySymbol/);
   });
 
   it('keeps available quotes when one requested China symbol is unavailable', async () => {
@@ -108,6 +124,7 @@ describe('China A/H-share market coverage (#5272)', () => {
       finnhubSkipped: true,
       skipReason: 'test fallback',
       rateLimited: false,
+      asOf: '2026-08-31T12:00:00.000Z',
     }, ['600519.SS', '999999.SS', '0700.HK']);
 
     assert.deepEqual(response.quotes.map((quote) => quote.symbol), ['600519.SS', '0700.HK']);
@@ -117,6 +134,27 @@ describe('China A/H-share market coverage (#5272)', () => {
 });
 
 describe('China client/server news digest parity (#5272)', () => {
+  it('MIIT reads the official listing adapter without depending on Google indexing', () => {
+    const feed = VARIANT_FEEDS.full!.asia!.find((entry) => entry.name === 'MIIT (China)');
+    assert.equal(feed?.url, 'https://api.worldmonitor.app/api/miit-news');
+  });
+  it('the digest parser retains official MIIT article identity and publication day', () => {
+    const link = 'https://www.miit.gov.cn/zwgk/zcwj/wjfb/tz/art/2026/art_7d2e760b4be94217b8f55caec840b30d.html';
+    const title = '四部门关于开展集成电路企业清单制定工作的通知';
+    const now = Date.now();
+    const day = new Date(now - 86400000).toISOString().slice(0, 10);
+    const rss = renderMiitRss(parseMiitNews(`<li><span>${day}</span><p><a href="${link}">${title}</a></p></li>`, now));
+    const feed = VARIANT_FEEDS.full!.asia!.find((entry) => entry.name === 'MIIT (China)')!;
+    const parsed = digestTesting.parseRssXml(rss, feed, 'full');
+    assert.equal(parsed?.parsedTotal, 1);
+    assert.equal(parsed?.droppedUndated, 0);
+    assert.equal(parsed?.items[0]?.title, title);
+    assert.equal(parsed?.items[0]?.link, link);
+    assert.equal(parsed?.items[0]?.source, 'MIIT (China)');
+    assert.equal(parsed?.items[0]?.publishedAt, Date.parse(`${day}T00:00:00+08:00`));
+    const hostile = digestTesting.parseRssXml(rss.replaceAll(link, 'https://foreign.example/article'), feed, 'full');
+    assert.equal(hostile?.items[0]?.link, '');
+  });
   const expectedMembership = new Map<string, { variant: string; category: string }>([
     ['Xinhua', { variant: 'full', category: 'asia' }],
     ['MIIT (China)', { variant: 'full', category: 'asia' }],
@@ -148,5 +186,27 @@ describe('China client/server news digest parity (#5272)', () => {
     assert.equal(readText('scripts/shared/source-tiers.json'), readText('shared/source-tiers.json'));
     assert.equal(SOURCE_PROPAGANDA_RISK.Xinhua?.risk, 'high');
     assert.equal(SOURCE_PROPAGANDA_RISK.Xinhua?.stateAffiliated, 'China');
+  });
+
+  it('starts all China coverage feeds before ordinary full-digest feeds', () => {
+    const { batches } = buildDigestFeedBatches('full', 'en');
+    const firstBatch = batches[0] ?? [];
+
+    assert.deepEqual(
+      firstBatch.slice(0, 3).map(({ feed }) => feed.name).sort(),
+      ['Xinhua', 'MIIT (China)', 'MOFCOM (China)'].sort(),
+    );
+    assert.notEqual(firstBatch[3]?.feed.name, 'Xinhua');
+    assert.notEqual(firstBatch[3]?.feed.name, 'MIIT (China)');
+    assert.notEqual(firstBatch[3]?.feed.name, 'MOFCOM (China)');
+
+    const ordinaryEntries = [
+      { category: 'test', feed: { name: 'ordinary-first', url: 'https://example.test/first' } },
+      { category: 'test', feed: { name: 'ordinary-second', url: 'https://example.test/second' } },
+    ];
+    assert.deepEqual(
+      orderServerFeedEntries([...ordinaryEntries].reverse()).map(({ feed }) => feed.name),
+      ['ordinary-second', 'ordinary-first'],
+    );
   });
 });

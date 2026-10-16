@@ -5,18 +5,34 @@
 // occurred when fast-xml-parser tried to build a ~300MB object tree from a
 // 120MB XML download against Railway's 512MB container limit.
 import sax from 'sax';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { projectCountrySanctions } from './shared/country-sanctions-signals.mjs';
 
-import { CHROME_UA, loadEnvFile, runSeed, verifySeedKey, writeExtraKeyWithMeta } from './_seed-utils.mjs';
+import { loadEnvFile, runSeed, verifySeedKey, readSeedSnapshot, writeExtraKeyWithMeta } from './_seed-utils.mjs';
+import { fetchOfacSourceResponse } from './_sanctions-source.mjs';
+import { SANCTIONS_MAX_CONTENT_AGE_MIN, SANCTIONS_SOURCE_VERSION, SEMA_SOURCE, ingestSemaEntries, mergeSanctionEntries, ofacRegistrationToIdentifier, sanctionsListContentMeta } from './_sema-sanctions.mjs';
 
 loadEnvFile(import.meta.url);
 
 const CANONICAL_KEY = 'sanctions:pressure:v1';
 const STATE_KEY = 'sanctions:pressure:state:v1';
 const ENTITY_INDEX_KEY = 'sanctions:entities:v1';
+const ENTITY_INDEX_META_KEY = 'seed-meta:sanctions:entities';
 // Full ISO2 -> count map consumed by CII/country-risk scoring; do not replace
 // with the top-pressure display list written under CANONICAL_KEY.countries.
 const COUNTRY_COUNTS_KEY = 'sanctions:country-counts:v1';
-const CACHE_TTL = 15 * 60 * 60; // 15h — 3h buffer over 12h cron cadence (was 12h = 0 buffer)
+const COUNTRY_COUNTS_META_KEY = 'seed-meta:sanctions:country-counts';
+const SOURCE_SNAPSHOTS_KEY = 'sanctions:source-snapshots:v1';
+const SOURCE_SNAPSHOTS_META_KEY = 'seed-meta:sanctions:source-snapshots';
+// OFAC's lists change slowly, and a Railway container can lose egress to
+// treasury.gov/S3 for several runs; 12h dropped ~20k OFAC entities on 2026-09-27.
+const SOURCE_RETAIN_MS = 48 * 60 * 60 * 1000;
+// Snapshots written before the 48h change carry fetchedAt + 12h; accept them and
+// move the deadline to 48h from the same fetch so a deploy cannot drop a live cohort.
+const LEGACY_SOURCE_RETAIN_MS = 12 * 60 * 60 * 1000;
+const SOURCE_SNAPSHOTS_TTL = 54 * 60 * 60; // retention + one 6h cron
+const SNAPSHOT_MAX_BYTES = 32 * 1024 * 1024;
+const CACHE_TTL = 18 * 60 * 60; // 18h — 3× live 6h cron; remains queryable after the 12h freshness alarm
 // Compact entity type codes for the lookup index (saves space vs full enum strings)
 const ET_CODE = {
   SANCTIONS_ENTITY_TYPE_VESSEL: 'vessel',
@@ -25,13 +41,91 @@ const ET_CODE = {
   SANCTIONS_ENTITY_TYPE_ENTITY: 'entity',
 };
 const DEFAULT_RECENT_LIMIT = 60;
-const OFAC_TIMEOUT_MS = 45_000;
 const PROGRAM_CODE_RE = /^[A-Z0-9][A-Z0-9-]{1,24}$/;
+
+function validPressureClock(value) {
+  return typeof value === 'string' && /^[1-9]\d{0,15}$/.test(value)
+    && Number.isSafeInteger(Number(value)) && Number(value) <= 8640000000000000;
+}
 
 const OFAC_SOURCES = [
   { label: 'SDN', url: 'https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/sdn_advanced.xml' },
   { label: 'CONSOLIDATED', url: 'https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/cons_advanced.xml' },
 ];
+
+function validSourceId(source, id) {
+  return typeof id === 'string' && (source === SEMA_SOURCE
+    ? /^sema-ca:(?!unspecified:|xx:)[^:]+:[^:]+:[1-9]\d*$/.test(id)
+    : new RegExp(`^${source}:\\d+$`).test(id));
+}
+
+function validSourceRecords(source, records) {
+  if (!Array.isArray(records) || records.length === 0) return false;
+  const ids = new Set();
+  return records.every(entry => {
+    const validId = validSourceId(source, entry?.id);
+    if (!validId || ids.has(entry.id) || typeof entry.name !== 'string' || !entry.name.trim()
+      || !Object.hasOwn(ET_CODE, entry.entityType)
+      || !Array.isArray(entry.sourceLists) || entry.sourceLists.length !== 1 || entry.sourceLists[0] !== source
+      || !['countryCodes', 'countryNames', 'programs'].every(field => Array.isArray(entry[field]) && entry[field].every(v => typeof v === 'string'))
+      || !['_aliases', '_identifiers'].every(field => entry[field] === undefined || (Array.isArray(entry[field]) && entry[field].every(v => typeof v === 'string')))
+      || typeof entry.effectiveAt !== 'string' || !/^\d+$/.test(entry.effectiveAt)) return false;
+    ids.add(entry.id);
+    return true;
+  });
+}
+
+function decodeSourceSnapshots(stored) {
+  if (!stored) return {};
+  try {
+    if (stored.version !== 1 || stored.encoding !== 'gzip-base64' || typeof stored.data !== 'string'
+      || stored.data.length > 5 * 1024 * 1024) throw new Error('invalid snapshot encoding');
+    const decoded = JSON.parse(gunzipSync(Buffer.from(stored.data, 'base64'), { maxOutputLength: SNAPSHOT_MAX_BYTES }).toString('utf8'));
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('invalid snapshot map');
+    return decoded;
+  } catch {
+    console.warn('  SANCTIONS_SNAPSHOT_INVALID: ignoring unusable source snapshots');
+    return {};
+  }
+}
+
+function encodeSourceSnapshots(snapshots) {
+  const json = JSON.stringify(snapshots);
+  if (Buffer.byteLength(json) > SNAPSHOT_MAX_BYTES) throw new Error('SANCTIONS_SNAPSHOT_TOO_LARGE');
+  const data = gzipSync(json).toString('base64');
+  if (data.length > 5 * 1024 * 1024 - 1024) throw new Error('SANCTIONS_SNAPSHOT_TOO_LARGE');
+  return { version: 1, encoding: 'gzip-base64', data };
+}
+
+function selectSanctionsSourceSnapshot(source, result, previous, now) {
+  const valid = !result.error && validSourceRecords(source, result.records)
+    && Number.isSafeInteger(result.publishedAt) && result.publishedAt >= 0 && result.publishedAt <= now;
+  const retained = previous?.version === 1
+    && Number.isSafeInteger(previous.fetchedAt) && previous.fetchedAt > 0 && previous.fetchedAt <= now
+    && (previous.retainedUntil === previous.fetchedAt + SOURCE_RETAIN_MS
+      || previous.retainedUntil === previous.fetchedAt + LEGACY_SOURCE_RETAIN_MS)
+    && now < previous.fetchedAt + SOURCE_RETAIN_MS
+    && Number.isSafeInteger(previous.publishedAt) && previous.publishedAt >= 0 && previous.publishedAt <= previous.fetchedAt
+    && (previous.quarantinedCount === undefined
+      || (Number.isSafeInteger(previous.quarantinedCount) && previous.quarantinedCount >= 0))
+    && validSourceRecords(source, previous.records);
+  const snapshot = valid
+    ? { version: 1, fetchedAt: now, retainedUntil: now + SOURCE_RETAIN_MS, publishedAt: result.publishedAt,
+      quarantinedCount: result.quarantinedCount, records: result.records }
+    : retained ? { ...previous, retainedUntil: previous.fetchedAt + SOURCE_RETAIN_MS } : null;
+  return {
+    snapshot,
+    health: {
+      status: valid ? 'ok' : snapshot ? 'retained' : 'unavailable',
+      lastAttemptAt: now,
+      lastSuccessAt: snapshot?.fetchedAt ?? null,
+      retainedUntil: snapshot?.retainedUntil ?? null,
+      publishedAt: snapshot?.publishedAt ?? null,
+      recordCount: snapshot?.records.length ?? 0,
+      errorCode: valid ? null : source === SEMA_SOURCE ? 'SEMA_INGEST_FAILED' : 'OFAC_INGEST_FAILED',
+    },
+  };
+}
 
 // Strip XML namespace prefix (e.g. "sanc:SanctionsEntry" → "SanctionsEntry")
 function local(name) {
@@ -120,11 +214,7 @@ function buildProgramPressure(entries) {
 async function fetchSource(source) {
   console.log(`  Fetching OFAC ${source.label}...`);
   const t0 = Date.now();
-  const response = await fetch(source.url, {
-    headers: { 'User-Agent': CHROME_UA },
-    signal: AbortSignal.timeout(OFAC_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`OFAC ${source.label} HTTP ${response.status}`);
+  const response = await fetchOfacSourceResponse(source.url);
 
   return new Promise((resolve, reject) => {
     // strict=true: case-sensitive tag names. xmlns=false: we strip prefixes manually.
@@ -134,6 +224,8 @@ async function fetchSource(source) {
     const areaCodes   = new Map(); // ID → { code, name }
     const featureTypes = new Map(); // ID → label string
     const legalBasis  = new Map(); // ID → shortRef string
+    const idRegDocTypes = new Map(); // ID → label string
+    const idRegDocsByIdentity = new Map(); // identityId → { typeId, number }[]
     const locations   = new Map(); // ID → { codes[], names[] }
     const parties     = new Map(); // profileId → { name, entityType, countryCodes[], countryNames[] }
     const entries     = [];
@@ -149,6 +241,8 @@ async function fetchSource(source) {
     let inAreaCodeValues    = false;
     let inFeatureTypeValues = false;
     let inLegalBasisValues  = false;
+    let inIDRegDocTypeValues = false;
+    let inIDRegDocuments    = false;
     let inLocations         = false;
     let inDistinctParties   = false;
     let inSanctionsEntries  = false;
@@ -166,13 +260,14 @@ async function fetchSource(source) {
 
     // DistinctParty / Profile
     let partyFixedRef = '';
-    let profileId = '', profileSubTypeId = '';
+    let profileId = '', profileSubTypeId = '', identityId = '';
+    let curDoc = null;           // { typeId, identityId, number }
     let aliases = null;          // Alias[]
     let curAlias = null;         // { primary, typeId, nameParts[] }
     let inDocumentedName = false;
     let namePartsBuf = null;     // string[] collecting NamePartValue text
     let profileFeatures = null;  // Feature[]
-    let curFeature = null;       // { featureTypeId, locationIds[] }
+    let curFeature = null;       // { featureTypeId, locationIds[], detail }
 
     // SanctionsEntry
     let entryId = '', entryProfileId = '';
@@ -226,11 +321,22 @@ async function fetchSource(source) {
       }
       const sorted = [...seen.entries()].sort(([a], [b]) => a.localeCompare(b));
 
+      const aliasNames = uniqueSorted((aliases ?? []).map((a) => a.nameParts.join(' ')).filter((part) => part && part !== name));
+      const identifiers = uniqueSorted([
+        ...(idRegDocsByIdentity.get(identityId) || []).map((doc) => (
+          ofacRegistrationToIdentifier(idRegDocTypes.get(doc.typeId) || '', doc.number)
+        )),
+        ...(profileFeatures ?? []).map((feat) => (
+          ofacRegistrationToIdentifier(featureTypes.get(feat.featureTypeId) || '', feat.detail)
+        )),
+      ]);
       parties.set(profileId, {
         name,
         entityType,
         countryCodes: sorted.map(([c]) => c),
         countryNames: sorted.map(([, n]) => n),
+        aliases: aliasNames,
+        identifiers,
       });
     }
 
@@ -256,6 +362,8 @@ async function fetchSource(source) {
         effectiveAt,
         isNew: false,
         note,
+        _aliases: party?.aliases ?? [],
+        _identifiers: party?.identifiers ?? [],
       });
     }
 
@@ -272,6 +380,8 @@ async function fetchSource(source) {
         case 'AreaCodeValues':    inAreaCodeValues = true; break;
         case 'FeatureTypeValues': inFeatureTypeValues = true; break;
         case 'LegalBasisValues':  inLegalBasisValues = true; break;
+        case 'IDRegDocTypeValues': inIDRegDocTypeValues = true; break;
+        case 'IDRegDocuments':    inIDRegDocuments = true; break;
         case 'Locations':         inLocations = true; break;
         case 'DistinctParties':   inDistinctParties = true; break;
         case 'SanctionsEntries':  inSanctionsEntries = true; break;
@@ -285,6 +395,14 @@ async function fetchSource(source) {
           break;
         case 'LegalBasis':
           if (inLegalBasisValues) { refId = attrs.ID || ''; refShortRef = attrs.LegalBasisShortRef || ''; }
+          break;
+        case 'IDRegDocType':
+          if (inIDRegDocTypeValues) { refId = attrs.ID || ''; refDescription = attrs.IDRegDocTypeName || ''; }
+          break;
+        case 'IDRegDocument':
+          if (inIDRegDocuments) {
+            curDoc = { typeId: attrs.IDRegDocTypeID || '', identityId: attrs.IdentityID || '', number: '' };
+          }
           break;
 
         // ── Locations ──
@@ -300,7 +418,10 @@ async function fetchSource(source) {
           if (inDistinctParties) { partyFixedRef = attrs.FixedRef || ''; aliases = []; profileFeatures = []; }
           break;
         case 'Profile':
-          if (inDistinctParties) { profileId = attrs.ID || partyFixedRef; profileSubTypeId = attrs.PartySubTypeID || ''; }
+          if (inDistinctParties) { profileId = attrs.ID || partyFixedRef; profileSubTypeId = attrs.PartySubTypeID || ''; identityId = ''; }
+          break;
+        case 'Identity':
+          if (inDistinctParties) identityId = attrs.ID || '';
           break;
         case 'Alias':
           if (inDistinctParties) curAlias = { primary: attrs.Primary === 'true', typeId: attrs.AliasTypeID || '', nameParts: [] };
@@ -309,7 +430,7 @@ async function fetchSource(source) {
           if (curAlias) { inDocumentedName = true; namePartsBuf = []; }
           break;
         case 'Feature':
-          if (inDistinctParties) curFeature = { featureTypeId: attrs.FeatureTypeID || '', locationIds: [] };
+          if (inDistinctParties) curFeature = { featureTypeId: attrs.FeatureTypeID || '', locationIds: [], detail: '' };
           break;
         case 'VersionLocation':
           if (curFeature && attrs.LocationID) curFeature.locationIds.push(attrs.LocationID);
@@ -366,6 +487,8 @@ async function fetchSource(source) {
         case 'AreaCodeValues':    inAreaCodeValues = false; break;
         case 'FeatureTypeValues': inFeatureTypeValues = false; break;
         case 'LegalBasisValues':  inLegalBasisValues = false; break;
+        case 'IDRegDocTypeValues': inIDRegDocTypeValues = false; break;
+        case 'IDRegDocuments':    inIDRegDocuments = false; break;
         case 'Locations':         inLocations = false; break;
         case 'DistinctParties':   inDistinctParties = false; break;
         case 'SanctionsEntries':  inSanctionsEntries = false; break;
@@ -379,6 +502,26 @@ async function fetchSource(source) {
           break;
         case 'LegalBasis':
           if (inLegalBasisValues && refId) legalBasis.set(refId, refShortRef || t);
+          break;
+        case 'IDRegDocTypeName':
+          if (inIDRegDocTypeValues) refDescription = t || refDescription;
+          break;
+        case 'IDRegDocType':
+          if (inIDRegDocTypeValues && refId) idRegDocTypes.set(refId, refDescription || t);
+          break;
+        case 'IDRegistrationNo':
+          if (curDoc) curDoc.number = t;
+          break;
+        case 'IDRegDocument':
+          if (curDoc?.identityId) {
+            const list = idRegDocsByIdentity.get(curDoc.identityId) || [];
+            list.push(curDoc);
+            idRegDocsByIdentity.set(curDoc.identityId, list);
+          }
+          curDoc = null;
+          break;
+        case 'VersionDetail':
+          if (curFeature && t) curFeature.detail = t;
           break;
 
         // ── Locations ──
@@ -404,7 +547,7 @@ async function fetchSource(source) {
           break;
         case 'Profile':
           if (inDistinctParties && profileId) finalizeParty();
-          profileId = ''; profileSubTypeId = ''; aliases = []; profileFeatures = [];
+          profileId = ''; profileSubTypeId = ''; identityId = ''; aliases = []; profileFeatures = [];
           break;
         case 'DistinctParty':
           partyFixedRef = '';
@@ -485,18 +628,52 @@ async function fetchSource(source) {
 
 async function fetchSanctionsPressure() {
   const previousState = await verifySeedKey(STATE_KEY).catch(() => null);
-  const previousIds = new Set(Array.isArray(previousState?.entryIds) ? previousState.entryIds.map((id) => String(id)) : []);
+  const validPreviousIds = Array.isArray(previousState?.entryIds)
+    && previousState.entryIds.every(id => validSourceId(SEMA_SOURCE, id)
+      || OFAC_SOURCES.some(({ label }) => validSourceId(label, id)));
+  const previousIds = new Set(validPreviousIds ? previousState.entryIds : []);
   const hasPrevious = previousIds.size > 0;
   console.log(`  Previous state: ${hasPrevious ? `${previousIds.size} known IDs` : 'none (first run or expired)'}`);
 
-  // Sequential fetch: SDN then Consolidated. SAX streaming keeps peak RAM low
-  // regardless of file size — no full XML string or DOM tree is ever built.
-  const results = [];
+  const previousSnapshots = decodeSourceSnapshots(await readSeedSnapshot(SOURCE_SNAPSHOTS_KEY, { strict: true }));
+  const outcomes = {};
   for (const source of OFAC_SOURCES) {
-    results.push(await fetchSource(source));
+    try {
+      const result = await fetchSource(source);
+      outcomes[source.label] = { records: result.entries, publishedAt: result.datasetDate || 0, quarantinedCount: 0, error: null };
+    } catch (err) {
+      console.warn(`  OFAC ${source.label} fetch failed: ${err?.message || err}`);
+      outcomes[source.label] = { records: [], publishedAt: 0, error: 'OFAC_INGEST_FAILED' };
+    }
   }
-  const entries = results.flatMap((result) => result.entries);
-  const datasetDate = results.reduce((max, result) => Math.max(max, result.datasetDate || 0), 0);
+  const sema = await ingestSemaEntries();
+  if (!sema.error && !Array.isArray(sema.quarantined)) throw new Error('SANCTIONS_QUARANTINE_INVALID');
+  outcomes[SEMA_SOURCE] = { records: sema.records, publishedAt: sema.publishedAtMs || 0,
+    quarantinedCount: sema.error ? null : sema.quarantined.length, error: sema.error };
+  if (sema.error) console.warn(`  SEMA fetch failed: ${sema.error}`);
+
+  const now = Date.now();
+  if (!validPressureClock(String(now)) || now + SOURCE_RETAIN_MS > 8640000000000000) {
+    throw new Error('SANCTIONS_CLOCK_INVALID');
+  }
+  const _sourceSnapshots = {};
+  const _sourceHealth = {};
+  for (const [source, result] of Object.entries(outcomes)) {
+    const selected = selectSanctionsSourceSnapshot(source, result, previousSnapshots[source], now);
+    _sourceSnapshots[source] = selected.snapshot;
+    _sourceHealth[source] = selected.health;
+  }
+  // Quarantined rows are bounded by SEMA_MAX_QUARANTINE_SHARE and belong to this
+  // run's ingest only; a retained snapshot must not claim them.
+  if (_sourceHealth[SEMA_SOURCE].status === 'ok' && sema.quarantined?.length) {
+    _sourceHealth[SEMA_SOURCE].quarantined = sema.quarantined;
+    console.warn(`  SEMA quarantined ${sema.quarantined.length} row(s): ${sema.quarantined.map(q => `${q.id} ${q.reason}`).join(', ')}`);
+  }
+  const semaEntries = _sourceSnapshots[SEMA_SOURCE]?.records ?? [];
+  const semaError = _sourceHealth[SEMA_SOURCE].status === 'ok' ? null : sema.error || 'SEMA_INVALID_RECORD';
+  const ofacEntries = OFAC_SOURCES.flatMap(({ label }) => _sourceSnapshots[label]?.records ?? []);
+  const entries = mergeSanctionEntries({ ofac: ofacEntries, sema: semaEntries });
+  const datasetDate = Math.max(0, ...Object.values(_sourceSnapshots).map(snapshot => snapshot?.publishedAt ?? 0));
 
   if (hasPrevious) {
     for (const entry of entries) {
@@ -509,7 +686,10 @@ async function fetchSanctionsPressure() {
   const newEntryCount = hasPrevious ? entries.filter((entry) => entry.isNew).length : 0;
   const vesselCount = entries.filter((entry) => entry.entityType === 'SANCTIONS_ENTITY_TYPE_VESSEL').length;
   const aircraftCount = entries.filter((entry) => entry.entityType === 'SANCTIONS_ENTITY_TYPE_AIRCRAFT').length;
-  console.log(`  Merged: ${totalCount} total (${results[0]?.entries.length ?? 0} SDN + ${results[1]?.entries.length ?? 0} consolidated), ${newEntryCount} new, ${vesselCount} vessels, ${aircraftCount} aircraft`);
+  const semaCount = semaEntries.length;
+  const sdnCount = _sourceSnapshots.SDN?.records.length ?? 0;
+  const consolidatedCount = _sourceSnapshots.CONSOLIDATED?.records.length ?? 0;
+  console.log(`  Merged: ${totalCount} total (${sdnCount} SDN + ${consolidatedCount} consolidated + ${semaCount} SEMA), ${newEntryCount} new, ${vesselCount} vessels, ${aircraftCount} aircraft`);
 
   // Build compact entity index for name-based lookup (Phase 1 — issue #2042).
   // Each record: { id, name, et (compact type), cc (country codes), pr (programs) }
@@ -523,44 +703,102 @@ async function fetchSanctionsPressure() {
   }));
   console.log(`  Entity index: ${_entityIndex.length} records (~${Math.round(JSON.stringify(_entityIndex).length / 1024)}KB)`);
 
+  const knownWindow = hasPrevious && validPressureClock(previousState.observedAt)
+    && Number(previousState.observedAt) < now;
+  const pressureMetadata = {
+    schemaVersion: 1,
+    sourceVersion: SANCTIONS_SOURCE_VERSION,
+    population: 'top-12-first-iso2-display-v1',
+    cohort: { computationAt: String(now), datasetDate: String(datasetDate), totalCount, newEntryCount },
+    comparison: {
+      kind: knownWindow ? 'id-set-difference' : hasPrevious ? 'window-unavailable' : 'baseline-unavailable',
+      from: knownWindow ? previousState.observedAt : null,
+      to: String(now),
+    },
+    sourceHealth: Object.fromEntries(Object.entries(_sourceHealth).map(([source, health]) => [source, {
+      status: health.status, lastAttemptAt: health.lastAttemptAt, lastSuccessAt: health.lastSuccessAt,
+      retainedUntil: health.retainedUntil, publishedAt: health.publishedAt, recordCount: health.recordCount,
+      errorCode: health.errorCode,
+      quarantinedCount: _sourceSnapshots[source]?.quarantinedCount ?? null,
+    }])),
+  };
+  if (Buffer.byteLength(JSON.stringify(pressureMetadata), 'utf8') > 4096) {
+    throw new Error('SANCTIONS_METADATA_TOO_LARGE');
+  }
+
   return {
-    fetchedAt: String(Date.now()),
+    fetchedAt: String(now),
     datasetDate: String(datasetDate),
     totalCount,
-    sdnCount: results[0]?.entries.length ?? 0,
-    consolidatedCount: results[1]?.entries.length ?? 0,
+    sdnCount,
+    consolidatedCount,
+    semaCount,
+    ...(semaError ? { semaError } : {}),
     newEntryCount,
     vesselCount,
     aircraftCount,
     countries: buildCountryPressure(entries),
     programs: buildProgramPressure(entries),
     entries: sortedEntries.slice(0, DEFAULT_RECENT_LIMIT),
+    pressureMetadata,
     _entityIndex,
+    _sourceSnapshots,
+    _sourceHealth,
     _countryCounts: buildCountryCounts(entries),
     _state: {
+      observedAt: String(now),
       entryIds: entries.map((entry) => entry.id),
     },
   };
 }
 
 function validate(data) {
-  return (data?.totalCount ?? 0) > 0;
+  return ['totalCount', 'sdnCount', 'consolidatedCount', 'semaCount']
+    .every(field => Number.isSafeInteger(data?.[field]) && data[field] >= 0);
 }
 
 export function declareRecords(data) {
   return data?.totalCount ?? 0;
 }
 
+export function sanctionsPressureContentMeta(data, nowMs) {
+  return sanctionsListContentMeta(data, nowMs);
+}
+
 runSeed('sanctions', 'pressure', CANONICAL_KEY, fetchSanctionsPressure, {
   ttlSeconds: CACHE_TTL,
+  // The bounded direct/proxy/signed recovery ladder can spend about 7 minutes
+  // across both serial XML sources, plus the SEMA source. Keep its fetch deadline
+  // explicit and the lock alive longer so a slow recovery cannot race a second run.
+  lockTtlMs: 660_000,
+  fetchPhaseTimeoutMs: 540_000,
   validateFn: validate,
-  sourceVersion: 'ofac-sls-advanced-xml-v1',
+  sourceVersion: SANCTIONS_SOURCE_VERSION,
   recordCount: (data) => data.totalCount ?? 0,
+  contentMeta: sanctionsPressureContentMeta,
+  maxContentAgeMin: SANCTIONS_MAX_CONTENT_AGE_MIN,
   // Strip internal-only fields before writing the main key so the pressure payload
   // does not include the entity index (~hundreds of KB) or state snapshot.
   publishTransform: (data) => {
-    const { _entityIndex: _ei, _state: _s, _countryCounts: _cc, ...rest } = data;
-    return rest;
+    const { _entityIndex: _ei, _state: _s, _countryCounts: _cc, _sourceSnapshots, _sourceHealth, pressureMetadata, ...rest } = data;
+    if (Array.isArray(rest.entries)) {
+      rest.entries = rest.entries.map((entry) => {
+        const { _aliases, _identifiers, _publishedAt, _regime, ...publicEntry } = entry;
+        return publicEntry;
+      });
+    }
+    const canonical = { ...rest, _state: pressureMetadata };
+    const projection = projectCountrySanctions(canonical, 'ZZ', Number(canonical.fetchedAt));
+    if (projection.state === 'unavailable' && !(canonical.totalCount === 0
+      && ['All sources unavailable', 'Empty producer sentinel'].includes(projection.reason))) {
+      throw new Error(`Invalid canonical sanctions publication: ${projection.reason}`);
+    }
+    return canonical;
+  },
+  zeroIsValid: true,
+  beforePublish: async (data) => {
+    const count = Object.values(data._sourceSnapshots).reduce((sum, snapshot) => sum + (snapshot?.records.length ?? 0), 0);
+    await writeExtraKeyWithMeta(SOURCE_SNAPSHOTS_KEY, encodeSourceSnapshots(data._sourceSnapshots), SOURCE_SNAPSHOTS_TTL, count, SOURCE_SNAPSHOTS_META_KEY);
   },
   extraKeys: [
     {
@@ -568,6 +806,20 @@ runSeed('sanctions', 'pressure', CANONICAL_KEY, fetchSanctionsPressure, {
       ttl: CACHE_TTL,
       transform: (data) => data._state,
     },
+  ],
+  // Publisher hooks own these keys, so runSeed cannot infer them from extraKeys.
+  // Preserve their data and metadata with the canonical cohort on a run failure.
+  preserveKeys: [
+    ENTITY_INDEX_KEY,
+    ENTITY_INDEX_META_KEY,
+    COUNTRY_COUNTS_KEY,
+    COUNTRY_COUNTS_META_KEY,
+  ],
+  // The private snapshots must outlive the 48h retention even when whole runs
+  // fail; the canonical 18h preservation TTL would shrink them.
+  preserveKeyTtls: [
+    { key: SOURCE_SNAPSHOTS_KEY, ttlSeconds: SOURCE_SNAPSHOTS_TTL },
+    { key: SOURCE_SNAPSHOTS_META_KEY, ttlSeconds: SOURCE_SNAPSHOTS_TTL },
   ],
   afterPublish: async (data, _ctx) => {
     // Write entity lookup index with seed-meta so health.js can monitor it.
@@ -579,6 +831,7 @@ runSeed('sanctions', 'pressure', CANONICAL_KEY, fetchSanctionsPressure, {
         data._entityIndex,
         CACHE_TTL,
         data._entityIndex.length,
+        ENTITY_INDEX_META_KEY,
       );
     }
     // Write full ISO2→count map for per-country sanctions lookup (no top-12 truncation).
@@ -588,11 +841,23 @@ runSeed('sanctions', 'pressure', CANONICAL_KEY, fetchSanctionsPressure, {
         data._countryCounts,
         CACHE_TTL,
         Object.keys(data._countryCounts).length,
+        COUNTRY_COUNTS_META_KEY,
       );
     }
     delete data._state;
     delete data._entityIndex;
     delete data._countryCounts;
+    const sourceHealth = data._sourceHealth;
+    const failedSources = Object.keys(sourceHealth).filter(source => sourceHealth[source].status !== 'ok');
+    return {
+      freshnessMetaPatch: {
+        sourceState: failedSources.length ? 'error' : 'ok',
+        errorCode: failedSources.includes(SEMA_SOURCE) ? 'SEMA_INGEST_FAILED' : failedSources.length ? 'OFAC_INGEST_FAILED' : null,
+        failedSources,
+        sourceHealth,
+      },
+      completionState: failedSources.length ? 'DEGRADED' : 'OK',
+    };
   },
 
   declareRecords,

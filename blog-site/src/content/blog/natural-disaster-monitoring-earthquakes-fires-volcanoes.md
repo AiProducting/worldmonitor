@@ -96,7 +96,7 @@ A magnitude 6.5 earthquake off the coast of Portugal might not make global headl
 
 ## Displacement Flows: The Human Aftermath
 
-World Monitor integrates **UNHCR displacement data** to show refugee and internally displaced person (IDP) migration patterns. When a disaster strikes, you can see:
+World Monitor integrates **[UNHCR displacement data](/blog/posts/track-refugee-displacement-flows-unhcr-worldmonitor/)** to show refugee and internally displaced person (IDP) migration patterns. When a disaster strikes, you can see:
 
 - Historical displacement from the affected region
 - Existing refugee populations that may face compounding vulnerability
@@ -149,7 +149,7 @@ World Monitor's **Custom Keyword Monitors** let you set persistent alerts for na
 
 - Set monitors for "earthquake," "tsunami," "wildfire," "hurricane," "volcanic"
 - Color-code each monitor category
-- When matching headlines appear in the 500+ curated RSS feeds, they're highlighted in your custom color
+- When matching headlines appear in the curated RSS catalog, they're highlighted in your custom color
 - Monitors persist across sessions via localStorage
 
 Combined with the map layers, you have a complete early warning system: spatial data on the map, textual alerts in the news panel, AI analysis in the brief, and live video for ground truth.
@@ -175,7 +175,7 @@ USGS data typically updates within minutes of a seismic event. World Monitor dis
 World Monitor uses NASA FIRMS satellite data (VIIRS sensor) to map thermal anomalies with sub-kilometer accuracy. This covers wildfires, industrial fires, agricultural burning, and conflict-related fires.
 
 **Can I set up alerts for natural disasters in specific regions?**
-Yes. Use Custom Keyword Monitors for terms like "earthquake," "wildfire," or "flood." Matching headlines from 500+ curated RSS feeds are highlighted in your chosen color and persist across sessions.
+Yes. Use Custom Keyword Monitors for terms like "earthquake," "wildfire," or "flood." Matching headlines from the curated RSS catalog are highlighted in your chosen color and persist across sessions.
 
 ---
 

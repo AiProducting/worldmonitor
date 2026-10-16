@@ -32,7 +32,8 @@ vi.mock("../_shared/auth-session", () => ({
 }));
 
 const validateApiKey = vi.fn();
-vi.mock("../../api/_api-key.js", () => ({
+vi.mock("../../api/_api-key.js", async (importOriginal) => ({
+  ...await importOriginal<Record<string, unknown>>(),
   USER_API_KEY_GATEWAY_VALIDATION_ERROR: "User API key requires gateway validation",
   validateApiKey: (...a: unknown[]) => validateApiKey(...a),
 }));
@@ -69,7 +70,7 @@ function json(body: unknown, status = 200) {
 function makeRequest(path: string, headers: Record<string, string> = {}, method = "POST") {
   const init: RequestInit = { method, headers };
   if (method !== "GET" && method !== "HEAD") {
-    init.body = JSON.stringify({ provider: "groq", headlines: ["headline"] });
+    init.body = JSON.stringify({ provider: "openrouter", headlines: ["headline"] });
   }
   return new Request(`https://www.worldmonitor.app${path}`, {
     ...init,
@@ -196,7 +197,7 @@ describe("summarize-article gateway spend controls", () => {
       expect.any(Request),
       SUMMARIZE_PATH,
       expect.any(Object),
-      { principalUserId: "pro_user" },
+      { principalUserId: "pro_user", principalScope: "session" },
     );
     expect(checkFailClosedScopedIpRateLimit).toHaveBeenCalledWith(
       expect.any(Request),
@@ -270,7 +271,7 @@ describe("summarize-article gateway spend controls", () => {
       expect.any(Request),
       SUMMARIZE_PATH,
       expect.any(Object),
-      { principalUserId: "api_user" },
+      { principalUserId: "api_user", principalScope: "api_key" },
     );
     expect(calls.summarize).toBe(1);
   });
@@ -394,7 +395,7 @@ describe("summarize-article gateway spend controls", () => {
           "X-WorldMonitor-Key": "wms_anonymous_session",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ provider: "groq", mode: "translate", headlines: ["hola"] }),
+        body: JSON.stringify({ provider: "openrouter", mode: "translate", headlines: ["hola"] }),
       }),
       { waitUntil: () => {} },
     );

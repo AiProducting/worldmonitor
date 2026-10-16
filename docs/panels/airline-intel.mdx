@@ -18,7 +18,7 @@ Six tabs under a shared airport + route watchlist control:
 | `news` | Aviation-relevant news items (`AviationNewsItem[]`). |
 | `prices` | Google Flights quotes for a specific itinerary and a date-grid of cheapest-day prices across a range. |
 
-`TABS` is declared as `['ops', 'flights', 'airlines', 'tracking', 'news', 'prices'] as const` in `src/components/AirlineIntelPanel.ts:54`. Watchlist comes from `aviationWatchlist.get()` — the first 8 airports and the first route are seeded on mount.
+`TABS` is declared as `['ops', 'flights', 'airlines', 'tracking', 'news', 'prices'] as const` in `src/components/AirlineIntelPanel.ts:54`. Watchlist comes from `aviationWatchlist.get()`; the initial airport slice and route are seeded on mount.
 
 Panel id is `airline-intel`; canonical component is `src/components/AirlineIntelPanel.ts`. Title resolves from i18n (`panels.airlineIntel`).
 
@@ -43,7 +43,7 @@ hydration first; the tab-specific calls below are direct REST RPCs.
 | Carrier delay / cancellation rollups | `GET /api/aviation/v1/get-carrier-ops` | `airlines` tab for watched airports. |
 | Specific flight status | `GET /api/aviation/v1/get-flight-status` | `tracking` tab lookup. |
 | Aircraft position tracking | `GET /api/aviation/v1/track-aircraft` | `tracking` tab and civil-airspace map workflows. |
-| YouTube live stream metadata | `GET /api/aviation/v1/get-youtube-live-stream-info` | Service RPC for aviation live-stream metadata; not part of the six-tab auto-refresh loop. |
+| YouTube video metadata | `GET /api/aviation/v1/get-youtube-live-stream-info` | Names a YouTube video through oEmbed. Channel live detection is retired: a channel-only query returns error `channel_live_detection_retired`, and the `channel`, `isLive` and `hlsUrl` fields are deprecated. Not part of the six-tab auto-refresh loop. |
 | Legacy flight price quotes | `GET /api/aviation/v1/search-flight-prices` | Direct quote search path with provider/degraded-state metadata. |
 | Aviation news | `GET /api/aviation/v1/list-aviation-news` | `news` tab. |
 | Google Flights itinerary search | `GET /api/aviation/v1/search-google-flights` | `prices` tab explicit search. |
@@ -63,5 +63,5 @@ Three distinct refresh paths in `src/components/AirlineIntelPanel.ts`:
 
 ## API reference
 
-- [Aviation service](/api/AviationService.openapi.yaml) — generated OpenAPI for the 11 RPCs above.
+- [Aviation service](https://github.com/koala73/worldmonitor/blob/main/docs/api/AviationService.openapi.yaml) — generated OpenAPI for the 11 RPCs above.
 - Related map layer: [Military & Civilian Flight Tracking](/military-tracking) for the live flights overlay that the `tracking` tab complements.

@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "../schema";
 import { internal } from "../_generated/api";
+import { PRODUCT_CATALOG } from "../config/productCatalog";
 
 const modules = import.meta.glob("../**/*.ts");
 
@@ -41,6 +42,45 @@ async function signDodoPayload(
     new TextEncoder().encode(`${webhookId}.${timestampSeconds}.${body}`),
   );
   return `v1,${btoa(String.fromCharCode(...new Uint8Array(signature)))}`;
+}
+
+/**
+ * A provider-valid `dispute.opened` for a customer we cannot attribute.
+ *
+ * Used by the HTTP-level dead-letter tests below. It replaced an unattributable
+ * `subscription.active`, which stopped throwing once unattributable payment and
+ * activation events began being captured into `unattributedPaymentEvents` and
+ * acknowledged (see unattributed-payments.test.ts). Disputes still resolve
+ * identity strictly — a dispute presupposes a settled charge, so a customers row
+ * should always exist — which keeps a genuine dead-letter path under test here.
+ */
+function makeProviderValidDisputePayload() {
+  return {
+    business_id: "biz_failure_test",
+    type: "dispute.opened",
+    timestamp: new Date(BASE_TIMESTAMP).toISOString(),
+    data: {
+      payload_type: "Dispute",
+      dispute_id: "dp_http_failure",
+      payment_id: "pay_http_failure",
+      subscription_id: "sub_http_failure",
+      business_id: "biz_failure_test",
+      amount: "1999",
+      currency: "USD",
+      dispute_stage: "pre_dispute",
+      dispute_status: "dispute_opened",
+      reason: "fraudulent",
+      created_at: new Date(BASE_TIMESTAMP).toISOString(),
+      remarks: null,
+      customer: {
+        customer_id: "cus_http_failure",
+        email: "bad@example.com",
+        name: "Unresolved Customer",
+        metadata: {},
+        phone_number: null,
+      },
+    },
+  };
 }
 
 function makeProviderValidSubscriptionPayload() {
@@ -126,11 +166,11 @@ describe("Dodo webhook failure tracking", () => {
     delete process.env.DODO_PAYMENTS_WEBHOOK_SECRET;
   });
 
-  test("dead-letters an application-invalid subscription received through the HTTP handler", async () => {
+  test("dead-letters an unresolvable dispute received through the HTTP handler", async () => {
     vi.spyOn(Date, "now").mockReturnValue(BASE_TIMESTAMP);
     process.env.DODO_PAYMENTS_WEBHOOK_SECRET = DODO_WEBHOOK_SECRET;
     const t = await makeT();
-    const body = JSON.stringify(makeProviderValidSubscriptionPayload());
+    const body = JSON.stringify(makeProviderValidDisputePayload());
     const webhookId = "wh_http_failure_001";
     const timestampSeconds = String(Math.floor(BASE_TIMESTAMP / 1000));
     const signature = await signDodoPayload(body, webhookId, timestampSeconds);
@@ -153,8 +193,10 @@ describe("Dodo webhook failure tracking", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       webhookId,
-      eventType: "subscription.active",
-      dodoSubscriptionId: "sub_http_failure",
+      eventType: "dispute.opened",
+      // The SDK's Dispute schema drops `subscription_id`, so the payment id is
+      // the subscription-adjacent identifier a dispute actually carries.
+      dodoPaymentId: "pay_http_failure",
       dodoCustomerId: "cus_http_failure",
       unresolved: true,
       attemptCount: 1,
@@ -166,12 +208,12 @@ describe("Dodo webhook failure tracking", () => {
       internal.payments.webhookMutations.reportDodoWebhookFailure,
       {
         webhookId,
-        eventType: "subscription.active",
+        eventType: "dispute.opened",
         errorKind: "Error",
         errorMessage: "Cannot resolve userId",
         attemptCount: 1,
         unresolvedCount: 1,
-        eventTypes: ["subscription.active"],
+        eventTypes: ["dispute.opened"],
       },
     );
     expect(reportLog).toHaveBeenCalledWith(
@@ -186,7 +228,7 @@ describe("Dodo webhook failure tracking", () => {
       vi.spyOn(Date, "now").mockReturnValue(BASE_TIMESTAMP);
       process.env.DODO_PAYMENTS_WEBHOOK_SECRET = DODO_WEBHOOK_SECRET;
       const t = await makeT();
-      const body = JSON.stringify(makeProviderValidSubscriptionPayload());
+      const body = JSON.stringify(makeProviderValidDisputePayload());
       const webhookId = "wh_http_signal_001";
       const timestampSeconds = String(Math.floor(BASE_TIMESTAMP / 1000));
       const signature = await signDodoPayload(body, webhookId, timestampSeconds);
@@ -212,10 +254,10 @@ describe("Dodo webhook failure tracking", () => {
       expect(reportJobs[0].args).toEqual([
         expect.objectContaining({
           webhookId,
-          eventType: "subscription.active",
+          eventType: "dispute.opened",
           attemptCount: 1,
           unresolvedCount: 1,
-          eventTypes: ["subscription.active"],
+          eventTypes: ["dispute.opened"],
         }),
       ]);
     } finally {
@@ -529,6 +571,13 @@ describe("Dodo webhook failure tracking", () => {
     });
 
     expect(response.status).toBe(200);
+    // #7900: this existing signed fixture uses an unmapped product. It proves
+    // the authenticated fallback, not that a buyer can purchase that product.
+    const entitlement = await t.query(internal.entitlements.getEntitlementsByUserId, {
+      userId: "user_http_recovery",
+    });
+    expect(entitlement.planKey).toBe("enterprise");
+    expect(entitlement.features).toEqual(PRODUCT_CATALOG.enterprise.features);
     const rows = await t.run(async (ctx) =>
       ctx.db.query("paymentWebhookFailures").collect(),
     );
@@ -730,6 +779,8 @@ describe("Dodo webhook failure tracking", () => {
 
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("Invalid webhook signature");
+    expect(await t.run((ctx) => ctx.db.query("entitlements").collect())).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("subscriptions").collect())).toEqual([]);
     const rows = await t.run(async (ctx) =>
       ctx.db.query("paymentWebhookFailures").collect(),
     );

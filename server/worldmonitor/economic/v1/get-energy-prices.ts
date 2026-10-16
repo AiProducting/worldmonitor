@@ -11,6 +11,8 @@ import type {
 
 import { getCachedJson } from '../../../_shared/redis';
 import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
+// sebuf serializes repeated query params comma-form; split before filtering.
+import { parseStringArray } from '../../../_shared/parse-string-array';
 
 const REDIS_CACHE_KEY = 'economic:energy:v1';
 const REDIS_CACHE_TTL = 3600; // 1 hr — weekly EIA data
@@ -109,8 +111,9 @@ export async function getEnergyPrices(
   try {
     const result = await getCachedJson(SEED_CACHE_KEY, true) as GetEnergyPricesResponse | null;
     if (!result?.prices?.length) return markNoStoreFallbackResponse(ctx.request, { prices: [] });
-    if (req.commodities.length > 0) {
-      return { prices: result.prices.filter(p => req.commodities.includes(p.commodity)) };
+    const commodities = parseStringArray(req.commodities);
+    if (commodities.length > 0) {
+      return { prices: result.prices.filter(p => commodities.includes(p.commodity)) };
     }
     return result;
   } catch {

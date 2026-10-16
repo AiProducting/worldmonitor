@@ -2,14 +2,17 @@ import type {
   AnalyzeStockRequest,
   AnalyzeStockResponse,
   AnalystConsensus,
+  EarningsEntry,
+  HeadlineAlignmentRule,
   PriceTarget,
   UpgradeDowngrade,
   ServerContext,
   StockAnalysisHeadline,
 } from '../../../../src/generated/server/worldmonitor/market/v1/service_server';
 import { callLlm } from '../../../_shared/llm';
-import { cachedFetchJson } from '../../../_shared/redis';
+import { cachedFetchJson, getCachedJson } from '../../../_shared/redis';
 import { CHROME_UA, yahooGate } from '../../../_shared/constants';
+import { sha256Hex } from '../../../_shared/hash';
 import { UPSTREAM_TIMEOUT_MS, sanitizeSymbol } from './_shared';
 import { storeStockAnalysisSnapshot } from './premium-stock-store';
 import { searchRecentStockHeadlines } from './stock-news-search';
@@ -25,7 +28,7 @@ export type Candle = {
 
 type TrendStatus = 'Strong bull' | 'Bull' | 'Weak bull' | 'Consolidation' | 'Weak bear' | 'Bear' | 'Strong bear';
 type VolumeStatus = 'Heavy volume up' | 'Heavy volume down' | 'Shrink volume up' | 'Shrink volume down' | 'Normal';
-type Signal = 'Strong buy' | 'Buy' | 'Hold' | 'Watch' | 'Sell' | 'Strong sell';
+export type Signal = 'Strong buy' | 'Buy' | 'Hold' | 'Watch' | 'Sell' | 'Strong sell';
 type MacdStatus = 'Golden cross above zero' | 'Golden cross' | 'Bullish' | 'Crossing up' | 'Crossing down' | 'Bearish' | 'Death cross';
 type RsiStatus = 'Overbought' | 'Strong buy' | 'Neutral' | 'Weak' | 'Oversold';
 
@@ -64,6 +67,9 @@ export type TechnicalSnapshot = {
   signalScore: number;
   bullishFactors: string[];
   riskFactors: string[];
+  realizedVolatility: number;
+  atr: number;
+  maxDrawdown: number;
 };
 
 export type AiOverlay = {
@@ -73,6 +79,7 @@ export type AiOverlay = {
   whyNow: string;
   technicalSummary: string;
   newsSummary: string;
+  newsSentiment?: number;
   bullishFactors: string[];
   riskFactors: string[];
   provider: string;
@@ -82,6 +89,10 @@ export type AiOverlay = {
 
 type YahooChartResponse = {
   chart?: {
+    error?: {
+      code?: string;
+      description?: string;
+    } | null;
     result?: Array<{
       timestamp?: number[];
       meta?: {
@@ -107,7 +118,7 @@ type YahooChartResponse = {
           volume?: Array<number | null>;
         }>;
       };
-    }>;
+    }> | null;
   };
 };
 
@@ -446,7 +457,7 @@ const BIAS_THRESHOLD = 5;
 const VOLUME_SHRINK_RATIO = 0.7;
 const VOLUME_HEAVY_RATIO = 1.5;
 const MA_SUPPORT_TOLERANCE = 0.02;
-export const STOCK_ANALYSIS_ENGINE_VERSION = 'v2';
+export const STOCK_ANALYSIS_ENGINE_VERSION = 'v3-composite';
 
 function round(value: number, digits = 2): number {
   return Number.isFinite(value) ? Number(value.toFixed(digits)) : 0;
@@ -454,6 +465,17 @@ function round(value: number, digits = 2): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * Normalize an LLM-supplied news-sentiment reading to a rounded score in
+ * [-1, 1], or undefined when the value is missing or not a finite number (so
+ * the field is omitted rather than defaulted). Exported for unit tests.
+ * @param value Raw value parsed from the overlay model's JSON.
+ */
+export function normalizeNewsSentiment(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return round(clamp(value, -1, 1), 2);
 }
 
 export function signalDirection(signal: string): 'long' | 'short' | null {
@@ -554,6 +576,97 @@ function uniqueRounded(values: number[]): number[] {
     out.push(rounded);
   }
   return out;
+}
+
+// ── Risk analytics ──────────────────────────────────────────────────────────
+// Pure functions over the daily candles already fetched by fetchYahooHistory —
+// no extra upstream call. Exported for unit tests.
+
+const TRADING_DAYS_PER_YEAR = 252;
+const ATR_PERIOD = 14;
+
+/**
+ * Sample standard deviation (Bessel-corrected, n − 1). Returns 0 for a series
+ * with fewer than two values.
+ */
+function stdev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const avg = mean(values);
+  const variance = values.reduce((sum, value) => sum + (value - avg) ** 2, 0) / (values.length - 1);
+  return Math.sqrt(variance);
+}
+
+/**
+ * Annualized realized volatility: the sample standard deviation of daily log
+ * returns scaled by √252, expressed as a fractional ratio (0.25 means 25%).
+ * Returns 0 when fewer than two usable closes are supplied.
+ * @param closes Chronological close prices.
+ */
+export function computeRealizedVolatility(closes: number[]): number {
+  const logReturns: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    const prev = closes[i - 1];
+    const curr = closes[i];
+    if (prev === undefined || curr === undefined || prev <= 0 || curr <= 0) continue;
+    logReturns.push(Math.log(curr / prev));
+  }
+  if (logReturns.length < 2) return 0;
+  return stdev(logReturns) * Math.sqrt(TRADING_DAYS_PER_YEAR);
+}
+
+/**
+ * Wilder's Average True Range over `period` bars, in the candles' price units.
+ * True range is max(high − low, |high − prevClose|, |low − prevClose|); the
+ * first bar seeds on high − low. The window is seeded with the simple average
+ * of the first `period` true ranges, then Wilder-smoothed. Returns 0 when fewer
+ * than two aligned bars are supplied.
+ * @param highs Chronological high prices.
+ * @param lows Chronological low prices, index-aligned with `highs`.
+ * @param closes Chronological close prices, index-aligned with `highs`.
+ * @param period Averaging window (defaults to 14).
+ */
+export function computeAtr(highs: number[], lows: number[], closes: number[], period = ATR_PERIOD): number {
+  const length = Math.min(highs.length, lows.length, closes.length);
+  if (period < 1 || length < period) return 0;
+  const trueRanges: number[] = [];
+  for (let i = 0; i < length; i++) {
+    const high = highs[i];
+    const low = lows[i];
+    if (high === undefined || low === undefined) continue;
+    const prevClose = i > 0 ? closes[i - 1] : undefined;
+    if (i === 0 || prevClose === undefined) {
+      trueRanges.push(high - low);
+      continue;
+    }
+    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+  if (trueRanges.length === 0) return 0;
+  if (trueRanges.length < period) return 0;
+  let atr = mean(trueRanges.slice(0, period));
+  for (let i = period; i < trueRanges.length; i++) {
+    atr = (atr * (period - 1) + (trueRanges[i] ?? 0)) / period;
+  }
+  return atr;
+}
+
+/**
+ * Maximum peak-to-trough drawdown over the series, as a non-positive fractional
+ * ratio (−0.25 means a 25% decline from a prior peak). Returns 0 for an empty,
+ * single-point, or monotonically non-decreasing series.
+ * @param closes Chronological close prices.
+ */
+export function computeMaxDrawdown(closes: number[]): number {
+  let peak = -Infinity;
+  let maxDrawdown = 0;
+  for (const close of closes) {
+    if (!Number.isFinite(close)) continue;
+    if (close > peak) peak = close;
+    if (peak > 0) {
+      const drawdown = (close - peak) / peak;
+      if (drawdown < maxDrawdown) maxDrawdown = drawdown;
+    }
+  }
+  return maxDrawdown;
 }
 
 // ── US-equity market session (#4922d) ───────────────────────────────────────
@@ -665,6 +778,101 @@ export function usEquityHoursApply(symbol: string, currency: string): boolean {
   return currency === 'USD' && !/\.[A-Za-z]+$/.test(symbol);
 }
 
+export type NewsAlignment = {
+  marketSessionAtPublish: UsEquitySession;
+  alignedTradingDate: string;
+  alignmentRule: HeadlineAlignmentRule;
+};
+
+function nyCalendarDate(date: Date): string {
+  const parts: Record<string, string> = {};
+  for (const part of ET_PARTS_FMT.formatToParts(date)) parts[part.type] = part.value;
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addUtcDays(isoDate: string, days: number): string {
+  const next = new Date(`${isoDate}T12:00:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next.toISOString().slice(0, 10);
+}
+
+/** Minutes since ET midnight for `date`. */
+function etMinutesOfDay(date: Date): number {
+  const parts: Record<string, string> = {};
+  for (const part of ET_PARTS_FMT.formatToParts(date)) parts[part.type] = part.value;
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
+/** True when `isoDate` (YYYY-MM-DD) is itself an NYSE/Nasdaq regular session date. */
+export function isUsEquityTradingDate(isoDate: string): boolean {
+  return getUsEquitySessionAt(new Date(`${isoDate}T16:00:00.000Z`)) === 'regular';
+}
+
+/** Next NYSE/Nasdaq regular session date after `fromDate` (YYYY-MM-DD). */
+export function nextUsEquityTradingDate(fromDate: string): string {
+  let candidate = fromDate;
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    candidate = addUtcDays(candidate, 1);
+    if (getUsEquitySessionAt(new Date(`${candidate}T16:00:00.000Z`)) === 'regular') return candidate;
+  }
+  return addUtcDays(fromDate, 1);
+}
+
+/**
+ * Map a headline timestamp onto the US equity session it belongs to.
+ * Bookkeeping only — not a claim that the article caused a later move.
+ */
+export function alignUsEquityNewsTimestamp(publishedAt: number): NewsAlignment | null {
+  if (!Number.isFinite(publishedAt) || publishedAt <= 0) return null;
+  const published = new Date(publishedAt);
+  if (Number.isNaN(published.getTime())) return null;
+  const localDate = nyCalendarDate(published);
+  const session = getUsEquitySessionAt(published);
+  // getUsEquitySessionAt reports 'closed' for two structurally different
+  // windows: after the post session ends (20:00-24:00 ET) and before pre-market
+  // opens (00:00-04:00 ET). Only the first belongs to the next trading day. An
+  // overnight publish precedes that same day's 04:00 pre-market by hours, so
+  // rolling it forward would skip the session it actually leads into — and
+  // nextUsEquityTradingDate can never return fromDate, since it increments
+  // before its first probe.
+  if (session === 'closed'
+    && etMinutesOfDay(published) < 4 * 60
+    && isUsEquityTradingDate(localDate)) {
+    return {
+      marketSessionAtPublish: session,
+      alignedTradingDate: localDate,
+      alignmentRule: 'HEADLINE_ALIGNMENT_RULE_OVERNIGHT_SAME_TRADING_DAY',
+    };
+  }
+  if (session === 'post' || session === 'closed') {
+    return {
+      marketSessionAtPublish: session,
+      alignedTradingDate: nextUsEquityTradingDate(localDate),
+      alignmentRule: session === 'post' ? 'HEADLINE_ALIGNMENT_RULE_AFTER_HOURS_NEXT_TRADING_DAY' : 'HEADLINE_ALIGNMENT_RULE_NON_SESSION_NEXT_TRADING_DAY',
+    };
+  }
+  return {
+    marketSessionAtPublish: session,
+    alignedTradingDate: localDate,
+    alignmentRule: session === 'regular' ? 'HEADLINE_ALIGNMENT_RULE_REGULAR_SESSION_SAME_TRADING_DAY' : 'HEADLINE_ALIGNMENT_RULE_PREMARKET_SAME_TRADING_DAY',
+  };
+}
+
+export function alignStockHeadlines(
+  headlines: StockAnalysisHeadline[],
+  applyUsHours: boolean,
+): StockAnalysisHeadline[] {
+  return headlines.map((headline) => {
+    const alignment = applyUsHours ? alignUsEquityNewsTimestamp(headline.publishedAt) : null;
+    return {
+      ...headline,
+      marketSessionAtPublish: alignment?.marketSessionAtPublish ?? '',
+      alignedTradingDate: alignment?.alignedTradingDate ?? '',
+      alignmentRule: alignment?.alignmentRule ?? 'HEADLINE_ALIGNMENT_RULE_UNSPECIFIED',
+    };
+  });
+}
+
 export type ExtendedHoursQuote = { price: number; changePercent: number };
 
 /**
@@ -723,16 +931,46 @@ export async function fetchExtendedHoursQuote(
   }
 }
 
-export async function fetchYahooHistory(symbol: string): Promise<{ candles: Candle[]; currency: string } | null> {
+export type YahooHistoryOutcome =
+  | { status: 'success'; history: { candles: Candle[]; currency: string } }
+  | { status: 'invalid-symbol' }
+  | { status: 'unavailable' }
+  /** The request itself rejected (timeout, network). Transient, so never negatively cached as absence. */
+  | { status: 'request-failed' };
+
+/** Thrown inside a cache fetcher so `cachedFetchJson` applies its short fetcher-error TTL. */
+class YahooHistoryRequestFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'YahooHistoryRequestFailedError';
+  }
+}
+
+function isDefinitiveYahooInvalidSymbol(status: number, data: YahooChartResponse | null): boolean {
+  if (status === 404) return true;
+  const code = data?.chart?.error?.code?.toLowerCase() ?? '';
+  const description = data?.chart?.error?.description?.toLowerCase() ?? '';
+  return code === 'not found'
+    || description.includes('no data found')
+    || description.includes('symbol may be delisted');
+}
+
+export async function fetchYahooHistoryOutcome(symbol: string): Promise<YahooHistoryOutcome> {
   await yahooGate();
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=6mo&interval=1d&includePrePost=true&events=div,splits`;
-  const response = await fetch(url, {
-    headers: { 'User-Agent': CHROME_UA },
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { 'User-Agent': CHROME_UA },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch {
+    return { status: 'request-failed' };
+  }
+  const data = await response.json().catch(() => null) as YahooChartResponse | null;
+  if (isDefinitiveYahooInvalidSymbol(response.status, data)) return { status: 'invalid-symbol' };
+  if (!response.ok || !data) return { status: 'unavailable' };
 
-  const data = await response.json() as YahooChartResponse;
   const result = data.chart?.result?.[0];
   const quote = result?.indicators?.quote?.[0];
   const timestamps = result?.timestamp ?? [];
@@ -748,7 +986,11 @@ export async function fetchYahooHistory(symbol: string): Promise<{ candles: Cand
     const open = opens[i];
     const high = highs[i];
     const low = lows[i];
-    if (![close, open, high, low].every((value) => typeof value === 'number' && Number.isFinite(value))) continue;
+    if (![close, open, high, low].every(
+      (value) => typeof value === 'number' && Number.isFinite(value) && value > 0,
+    )) continue;
+    if ((high as number) < Math.max(open as number, close as number, low as number)
+      || (low as number) > Math.min(open as number, close as number, high as number)) continue;
     candles.push({
       timestamp: (timestamps[i] ?? 0) * 1000,
       open: open as number,
@@ -759,8 +1001,16 @@ export async function fetchYahooHistory(symbol: string): Promise<{ candles: Cand
     });
   }
 
-  if (candles.length < 30) return null;
-  return { candles, currency: result?.meta?.currency || 'USD' };
+  if (candles.length < 30) return { status: 'unavailable' };
+  return {
+    status: 'success',
+    history: { candles, currency: result?.meta?.currency || 'USD' },
+  };
+}
+
+export async function fetchYahooHistory(symbol: string): Promise<{ candles: Candle[]; currency: string } | null> {
+  const outcome = await fetchYahooHistoryOutcome(symbol);
+  return outcome.status === 'success' ? outcome.history : null;
 }
 
 function safeRaw(field: { raw?: number } | undefined): number {
@@ -873,6 +1123,7 @@ export async function fetchYahooAnalystData(symbol: string): Promise<AnalystData
 export function buildTechnicalSnapshot(candles: Candle[]): TechnicalSnapshot {
   const closes = candles.map((candle) => candle.close);
   const highs = candles.map((candle) => candle.high);
+  const lows = candles.map((candle) => candle.low);
   const volumes = candles.map((candle) => candle.volume);
 
   const ma5Series = smaSeries(closes, 5);
@@ -1131,12 +1382,11 @@ export function buildTechnicalSnapshot(candles: Candle[]): TechnicalSnapshot {
 
   signalScore = clamp(Math.round(signalScore), 0, 100);
 
-  let signal: Signal = 'Sell';
-  if (signalScore >= 75 && (trendStatus === 'Strong bull' || trendStatus === 'Bull')) signal = 'Strong buy';
-  else if (signalScore >= 60 && (trendStatus === 'Strong bull' || trendStatus === 'Bull' || trendStatus === 'Weak bull')) signal = 'Buy';
-  else if (signalScore >= 45) signal = 'Hold';
-  else if (signalScore >= 30) signal = 'Watch';
-  else if (trendStatus === 'Bear' || trendStatus === 'Strong bear') signal = 'Strong sell';
+  const signal = deriveSignal(signalScore, trendStatus);
+
+  const realizedVolatility = computeRealizedVolatility(closes);
+  const atr = computeAtr(highs, lows, closes);
+  const maxDrawdown = computeMaxDrawdown(closes);
 
   return {
     currentPrice: round(currentPrice),
@@ -1173,10 +1423,169 @@ export function buildTechnicalSnapshot(candles: Candle[]): TechnicalSnapshot {
     signalScore,
     bullishFactors: bullishFactors.slice(0, 6),
     riskFactors: riskFactors.slice(0, 6),
+    realizedVolatility: round(realizedVolatility, 4),
+    atr: round(atr, 2),
+    maxDrawdown: round(maxDrawdown, 4),
   };
 }
 
-export function getFallbackOverlay(name: string, technical: TechnicalSnapshot, headlines: StockAnalysisHeadline[]): AiOverlay {
+// Shared earnings-calendar seed (scripts/seed-earnings-calendar.mjs): a bulk
+// list of upcoming/recent reporters, TTL 36h. analyze-stock joins the current
+// symbol against it to surface the next-earnings catalyst.
+const EARNINGS_CALENDAR_CACHE_KEY = 'market:earnings-calendar:v1';
+
+export type UpcomingEarnings = {
+  nextEarningsDate: string;
+  consensusEps?: number;
+  consensusRevenue?: number;
+};
+
+/**
+ * Pick the next upcoming earnings event for `symbol` from the earnings-calendar
+ * seed. The seed window looks back 7 days, so it also holds already-reported
+ * events — this returns only the earliest entry dated `todayStr` or later that
+ * has not yet reported (hasActuals === false), and omits absent/zero estimates.
+ * Returns null when the symbol has no upcoming entry.
+ */
+export function selectEarningsForSymbol(
+  earnings: readonly EarningsEntry[],
+  symbol: string,
+  todayStr: string,
+): UpcomingEarnings | null {
+  let pick: EarningsEntry | null = null;
+  for (const entry of earnings) {
+    if (entry.symbol !== symbol || entry.hasActuals || !entry.date || entry.date < todayStr) continue;
+    if (!pick || entry.date < pick.date) pick = entry;
+  }
+  if (!pick) return null;
+  const result: UpcomingEarnings = { nextEarningsDate: pick.date };
+  if (Number.isFinite(pick.epsEstimate) && pick.epsEstimate !== 0) result.consensusEps = pick.epsEstimate;
+  if (Number.isFinite(pick.revenueEstimate) && pick.revenueEstimate > 0) result.consensusRevenue = pick.revenueEstimate;
+  return result;
+}
+
+/** Read the shared earnings-calendar seed; returns [] when absent or unreachable. */
+async function fetchUpcomingEarnings(): Promise<EarningsEntry[]> {
+  try {
+    const cached = await getCachedJson(EARNINGS_CALENDAR_CACHE_KEY, true) as { earnings?: EarningsEntry[] } | null;
+    return cached?.earnings ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Map a 0-100 score plus trend to the Strong buy…Strong sell rating. Extracted
+ * verbatim from the former inline logic in {@link buildTechnicalSnapshot} so the
+ * same thresholds drive both the technicals-only signal and the
+ * fundamentals-blended composite rating.
+ */
+export function deriveSignal(score: number, trendStatus: TrendStatus): Signal {
+  if (score >= 75 && (trendStatus === 'Strong bull' || trendStatus === 'Bull')) return 'Strong buy';
+  if (score >= 60 && (trendStatus === 'Strong bull' || trendStatus === 'Bull' || trendStatus === 'Weak bull')) return 'Buy';
+  if (score >= 45) return 'Hold';
+  if (score >= 30) return 'Watch';
+  if (trendStatus === 'Bear' || trendStatus === 'Strong bear') return 'Strong sell';
+  return 'Sell';
+}
+
+// Ascending [threshold, score] bands. Returns the score of the highest
+// threshold `value` clears; bands[0] is the floor (its threshold is -Infinity).
+type ScoreBand = readonly [threshold: number, score: number];
+function bandScore(value: number, bands: readonly ScoreBand[]): number {
+  let score = 50; // neutral default; overwritten by the -Infinity floor band on the first pass
+  for (const [threshold, bandValue] of bands) {
+    if (value >= threshold) score = bandValue;
+    else break;
+  }
+  return score;
+}
+
+// Technicals lead the composite; fundamentals temper the rating rather than
+// override it. Named so the weighting is easy to find and tune.
+const FUNDAMENTAL_TECHNICAL_WEIGHT = 0.65;
+
+/**
+ * Fundamental health score (0-100) from the quality / growth / leverage fields
+ * Yahoo returns in the financialData module (already fetched for price targets).
+ * Each present sub-metric maps to a 0-100 band; each dimension averages its
+ * present metrics, and the dimensions combine with a quality-heavy weighting
+ * (renormalised over whichever dimensions are present). Returns null when the
+ * data is too sparse to be meaningful (fewer than 3 metrics or fewer than 2
+ * dimensions) so data-poor names fall back to a technicals-only rating instead
+ * of being penalised for missing data.
+ */
+export function computeFundamentalScore(f: StockFundamentals): number | null {
+  const finite = (v: number | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+  // Quality — margins, returns on capital, cash generation. Higher is better.
+  const quality: number[] = [];
+  const profitMargin = finite(f.profitMargin);
+  if (profitMargin !== null) quality.push(bandScore(profitMargin, [[-Infinity, 15], [0, 42], [0.05, 58], [0.12, 75], [0.20, 90]]));
+  const operatingMargin = finite(f.operatingMargin);
+  if (operatingMargin !== null) quality.push(bandScore(operatingMargin, [[-Infinity, 18], [0, 45], [0.08, 62], [0.18, 80], [0.30, 92]]));
+  const grossMargin = finite(f.grossMargin);
+  if (grossMargin !== null) quality.push(bandScore(grossMargin, [[-Infinity, 30], [0.20, 50], [0.35, 64], [0.50, 78], [0.65, 90]]));
+  const returnOnEquity = finite(f.returnOnEquity);
+  if (returnOnEquity !== null) quality.push(bandScore(returnOnEquity, [[-Infinity, 20], [0, 45], [0.10, 65], [0.18, 80], [0.30, 90]]));
+  const returnOnAssets = finite(f.returnOnAssets);
+  if (returnOnAssets !== null) quality.push(bandScore(returnOnAssets, [[-Infinity, 20], [0, 45], [0.05, 63], [0.10, 80], [0.18, 90]]));
+  const freeCashflow = finite(f.freeCashflow);
+  if (freeCashflow !== null) quality.push(freeCashflow > 0 ? 72 : 32); // FCF sign only — magnitude isn't comparable across market caps.
+
+  // Growth — top and bottom line. Higher is better.
+  const growth: number[] = [];
+  const revenueGrowth = finite(f.revenueGrowth);
+  if (revenueGrowth !== null) growth.push(bandScore(revenueGrowth, [[-Infinity, 12], [-0.05, 35], [0.03, 55], [0.12, 75], [0.25, 90]]));
+  const earningsGrowth = finite(f.earningsGrowth);
+  if (earningsGrowth !== null) growth.push(bandScore(earningsGrowth, [[-Infinity, 12], [-0.10, 35], [0.05, 58], [0.20, 78], [0.40, 90]]));
+
+  // Leverage — lower debt is healthier, so the score falls as debt rises.
+  const leverage: number[] = [];
+  const debtToEquity = finite(f.debtToEquity);
+  if (debtToEquity !== null) {
+    // fetchYahooAnalystData already converts Yahoo's percentage points to a
+    // normalized ratio (150 -> 1.5x). Score that ratio exactly once.
+    leverage.push(debtToEquity < 0 ? 25 : debtToEquity <= 0.3 ? 90 : debtToEquity <= 0.6 ? 78 : debtToEquity <= 1.0 ? 62 : debtToEquity <= 2.0 ? 42 : 22);
+  }
+  const totalCash = finite(f.totalCash);
+  const totalDebt = finite(f.totalDebt);
+  if (totalCash !== null && totalDebt !== null) {
+    leverage.push(totalCash >= totalDebt ? 85 : totalCash >= totalDebt * 0.5 ? 62 : 40);
+  }
+
+  const metricCount = quality.length + growth.length + leverage.length;
+  if (metricCount < 3) return null;
+
+  const dimensions: Array<{ score: number; weight: number }> = [];
+  if (quality.length) dimensions.push({ score: mean(quality), weight: 0.5 });
+  if (growth.length) dimensions.push({ score: mean(growth), weight: 0.3 });
+  if (leverage.length) dimensions.push({ score: mean(leverage), weight: 0.2 });
+  if (dimensions.length < 2) return null;
+
+  const weightTotal = dimensions.reduce((sum, d) => sum + d.weight, 0);
+  const blended = dimensions.reduce((sum, d) => sum + d.score * d.weight, 0) / weightTotal;
+  return clamp(Math.round(blended), 0, 100);
+}
+
+/**
+ * Blend the technicals-only {@link signalScore} with {@link computeFundamentalScore}.
+ * Returns signalScore unchanged when the fundamental score is null (sparse data),
+ * so the rating is never altered for names we cannot fundamentally score.
+ */
+export function computeCompositeScore(signalScore: number, fundamentalScore: number | null): number {
+  if (fundamentalScore === null) return signalScore;
+  return clamp(Math.round(FUNDAMENTAL_TECHNICAL_WEIGHT * signalScore + (1 - FUNDAMENTAL_TECHNICAL_WEIGHT) * fundamentalScore), 0, 100);
+}
+
+export function getFallbackOverlay(
+  name: string,
+  technical: TechnicalSnapshot,
+  headlines: StockAnalysisHeadline[],
+  ratingScore = technical.signalScore,
+  ratingSignal: Signal = technical.signal,
+): AiOverlay {
+  const resolvedRatingScore = Number.isFinite(ratingScore) ? ratingScore : technical.signalScore;
   const technicalSummary = `${technical.maAlignment} ${technical.volumeTrend} ${technical.macdSignal} ${technical.rsiSignal}`;
   const newsSummary = headlines.length > 0
     ? `Recent coverage is led by ${headlines[0]?.source || 'market press'}: ${headlines[0]?.title || 'no headline available'}`
@@ -1189,10 +1598,10 @@ export function getFallbackOverlay(name: string, technical: TechnicalSnapshot, h
     'Sell': 'Reduce exposure into strength.',
     'Strong sell': 'Exit or avoid new long exposure.',
   };
-  const confidence = technical.signalScore >= 75 ? 'High' : technical.signalScore >= 55 ? 'Medium' : 'Low';
+  const confidence = resolvedRatingScore >= 75 ? 'High' : resolvedRatingScore >= 55 ? 'Medium' : 'Low';
   return {
-    summary: `${name} screens as ${technical.signal.toLowerCase()} with a ${technical.trendStatus.toLowerCase()} setup and a ${technical.signalScore}/100 score.`,
-    action: actionMap[technical.signal],
+    summary: `${name} screens as ${ratingSignal.toLowerCase()} with a ${technical.trendStatus.toLowerCase()} setup and a ${resolvedRatingScore}/100 score.`,
+    action: actionMap[ratingSignal],
     confidence,
     whyNow: `Price sits ${technical.biasMa5}% versus MA5, MACD is ${technical.macdStatus.toLowerCase()}, and RSI(12) is ${technical.rsi12}.`,
     technicalSummary,
@@ -1205,26 +1614,66 @@ export function getFallbackOverlay(name: string, technical: TechnicalSnapshot, h
   };
 }
 
+function getRatingFallbackOverlay(
+  name: string,
+  technical: TechnicalSnapshot,
+  headlines: StockAnalysisHeadline[],
+  fundamentalScore: number | null,
+  compositeScore: number,
+  ratingSignal: Signal,
+): AiOverlay {
+  const overlay = getFallbackOverlay(name, technical, headlines, compositeScore, ratingSignal);
+  if (fundamentalScore == null) return overlay;
+
+  const fundamentalFactor = `Fundamental quality scores ${fundamentalScore}/100.`;
+  return {
+    ...overlay,
+    whyNow: `${overlay.whyNow} The composite rating blends a ${technical.signalScore}/100 technical score with a ${fundamentalScore}/100 fundamental score.`,
+    bullishFactors: fundamentalScore >= 55
+      ? [fundamentalFactor, ...overlay.bullishFactors].slice(0, 4)
+      : overlay.bullishFactors,
+    riskFactors: fundamentalScore < 55
+      ? [fundamentalFactor, ...overlay.riskFactors].slice(0, 4)
+      : overlay.riskFactors,
+  };
+}
+
 async function buildAiOverlay(
   symbol: string,
   name: string,
   technical: TechnicalSnapshot,
   headlines: StockAnalysisHeadline[],
   fundamentals: StockFundamentals,
-): Promise<AiOverlay> {
-  const fallback = getFallbackOverlay(name, technical, headlines);
+  fundamentalScore: number | null,
+  compositeScore: number,
+  ratingSignal: Signal,
+): Promise<{ legacy: AiOverlay; rating: AiOverlay }> {
+  const legacyFallback = getFallbackOverlay(name, technical, headlines);
+  const ratingFallback = getRatingFallbackOverlay(
+    name,
+    technical,
+    headlines,
+    fundamentalScore,
+    compositeScore,
+    ratingSignal,
+  );
   const hasFundamentals = Object.values(fundamentals).some((v) => typeof v === 'number');
   const llm = await callLlm({
     messages: [
       {
         role: 'system',
-        content: 'You are a disciplined stock analyst. Weigh the fundamentals alongside the technicals and news — do not judge on price action alone. All margin, return, growth, and debtToEquity values are decimal ratios (0.25 means 25%; debtToEquity 1.5 means debt is 1.5x equity). totalCash, totalDebt, freeCashflow, and ebitda are denominated in fundamentals.financialCurrency. Treat missing values as unknown. Return strict JSON only with keys: summary, action, confidence, whyNow, technicalSummary, newsSummary, bullishFactors, riskFactors. Keep it concise, factual, and free of disclaimers.',
+        content: 'You are a disciplined stock analyst. Return strict JSON only with top-level keys technical, rating, and newsSentiment. technical and rating must each contain summary, action, confidence, whyNow, technicalSummary, newsSummary, bullishFactors, and riskFactors. The technical narrative must remain paired with technical.signal and technical.signalScore; do not change its stated rating, action, or confidence based on fundamentals. The rating narrative must remain paired with rating.signal and rating.compositeScore and weigh fundamentals alongside technicals and news. All margin, return, growth, and debtToEquity values are decimal ratios (0.25 means 25%; debtToEquity 1.5 means debt is 1.5x equity). totalCash, totalDebt, freeCashflow, and ebitda are denominated in fundamentals.financialCurrency. Treat missing values as unknown. newsSentiment is a signed number from -1 to 1 scoring how bullish the supplied news headlines are for the stock (-1 very bearish, 0 neutral or no material news, 1 very bullish); base it only on the supplied headlines. newsSentiment is a model overlay, not a cause of any price move; do not claim a headline drove or caused the tape. Keep both narratives concise, factual, and free of disclaimers.',
       },
       {
         role: 'user',
         content: JSON.stringify({
           symbol,
           name,
+          rating: {
+            signal: ratingSignal,
+            compositeScore,
+            fundamentalScore: fundamentalScore ?? undefined,
+          },
           technical: {
             signal: technical.signal,
             signalScore: technical.signalScore,
@@ -1259,49 +1708,67 @@ async function buildAiOverlay(
       },
     ],
     temperature: 0.2,
-    maxTokens: 500,
+    maxTokens: 800,
     timeoutMs: 20_000,
     stage: 'analyze-stock',
     providerOrder: ['openrouter', 'generic'],
     validate: (content) => {
       try {
         const parsed = JSON.parse(content) as Record<string, unknown>;
-        return typeof parsed.summary === 'string' && typeof parsed.action === 'string';
+        const technicalNarrative = parsed.technical;
+        const ratingNarrative = parsed.rating;
+        return typeof technicalNarrative === 'object'
+          && technicalNarrative !== null
+          && typeof (technicalNarrative as Record<string, unknown>).summary === 'string'
+          && typeof (technicalNarrative as Record<string, unknown>).action === 'string'
+          && typeof ratingNarrative === 'object'
+          && ratingNarrative !== null
+          && typeof (ratingNarrative as Record<string, unknown>).summary === 'string'
+          && typeof (ratingNarrative as Record<string, unknown>).action === 'string'
+          && (headlines.length === 0
+            || (typeof parsed.newsSentiment === 'number' && Number.isFinite(parsed.newsSentiment)));
       } catch {
         return false;
       }
     },
   });
 
-  if (!llm) return fallback;
+  if (!llm) return { legacy: legacyFallback, rating: ratingFallback };
 
   try {
     const parsed = JSON.parse(llm.content) as {
-      summary?: string;
-      action?: string;
-      confidence?: string;
-      whyNow?: string;
-      technicalSummary?: string;
-      newsSummary?: string;
-      bullishFactors?: string[];
-      riskFactors?: string[];
+      technical?: Record<string, unknown>;
+      rating?: Record<string, unknown>;
+      newsSentiment?: number;
     };
 
-    return {
-      summary: parsed.summary?.trim() || fallback.summary,
-      action: parsed.action?.trim() || fallback.action,
-      confidence: parsed.confidence?.trim() || fallback.confidence,
-      whyNow: parsed.whyNow?.trim() || fallback.whyNow,
-      technicalSummary: parsed.technicalSummary?.trim() || fallback.technicalSummary,
-      newsSummary: parsed.newsSummary?.trim() || fallback.newsSummary,
-      bullishFactors: Array.isArray(parsed.bullishFactors) && parsed.bullishFactors.length > 0 ? parsed.bullishFactors.slice(0, 4) : fallback.bullishFactors,
-      riskFactors: Array.isArray(parsed.riskFactors) && parsed.riskFactors.length > 0 ? parsed.riskFactors.slice(0, 4) : fallback.riskFactors,
+    const mergeWithFallback = (
+      narrative: Record<string, unknown> | undefined,
+      fallback: AiOverlay,
+    ): AiOverlay => ({
+      summary: typeof narrative?.summary === 'string' && narrative.summary.trim() ? narrative.summary.trim() : fallback.summary,
+      action: typeof narrative?.action === 'string' && narrative.action.trim() ? narrative.action.trim() : fallback.action,
+      confidence: typeof narrative?.confidence === 'string' && narrative.confidence.trim() ? narrative.confidence.trim() : fallback.confidence,
+      whyNow: typeof narrative?.whyNow === 'string' && narrative.whyNow.trim() ? narrative.whyNow.trim() : fallback.whyNow,
+      technicalSummary: typeof narrative?.technicalSummary === 'string' && narrative.technicalSummary.trim() ? narrative.technicalSummary.trim() : fallback.technicalSummary,
+      newsSummary: typeof narrative?.newsSummary === 'string' && narrative.newsSummary.trim() ? narrative.newsSummary.trim() : fallback.newsSummary,
+      newsSentiment: normalizeNewsSentiment(parsed.newsSentiment) ?? fallback.newsSentiment,
+      bullishFactors: Array.isArray(narrative?.bullishFactors)
+        ? narrative.bullishFactors.filter((factor): factor is string => typeof factor === 'string').slice(0, 4)
+        : fallback.bullishFactors,
+      riskFactors: Array.isArray(narrative?.riskFactors)
+        ? narrative.riskFactors.filter((factor): factor is string => typeof factor === 'string').slice(0, 4)
+        : fallback.riskFactors,
       provider: llm.provider,
       model: llm.model,
       fallback: false,
+    });
+    return {
+      legacy: mergeWithFallback(parsed.technical, legacyFallback),
+      rating: mergeWithFallback(parsed.rating, ratingFallback),
     };
   } catch {
-    return fallback;
+    return { legacy: legacyFallback, rating: ratingFallback };
   }
 }
 
@@ -1312,14 +1779,20 @@ export function buildAnalysisResponse(params: {
   technical: TechnicalSnapshot;
   headlines: StockAnalysisHeadline[];
   overlay: AiOverlay;
+  ratingOverlay?: AiOverlay;
   analystData: AnalystData;
   includeNews: boolean;
   analysisAt: number;
   generatedAt: string;
   analysisId?: string;
+  engineVersion?: string;
   dividend?: DividendProfile;
   marketSession?: string;
   extended?: ExtendedHoursQuote;
+  earnings?: UpcomingEarnings | null;
+  fundamentalScore?: number | null;
+  compositeScore?: number;
+  ratingSignal?: Signal;
 }): AnalyzeStockResponse {
   const {
     symbol,
@@ -1328,6 +1801,7 @@ export function buildAnalysisResponse(params: {
     technical,
     headlines,
     overlay,
+    ratingOverlay,
     analystData,
     includeNews,
     analysisAt,
@@ -1335,8 +1809,14 @@ export function buildAnalysisResponse(params: {
     dividend,
     marketSession,
     extended,
+    earnings,
+    fundamentalScore,
+    compositeScore,
+    ratingSignal,
   } = params;
-  const analysisId = params.analysisId || `stock:${STOCK_ANALYSIS_ENGINE_VERSION}:${symbol}:${analysisAt}:${includeNews ? 'news' : 'core'}`;
+  const engineVersion = params.engineVersion || STOCK_ANALYSIS_ENGINE_VERSION;
+  const analysisId = params.analysisId || `stock:${engineVersion}:${symbol}:${analysisAt}:${includeNews ? 'news' : 'core'}`;
+  const resolvedRatingOverlay = ratingOverlay ?? overlay;
   const { stopLoss, takeProfit } = deriveTradeLevels(
     technical.signal,
     technical.currentPrice,
@@ -1354,6 +1834,16 @@ export function buildAnalysisResponse(params: {
     changePercent: technical.changePercent,
     signalScore: technical.signalScore,
     signal: technical.signal,
+    ratingSignal: ratingSignal ?? technical.signal,
+    ratingSummary: resolvedRatingOverlay.summary,
+    ratingAction: resolvedRatingOverlay.action,
+    ratingConfidence: resolvedRatingOverlay.confidence,
+    ratingWhyNow: resolvedRatingOverlay.whyNow,
+    ratingBullishFactors: resolvedRatingOverlay.bullishFactors,
+    ratingRiskFactors: resolvedRatingOverlay.riskFactors,
+    // fundamentalScore is optional — omit the key when the name is unscoreable.
+    ...(fundamentalScore != null ? { fundamentalScore } : {}),
+    compositeScore: compositeScore ?? technical.signalScore,
     trendStatus: technical.trendStatus,
     volumeStatus: technical.volumeStatus,
     macdStatus: technical.macdStatus,
@@ -1381,6 +1871,9 @@ export function buildAnalysisResponse(params: {
     macdDif: technical.macdDif,
     macdDea: technical.macdDea,
     macdBar: technical.macdBar,
+    realizedVolatility: technical.realizedVolatility,
+    atr: technical.atr,
+    maxDrawdown: technical.maxDrawdown,
     provider: overlay.provider,
     model: overlay.model,
     fallback: overlay.fallback,
@@ -1390,7 +1883,7 @@ export function buildAnalysisResponse(params: {
     analysisAt,
     stopLoss,
     takeProfit,
-    engineVersion: STOCK_ANALYSIS_ENGINE_VERSION,
+    engineVersion,
     analystConsensus: analystData.analystConsensus,
     priceTarget: analystData.priceTarget,
     recentUpgrades: analystData.recentUpgrades,
@@ -1404,6 +1897,14 @@ export function buildAnalysisResponse(params: {
     marketSession: marketSession ?? '',
     // Optional proto fields OMIT their keys when unset — never explicit null.
     ...(extended ? { extendedPrice: extended.price, extendedChangePercent: extended.changePercent } : {}),
+    ...(earnings ? {
+      nextEarningsDate: earnings.nextEarningsDate,
+      ...(earnings.consensusEps != null ? { consensusEps: earnings.consensusEps } : {}),
+      ...(earnings.consensusRevenue != null ? { consensusRevenue: earnings.consensusRevenue } : {}),
+    } : {}),
+    // Only surface sentiment when headlines were actually analyzed — otherwise
+    // a "no news" run would report a misleading synthetic neutral (0) reading.
+    ...(overlay.newsSentiment != null && headlines.length > 0 ? { newsSentiment: overlay.newsSentiment } : {}),
   };
 }
 
@@ -1418,6 +1919,14 @@ function buildEmptyAnalysisResponse(symbol: string, name: string, includeNews: b
     changePercent: 0,
     signalScore: 0,
     signal: '',
+    ratingSignal: '',
+    ratingSummary: '',
+    ratingAction: '',
+    ratingConfidence: '',
+    ratingWhyNow: '',
+    ratingBullishFactors: [],
+    ratingRiskFactors: [],
+    compositeScore: 0,
     trendStatus: '',
     volumeStatus: '',
     macdStatus: '',
@@ -1445,6 +1954,9 @@ function buildEmptyAnalysisResponse(symbol: string, name: string, includeNews: b
     macdDif: 0,
     macdDea: 0,
     macdBar: 0,
+    realizedVolatility: 0,
+    atr: 0,
+    maxDrawdown: 0,
     provider: '',
     model: '',
     fallback: true,
@@ -1473,6 +1985,21 @@ export type AnalyzeStockOptions = {
   now?: Date;
 };
 
+// The cached row returns `name` verbatim and feeds it to the LLM, so the key
+// must cover the whole name. A lossy form let distinct names share one row
+// across callers (GHSA-2fp6-mhpm-9gvh).
+export async function buildAnalyzeStockCacheKey(
+  symbol: string,
+  name: string,
+  includeNews: boolean,
+): Promise<string> {
+  const nameSuffix = name !== symbol ? `:${(await sha256Hex(name)).slice(0, 32)}` : '';
+  // v7 -> v8: expose the fundamentals-blended rating through the additive
+  // ratingSignal field while preserving the legacy technical signal/signalScore
+  // pair for already-loaded web, desktop, and API clients.
+  return `market:analyze-stock:v8:${symbol}:${includeNews ? 'news' : 'no-news'}${nameSuffix}`;
+}
+
 export async function analyzeStock(
   _ctx: ServerContext,
   req: AnalyzeStockRequest,
@@ -1485,20 +2012,30 @@ export async function analyzeStock(
 
   const name = (req.name || symbol).trim().slice(0, 120) || symbol;
   const includeNews = req.includeNews === true;
-  const nameSuffix = name !== symbol ? `:${name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 30).toLowerCase()}` : '';
-  // v4 -> v5 (#5467): fundamentals now use normalized leverage and explicit
-  // statement currency. Never replay a pre-contract response into the Pro UI.
-  const cacheKey = `market:analyze-stock:v5:${symbol}:${includeNews ? 'news' : 'no-news'}${nameSuffix}`;
+  const cacheKey = await buildAnalyzeStockCacheKey(symbol, name, includeNews);
 
   const fetchFreshAnalysis = async (): Promise<AnalyzeStockResponse | null> => {
-    const [history, analystData] = await Promise.all([
-      fetchYahooHistory(symbol),
+    const [historyOutcome, analystData] = await Promise.all([
+      fetchYahooHistoryOutcome(symbol),
       fetchYahooAnalystData(symbol),
     ]);
-    if (!history) return null;
+    // Throwing, not returning null, keeps a timeout on cachedFetchJson's 30s
+    // fetcher-error TTL (and its warning) rather than a 120s negative cache.
+    if (historyOutcome.status === 'request-failed') {
+      throw new YahooHistoryRequestFailedError(`Yahoo history request failed for ${symbol}`);
+    }
+    if (historyOutcome.status !== 'success') return null;
+    const history = historyOutcome.history;
 
     const technical = buildTechnicalSnapshot(history.candles);
     technical.currency = history.currency || 'USD';
+    // Blend the fundamentals Yahoo already returned into the rating so a Strong
+    // buy/sell no longer fires on price action alone. Keep the technical
+    // signal/signalScore pair stable for older clients; the additive
+    // ratingSignal/compositeScore pair is the surfaced rating for new clients.
+    const fundamentalScore = computeFundamentalScore(analystData.fundamentals);
+    const compositeScore = computeCompositeScore(technical.signalScore, fundamentalScore);
+    const ratingSignal = deriveSignal(compositeScore, technical.trendStatus);
     // Session at analysis time (#4922d); '' when US hours don't apply to the
     // listing. The extended-hours fetch runs ONLY in pre/post — during the
     // regular session the current price is already live, and while closed
@@ -1506,43 +2043,67 @@ export async function analyzeStock(
     const marketSession = usEquityHoursApply(symbol, history.currency || 'USD')
       ? getUsEquitySessionAt(options.now)
       : '';
-    const [headlines, dividend, extendedQuote] = await Promise.all([
+    const [rawHeadlines, dividend, extendedQuote, earningsCalendar] = await Promise.all([
       includeNews ? searchRecentStockHeadlines(symbol, name, NEWS_LIMIT).then((r) => r.headlines) : Promise.resolve([]),
       fetchDividendProfile(symbol, technical.currentPrice),
       (marketSession === 'pre' || marketSession === 'post')
         ? fetchExtendedHoursQuote(symbol, marketSession)
         : Promise.resolve(null),
+      fetchUpcomingEarnings(),
     ]);
-    const overlay = await buildAiOverlay(symbol, name, technical, headlines, analystData.fundamentals);
+    const headlines = alignStockHeadlines(rawHeadlines, marketSession !== '');
+    const overlays = await buildAiOverlay(
+      symbol,
+      name,
+      technical,
+      headlines,
+      analystData.fundamentals,
+      fundamentalScore,
+      compositeScore,
+      ratingSignal,
+    );
     const analysisAt = history.candles[history.candles.length - 1]?.timestamp || Date.now();
+    const earnings = selectEarningsForSymbol(earningsCalendar, symbol, (options.now ?? new Date()).toISOString().slice(0, 10));
     const response = buildAnalysisResponse({
       symbol,
       name,
       currency: history.currency || 'USD',
       technical,
       headlines,
-      overlay,
+      overlay: overlays.legacy,
+      ratingOverlay: overlays.rating,
       analystData,
+      fundamentalScore,
+      compositeScore,
+      ratingSignal,
       includeNews,
       analysisAt,
       generatedAt: new Date().toISOString(),
       dividend,
       marketSession,
       extended: extendedQuote ?? undefined,
+      earnings,
     });
     await storeStockAnalysisSnapshot(response, includeNews);
     return response;
   };
 
-  const cached = options.now
-    ? await fetchFreshAnalysis()
-    : await cachedFetchJson<AnalyzeStockResponse>(cacheKey, CACHE_TTL_SECONDS, fetchFreshAnalysis, undefined, {
-        // Worst-case fetcher budget: 2× UPSTREAM_TIMEOUT_MS sequenced (10s+10s for
-        // history/analyst then headlines/dividend) + 20s LLM overlay + small
-        // overhead. 60s safely sits above this so the cache safety net (#3539)
-        // doesn't pre-empt the caller's own per-stage timeouts.
-        timeoutMs: 60_000,
-      });
+  let cached: AnalyzeStockResponse | null;
+  try {
+    cached = options.now
+      ? await fetchFreshAnalysis()
+      : await cachedFetchJson<AnalyzeStockResponse>(cacheKey, CACHE_TTL_SECONDS, fetchFreshAnalysis, undefined, {
+          // Worst-case fetcher budget: 2× UPSTREAM_TIMEOUT_MS sequenced (10s+10s for
+          // history/analyst then headlines/dividend) + 20s LLM overlay + small
+          // overhead. 60s safely sits above this so the cache safety net (#3539)
+          // doesn't pre-empt the caller's own per-stage timeouts.
+          timeoutMs: 60_000,
+        });
+  } catch (err) {
+    // A Yahoo timeout is an unavailable analysis, not a 500 (WORLDMONITOR-ZQ).
+    if (!(err instanceof YahooHistoryRequestFailedError)) throw err;
+    cached = null;
+  }
 
   if (cached) return cached;
 

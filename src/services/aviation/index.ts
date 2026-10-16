@@ -1,8 +1,9 @@
 import { getRpcBaseUrl } from '@/services/rpc-client';
 import type { AirportDelayAlert as ProtoAlert, AirportOpsSummary as ProtoOpsSummary, FlightInstance as ProtoFlight, CarrierOpsSummary as ProtoCarrierOps, PositionSample as ProtoPosition, PriceQuote as ProtoPriceQuote, AviationNewsItem as ProtoAviationNews, CabinClass, GoogleFlightResult as ProtoGoogleFlightResult, DatePriceEntry as ProtoDatePriceEntry } from '@/generated/client/worldmonitor/aviation/v1/service_client';
 import { createCircuitBreaker } from '@/utils/circuit-breaker';
-import { getHydratedData } from '@/services/bootstrap';
+import { ensureHydrated, getHydratedData } from '@/services/bootstrap';
 import { AviationServiceClient } from '@/services/generated-rpc-clients';
+import { premiumFetch } from '@/services/premium-fetch';
 
 // ---- Consumer-friendly display types ----
 
@@ -320,16 +321,71 @@ function toDisplayDatePrice(p: ProtoDatePriceEntry): DatePrice {
 
 // ---- Client + circuit breakers ----
 
-const client = new AviationServiceClient(getRpcBaseUrl(), { fetch: (...args) => globalThis.fetch(...args) });
+// premiumFetch, not raw fetch: the three AviationStack-metered routes are in
+// PREMIUM_RPC_PATHS, and only premiumFetch attaches the Clerk Bearer for them.
+// Injection is path-gated inside premiumFetch, so the free aviation methods on
+// this same client (delays, ops summary, news, tracking) are unaffected.
+const client = new AviationServiceClient(getRpcBaseUrl(), { fetch: premiumFetch });
 
-const breakerDelays = createCircuitBreaker<AirportDelayAlert[]>({ name: 'Flight Delays v2', cacheTtlMs: 2 * 60 * 60 * 1000, persistCache: true });
-const breakerOps = createCircuitBreaker<AirportOpsSummary[]>({ name: 'Airport Ops', cacheTtlMs: 6 * 60 * 1000, persistCache: true });
-const breakerFlights = createCircuitBreaker<FlightInstance[]>({ name: 'Airport Flights', cacheTtlMs: 5 * 60 * 1000, persistCache: false });
+function reviveDate(value: unknown): Date {
+  if (value instanceof Date) {
+    if (Number.isFinite(value.getTime())) return value;
+  } else if (
+    value !== null
+    && (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))
+  ) {
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime())) return date;
+  }
+  throw new TypeError('Invalid persisted date');
+}
+
+const breakerDelays = createCircuitBreaker<AirportDelayAlert[]>({
+  name: 'Flight Delays v2',
+  cacheTtlMs: 2 * 60 * 60 * 1000,
+  persistCache: true,
+  revivePersistedData: (alerts) => alerts.map((alert) => ({
+    ...alert,
+    updatedAt: reviveDate(alert.updatedAt),
+  })),
+});
+
+const breakerOps = createCircuitBreaker<AirportOpsSummary[]>({
+  name: 'Airport Ops',
+  cacheTtlMs: 6 * 60 * 1000,
+  persistCache: true,
+  revivePersistedData: (summaries) => summaries.map((summary) => ({
+    ...summary,
+    updatedAt: reviveDate(summary.updatedAt),
+  })),
+});
+type AirportFlightBoard = { flights: FlightInstance[]; source: string };
+
+const breakerFlights = createCircuitBreaker<AirportFlightBoard>({ name: 'Airport Flights', cacheTtlMs: 5 * 60 * 1000, persistCache: false });
 const breakerCarrier = createCircuitBreaker<CarrierOps[]>({ name: 'Carrier Ops', cacheTtlMs: 5 * 60 * 1000, persistCache: false });
 const breakerStatus = createCircuitBreaker<FlightInstance[]>({ name: 'Flight Status', cacheTtlMs: 6 * 60 * 1000, persistCache: false });
 const breakerTrack = createCircuitBreaker<PositionSample[]>({ name: 'Track Aircraft', cacheTtlMs: 15 * 1000, persistCache: false });
-const breakerPrices = createCircuitBreaker<{ quotes: PriceQuote[]; isDemoMode: boolean; isIndicative: boolean; degraded: boolean; error: string; provider: string }>({ name: 'Flight Prices', cacheTtlMs: 10 * 60 * 1000, persistCache: true });
-const breakerNews = createCircuitBreaker<AviationNewsItem[]>({ name: 'Aviation News', cacheTtlMs: 15 * 60 * 1000, persistCache: true });
+const breakerPrices = createCircuitBreaker<{ quotes: PriceQuote[]; isDemoMode: boolean; isIndicative: boolean; degraded: boolean; error: string; provider: string }>({
+  name: 'Flight Prices',
+  cacheTtlMs: 10 * 60 * 1000,
+  persistCache: true,
+  revivePersistedData: (result) => ({
+    ...result,
+    quotes: result.quotes.map((quote) => ({
+      ...quote,
+      expiresAt: quote.expiresAt === null ? null : reviveDate(quote.expiresAt),
+    })),
+  }),
+});
+const breakerNews = createCircuitBreaker<AviationNewsItem[]>({
+  name: 'Aviation News',
+  cacheTtlMs: 15 * 60 * 1000,
+  persistCache: true,
+  revivePersistedData: (items) => items.map((item) => ({
+    ...item,
+    publishedAt: reviveDate(item.publishedAt),
+  })),
+});
 // No client-side cache for Google Flights search (gateway is no-store, prices change rapidly)
 const breakerGoogleFlights = createCircuitBreaker<GoogleFlightsResult>({ name: 'Google Flights', cacheTtlMs: 0, persistCache: false });
 // 5-min client cache (server has 10-min Redis + medium gateway cache)
@@ -339,9 +395,18 @@ const breakerGoogleDates = createCircuitBreaker<GoogleDatesResult>({ name: 'Goog
 
 export async function fetchFlightDelays(): Promise<AirportDelayAlert[]> {
   const hydrated = getHydratedData('flightDelays') as { alerts?: ProtoAlert[] } | undefined;
-  if (hydrated?.alerts?.length) return hydrated.alerts.map(toDisplayAlert);
+  if (hydrated?.alerts?.length) {
+    // Warm the delays breaker under the same key a later recurring call reads
+    // (#7048); the non-empty guard mirrors its shouldCache.
+    const alerts = hydrated.alerts.map(toDisplayAlert);
+    breakerDelays.recordSuccess(alerts);
+    return alerts;
+  }
 
   return breakerDelays.execute(async () => {
+    const onDemand = await ensureHydrated('flightDelays') as { alerts?: ProtoAlert[] } | undefined;
+    if (onDemand?.alerts?.length) return onDemand.alerts.map(toDisplayAlert);
+
     const r = await client.listAirportDelays({ region: 'AIRPORT_REGION_UNSPECIFIED', minSeverity: 'FLIGHT_DELAY_SEVERITY_UNSPECIFIED', pageSize: 0, cursor: '' });
     return r.alerts.map(toDisplayAlert);
   }, [], { shouldCache: (r) => r.length > 0 });
@@ -356,10 +421,14 @@ export async function fetchAirportOpsSummary(airports: string[]): Promise<Airpor
 
 export async function fetchAirportFlights(airport: string, direction: 'departure' | 'arrival' | 'both' = 'both', limit = 30): Promise<FlightInstance[]> {
   const dirMap = { departure: 'FLIGHT_DIRECTION_DEPARTURE', arrival: 'FLIGHT_DIRECTION_ARRIVAL', both: 'FLIGHT_DIRECTION_BOTH' } as const;
-  return breakerFlights.execute(async () => {
+  const board = await breakerFlights.execute(async () => {
     const r = await client.listAirportFlights({ airport, direction: dirMap[direction], limit });
-    return r.flights.map(toDisplayFlight);
-  }, [], { cacheKey: `${airport}:${direction}:${limit}` });
+    return { flights: r.flights.map(toDisplayFlight), source: r.source };
+  }, { flights: [], source: 'error' }, {
+    cacheKey: `${airport}:${direction}:${limit}`,
+    shouldCache: (r) => r.source === 'aviationstack',
+  });
+  return board.flights;
 }
 
 export async function fetchCarrierOps(airports: string[]): Promise<CarrierOps[]> {
@@ -376,11 +445,20 @@ export async function fetchFlightStatus(flightNumber: string, date?: string, ori
   }, [], { cacheKey: `${flightNumber}:${date ?? ''}:${origin ?? ''}` });
 }
 
-export async function fetchAircraftPositions(opts: { icao24?: string; callsign?: string; swLat?: number; swLon?: number; neLat?: number; neLon?: number }): Promise<PositionSample[]> {
+export async function fetchAircraftPositions(
+  opts: { icao24?: string; callsign?: string; swLat?: number; swLon?: number; neLat?: number; neLon?: number },
+  signal?: AbortSignal,
+): Promise<PositionSample[]> {
   return breakerTrack.execute(async () => {
-    const r = await client.trackAircraft({ icao24: opts.icao24 ?? '', callsign: opts.callsign ?? '', swLat: opts.swLat ?? 0, swLon: opts.swLon ?? 0, neLat: opts.neLat ?? 0, neLon: opts.neLon ?? 0 });
+    const r = await client.trackAircraft(
+      { icao24: opts.icao24 ?? '', callsign: opts.callsign ?? '', swLat: opts.swLat ?? 0, swLon: opts.swLon ?? 0, neLat: opts.neLat ?? 0, neLon: opts.neLon ?? 0 },
+      { signal },
+    );
     return r.positions.map(toDisplayPosition);
-  }, [], { cacheKey: `${opts.icao24 ?? ''}:${opts.callsign ?? ''}:${opts.swLat ?? 0}:${opts.swLon ?? 0}:${opts.neLat ?? 0}:${opts.neLon ?? 0}` });
+  }, [], {
+    cacheKey: `${opts.icao24 ?? ''}:${opts.callsign ?? ''}:${opts.swLat ?? 0}:${opts.swLon ?? 0}:${opts.neLat ?? 0}:${opts.neLon ?? 0}`,
+    ignoreError: () => signal?.aborted === true,
+  });
 }
 
 export async function fetchFlightPrices(opts: { origin: string; destination: string; departureDate: string; returnDate?: string; adults?: number; cabin?: CabinClass; nonstopOnly?: boolean; maxResults?: number; currency?: string; market?: string }): Promise<{ quotes: PriceQuote[]; isDemoMode: boolean; isIndicative: boolean; provider: string; degraded: boolean; error: string }> {

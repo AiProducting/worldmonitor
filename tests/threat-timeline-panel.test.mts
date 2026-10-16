@@ -131,7 +131,7 @@ function runtimeIsoDaysAgo(days: number): string {
 function runtimeServerInsights(overrides: Partial<ServerInsights> = {}): ServerInsights {
   return {
     worldBrief: 'Threat timeline test brief',
-    briefProvider: 'groq',
+    briefProvider: 'openrouter',
     status: 'ok' as const,
     topStories: [
       serverStory({
@@ -193,9 +193,12 @@ async function loadThreatTimelinePanelHarness() {
       export function toApiUrl(path) { return path; }
     `],
     ['tauri-bridge-stub', `export function invokeTauri() { return Promise.reject(new Error('not wired in test')); }`],
-    ['analytics-stub', `export function trackPanelResized() {}`],
+    ['analytics-stub', `export function trackLayoutCustomized() {}`],
     ['ai-flow-settings-stub', `export function getAiFlowSettings() { return { badgeAnimation: false }; }`],
     ['runtime-config-stub', `export function getSecretState() { return { present: true }; }`],
+    // Return null (not undefined) on purpose: harness stubs often use null
+    // for "no hydration". consumeHydration must treat that as an empty slot,
+    // not a rejected CDN body, or refresh skips the on-demand fetch (#7290).
     ['bootstrap-stub', `export function getHydratedData() { return null; }`],
     ['dom-utils-stub', `
       function append(parent, child) {
@@ -459,7 +462,10 @@ describe('ThreatTimelinePanel registration', () => {
     assert.match(panelsSrc, /'threat-timeline':\s*\{\s*name:\s*'Threat Timeline'/);
     assert.match(panelsSrc, /intelligence:\s*\{[\s\S]*panelKeys:\s*\[[^\]]*'threat-timeline'/);
     assert.match(layoutSrc, /isPanelInVariantDefaults\('threat-timeline'\)[\s\S]*lazyDefaultPanel\('threat-timeline',\s*\(\)\s*=>\s*import\('@\/components\/ThreatTimelinePanel'\),\s*'ThreatTimelinePanel'\)/);
-    assert.match(dataLoaderSrc, /isPanelInVariantDefaults\('threat-timeline'\)[\s\S]*panels\['threat-timeline'\]\s+as ThreatTimelinePanel/);
+    // Queued through callPanel(), never a direct `panels['threat-timeline']`
+    // lookup — the panel is a deferred shell when clustering finishes on mobile.
+    // See tests/one-shot-loader-panel-delivery.test.mts for the per-arm guard.
+    assert.match(dataLoaderSrc, /isPanelInVariantDefaults\('threat-timeline'\)[\s\S]*this\.callPanel\('threat-timeline', 'refresh',/);
     assert.match(commandsSrc, /id:\s*'panel:threat-timeline'[\s\S]*keywords:\s*\[[^\]]*'threat trend'/);
   });
 });

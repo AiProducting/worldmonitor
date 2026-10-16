@@ -10,10 +10,13 @@ export const CACHE_TTL_SECONDS = 86400; // 24 hours
 
 export {
   CACHE_VERSION,
+  MAX_BODY_LEN,
   canonicalizeSummaryInputs,
   buildSummaryCacheKey,
   buildSummaryCacheKey as getCacheKey,
+  selectUniqueHeadlinePairs,
 } from '../../../../src/utils/summary-cache-key';
+import { MAX_BODY_LEN } from '../../../../src/utils/summary-cache-key';
 
 // ========================================================================
 // Hash utility (unified FNV-1a 52-bit -- H-7 fix)
@@ -31,8 +34,6 @@ export { deduplicateHeadlines } from './dedup.mjs';
 // ========================================================================
 // SummarizeArticle: Full prompt builder (ported from _summarize-handler.js)
 // ========================================================================
-
-const MAX_BODY_INTERPOLATION_LEN = 400;
 
 export function buildArticlePrompts(
   headlines: string[],
@@ -63,14 +64,15 @@ export function buildArticlePrompts(
         // input contract is enforced by the caller (summarize-article.ts
         // sanitises bodies into string values before passing here).
         const rawBody = opts.bodies?.[i] ?? '';
-        const clipped = rawBody.slice(0, MAX_BODY_INTERPOLATION_LEN);
+        const clipped = rawBody.slice(0, MAX_BODY_LEN);
         return clipped.length > 0
           ? `${i + 1}. ${h}\n    Context: ${clipped}`
           : `${i + 1}. ${h}`;
       }).join('\n')
     : uniqueHeadlines.map((h, i) => `${i + 1}. ${h}`).join('\n');
   const intelSection = opts.geoContext ? `\n\n${opts.geoContext}` : '';
-  const isTechVariant = opts.variant === 'tech';
+  // Case-folded to match buildSummaryCacheKey: one cache row, one prompt.
+  const isTechVariant = opts.variant.toLowerCase() === 'tech';
   const dateContext = `Current date: ${new Date().toISOString().split('T')[0]}.${isTechVariant ? '' : ' Provide geopolitical context appropriate for the current date.'}`;
   const langInstruction = opts.lang && opts.lang !== 'en' ? `\nIMPORTANT: Output the summary in ${opts.lang.toUpperCase()} language.` : '';
 

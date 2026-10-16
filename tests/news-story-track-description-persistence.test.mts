@@ -15,10 +15,13 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { __testing__ } from '../server/worldmonitor/news/v1/list-feed-digest';
+import { rssFeedCacheKey } from '../server/worldmonitor/news/v1/_rss-cache';
 import { shouldDropOpinionTrack } from '../scripts/lib/digest-opinion-track-filter.mjs';
 
 const {
   buildStoryTrackHsetFields,
+  isAnchorEligible,
+  isIdentityAnchorEligible,
   computeEntityCorroborationSignals,
   parseRssXml,
   promoteDiplomacySeverity,
@@ -67,6 +70,28 @@ describe('buildStoryTrackHsetFields — story:track:v1 HSET contract', () => {
     assert.ok(m.has('link'));
     assert.ok(m.has('severity'));
     assert.ok(m.has('lang'));
+  });
+
+  it('persists a fail-closed canonical-anchor eligibility stamp', () => {
+    const hostile = baseItem({ source: 'Farm A', corroborationCount: 1 });
+    const trusted = baseItem({ source: 'Reuters', corroborationCount: 1 });
+    const corroborated = baseItem({ source: 'Farm A', corroborationCount: 2 });
+
+    assert.equal(isAnchorEligible(hostile), false, 'unknown single-source feeds cannot pre-seed an anchor');
+    assert.equal(isAnchorEligible(trusted), true, 'curated tier-1/2 sources may anchor');
+    assert.equal(isAnchorEligible(corroborated), true, 'two independent publisher families may anchor');
+    assert.equal(fieldsToMap(buildStoryTrackHsetFields(hostile, '1745000000000', 42)).get('anchorEligible'), '0');
+    assert.equal(fieldsToMap(buildStoryTrackHsetFields(trusted, '1745000000000', 42)).get('anchorEligible'), '1');
+  });
+
+  it('uses cluster-wide corroboration when selecting a safe batch default', () => {
+    const lowTierMember = baseItem({ source: 'Farm A', corroborationCount: 1 });
+    assert.equal(isAnchorEligible(lowTierMember), false, 'the parsed exact-title count alone is one');
+    assert.equal(
+      isIdentityAnchorEligible(lowTierMember, 2),
+      true,
+      'two independent publisher families must make a low-tier cluster eligible in its first cycle',
+    );
   });
 
   it('writes isOpinion as "1" / "0" — stamps the non-event brief verdict on the row (F3)', () => {
@@ -241,11 +266,89 @@ describe('buildStoryTrackHsetFields — story:track:v1 HSET contract', () => {
     assert.strictEqual(m.get('description'), '');
   });
 
+  it('persists a link that belongs to its publisher (family-domain allow, #8398)', () => {
+    // A link on the source's curated family domains must survive the
+    // persist-time publisher gate — the gate blanks hostile links, not
+    // legitimate publisher links.
+    const item = baseItem({
+      source: 'Reuters World',
+      link: 'https://www.reuters.com/world/europe/x-123',
+    });
+    const fields = buildStoryTrackHsetFields(item, '1745000000001', 99);
+    assert.strictEqual(fieldsToMap(fields).get('link'), 'https://www.reuters.com/world/europe/x-123');
+  });
+
+  it('blanks a persisted link that leaves its publisher domain (#8398)', () => {
+    // The pentest chain: attacker-controlled RSS link persisted verbatim
+    // into story:track, then fanned out by the relay to every matching
+    // user. The persist-time gate blanks it; the title still persists so
+    // corroboration/brief signal is unchanged.
+    const hostile = baseItem({
+      source: 'Reuters World',
+      title: 'Attacker headline with off-publisher link',
+      link: 'https://evil.example/phish',
+    });
+    const fields = buildStoryTrackHsetFields(hostile, '1745000000001', 99);
+    const m = fieldsToMap(fields);
+    assert.strictEqual(m.get('link'), '');
+    assert.strictEqual(m.get('title'), 'Attacker headline with off-publisher link');
+  });
+
+  it('preserves registered feed-host links from parsing through persistence', () => {
+    const feed = __testing__.buildDigestFeedBatches('full', 'en').allEntries
+      .find(entry => entry.feed.name === 'Al Jazeera')!.feed;
+    const link = 'https://www.aljazeera.com/news/2026/9/21/peace-talks';
+    const parsed = parseRssXml(`<rss><channel><item>
+      <title>Peace talks resume after border agreement</title><link>${link}</link>
+      <pubDate>${new Date(Date.now() - 60_000).toUTCString()}</pubDate>
+    </item></channel></rss>`, feed, 'full');
+    assert.ok(parsed?.items[0]);
+    assert.equal(parsed.items[0].link, link);
+    assert.equal(fieldsToMap(buildStoryTrackHsetFields(parsed.items[0], '1745000000001', 99)).get('link'), link);
+  });
+
+  it('uses registered feed hosts rather than a forged feed URL or untrusted origin', () => {
+    const item = baseItem({
+      source: 'Al Jazeera',
+      link: 'https://evil.example/phish',
+      feedUrl: 'https://evil.example/feed',
+      originPublisher: 'Reuters',
+      originPublisherTrusted: false,
+    });
+    assert.equal(fieldsToMap(buildStoryTrackHsetFields(item, '1745000000001', 99)).get('link'), '');
+    assert.equal(fieldsToMap(buildStoryTrackHsetFields({ ...item, link: 'https://www.reuters.com/world/x' }, '1745000000001', 99)).get('link'), '');
+  });
+
+  it('blanks a persisted link for a source with no server-known publisher signal (#8398)', () => {
+    // Fail-closed: an item whose source names no curated family persists
+    // with a blank link when the feed-host leg is unavailable item-side.
+    const item = baseItem({
+      source: 'Some Brand New Feed',
+      link: 'https://somebrandnewfeed.example/a',
+    });
+    assert.strictEqual(fieldsToMap(buildStoryTrackHsetFields(item, '1745000000001', 99)).get('link'), '');
+  });
+
+  it('persists a WSJ link via the publisher-name index (#8398 review)', () => {
+    // The item-scoped persist gate has no feed URL, so the Dow Jones
+    // delivery host leg is unavailable — the publisher-name index
+    // ("Wall Street Journal" -> 'wsj' family -> wsj.com) carries it.
+    const item = baseItem({
+      source: 'Wall Street Journal',
+      link: 'https://www.wsj.com/articles/x-123',
+    });
+    assert.strictEqual(
+      fieldsToMap(buildStoryTrackHsetFields(item, '1745000000001', 99)).get('link'),
+      'https://www.wsj.com/articles/x-123',
+    );
+  });
+
   it('preserves all other canonical fields (lastSeen, currentScore, title, link, severity, lang)', () => {
     const item = baseItem({
       description: 'A body that passes the length gate and will be persisted to Redis.',
       title: 'Headline A',
-      link: 'https://x.example/a',
+      source: 'Reuters World',
+      link: 'https://www.reuters.com/world/a',
       level: 'high',
       lang: 'fr',
     });
@@ -254,7 +357,7 @@ describe('buildStoryTrackHsetFields — story:track:v1 HSET contract', () => {
     assert.strictEqual(m.get('lastSeen'), '1745000000001');
     assert.strictEqual(m.get('currentScore'), 99);
     assert.strictEqual(m.get('title'), 'Headline A');
-    assert.strictEqual(m.get('link'), 'https://x.example/a');
+    assert.strictEqual(m.get('link'), 'https://www.reuters.com/world/a');
     assert.strictEqual(m.get('severity'), 'high');
     assert.strictEqual(m.get('lang'), 'fr');
   });
@@ -343,6 +446,54 @@ describe('buildStoryTrackHsetFields — story:track:v1 HSET contract', () => {
     });
   });
 
+  it('#6428: counts publisher families, so one newsroom cannot corroborate itself', () => {
+    const now = 1_745_000_000_000;
+    const oneWire = [
+      baseItem({
+        source: 'Reuters World',
+        title: 'US and Iran close deal to ease Hormuz tensions',
+        titleHash: 'h-world',
+        publishedAt: now,
+      }),
+      baseItem({
+        source: 'Reuters US',
+        title: 'Iran deal could calm oil markets after Hormuz alarm',
+        titleHash: 'h-us',
+        publishedAt: now,
+      }),
+      baseItem({
+        source: 'Reuters Business',
+        title: 'US-Iran deal averts immediate Hormuz disruption',
+        titleHash: 'h-business',
+        publishedAt: now,
+      }),
+    ];
+
+    const signals = computeEntityCorroborationSignals(
+      oneWire as Array<Parameters<typeof computeEntityCorroborationSignals>[0][number]>,
+      now,
+    );
+    assert.strictEqual(
+      signals.get('h-world'),
+      undefined,
+      'a bucket carried by a single publisher must emit no corroboration signal',
+    );
+
+    // Premise check: identical titles under three real publishers still do.
+    const distinct = oneWire.map((item, i) => ({
+      ...item,
+      source: ['Reuters World', 'BBC World', 'Al Jazeera'][i]!,
+    }));
+    const distinctSignals = computeEntityCorroborationSignals(
+      distinct as Array<Parameters<typeof computeEntityCorroborationSignals>[0][number]>,
+      now,
+    );
+    assert.deepStrictEqual(distinctSignals.get('h-world'), {
+      sourceCount: 3,
+      tier12SourceCount: 3,
+    });
+  });
+
   it('round-trips Unicode / newlines cleanly', () => {
     const description = 'Brief d’actualité avec des accents : élections, résultats — et des émojis 🇫🇷.\nDeuxième ligne.';
     const item = baseItem({ description });
@@ -396,7 +547,7 @@ describe('buildStoryTrackHsetFields — story:track:v1 HSET contract', () => {
 });
 
 describe('fetchAndParseRss — cache prefix invalidation contract', () => {
-  it('rss:feed cache prefix is v8 (duration-led historical-explainer stamp), not v4/v5/v6/v7', () => {
+  it('rss:feed cache prefix is v10 (bounded country reporting)', () => {
     // Pre-PR ParsedItems cached at rss:feed:v4 lack the
     // isEphemeralLiveCoverage field. If a cache hit returned one of those,
     // the falsy-coerce in
@@ -413,19 +564,24 @@ describe('fetchAndParseRss — cache prefix invalidation contract', () => {
       resolve(__dirname, '..', 'server', 'worldmonitor', 'news', 'v1', 'list-feed-digest.ts'),
       'utf-8',
     );
-    // v7→v8: duration-led historical explainers now receive the same stable
-    // ingest stamp. Digest reads trust explicit stamps, so warm v7 rows must
-    // not retain a pre-rule "0" verdict for a cache TTL.
-    assert.ok(
-      src.includes("`rss:feed:v8:${variant}:${feed.url}`"),
-      'rss:feed cache key must use v8 prefix — see comment above the cacheKey assignment in fetchAndParseRss',
+    // v9→v10: warm v9 rows retain only the first five RSS entries.
+    // v10→v11 (#8398): warm v10 rows carry un-gated links.
+    assert.equal(
+      rssFeedCacheKey('full', 'https://example.com/rss'),
+      'rss:feed:v11:full:https://example.com/rss',
+      'rss:feed cache key must invalidate un-gated pre-#8398 entries',
     );
     assert.ok(
-      !src.includes("`rss:feed:v7:${variant}:${feed.url}`") &&
+      src.includes('const cacheKey = rssFeedCacheKey(variant, feed.url);'),
+      'fetchAndParseRss must use the shared versioned cache key',
+    );
+    assert.ok(
+      !src.includes("`rss:feed:v8:${variant}:${feed.url}`") &&
+        !src.includes("`rss:feed:v7:${variant}:${feed.url}`") &&
         !src.includes("`rss:feed:v6:${variant}:${feed.url}`") &&
         !src.includes("`rss:feed:v5:${variant}:${feed.url}`") &&
         !src.includes("`rss:feed:v4:${variant}:${feed.url}`"),
-      'must NOT leave a residual v4/v5/v6/v7 cacheKey assignment — would silently revert the cutover',
+      'must NOT leave a residual v4/v5/v6/v7/v8 cacheKey assignment — would silently revert the cutover',
     );
   });
 });

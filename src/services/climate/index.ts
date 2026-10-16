@@ -1,6 +1,6 @@
 import { getRpcBaseUrl } from '@/services/rpc-client';
 import type { ClimateAnomaly as ProtoClimateAnomaly, Co2DataPoint as ProtoCo2DataPoint, Co2Monitoring as ProtoCo2Monitoring, AnomalySeverity as ProtoAnomalySeverity, AnomalyType as ProtoAnomalyType, GetCo2MonitoringResponse, GetOceanIceDataResponse, ListClimateAnomaliesResponse, ListClimateDisastersResponse } from '@/generated/client/worldmonitor/climate/v1/service_client';
-import { createCircuitBreaker } from '@/utils';
+import { createCircuitBreaker } from '@/utils/circuit-breaker';
 import { getHydratedData } from '@/services/bootstrap';
 import {
   normalizeHydratedOceanIce,
@@ -68,21 +68,29 @@ export async function fetchClimateAnomalies(): Promise<ClimateFetchResult> {
   const hydrated = getHydratedData('climateAnomalies') as ListClimateAnomaliesResponse | undefined;
   if (hydrated && (hydrated.anomalies ?? []).length > 0) {
     const anomalies = hydrated.anomalies.map(toDisplayAnomaly).filter(a => a.severity !== 'normal');
-    if (anomalies.length > 0) return { ok: true, anomalies };
+    if (anomalies.length > 0) {
+      // Warm the breaker under the same key a later recurring call reads (#7048).
+      breaker.recordSuccess(hydrated);
+      return { ok: true, anomalies };
+    }
   }
 
   const response = await breaker.execute(async () => {
     return client.listClimateAnomalies({ minSeverity: 'ANOMALY_SEVERITY_UNSPECIFIED', pageSize: 0, cursor: '' });
-  }, emptyClimateFallback, { shouldCache: (r) => r.anomalies.length > 0 });
+  }, emptyClimateFallback);
   const anomalies = (response.anomalies ?? [])
     .map(toDisplayAnomaly)
     .filter(a => a.severity !== 'normal');
-  return { ok: true, anomalies };
+  return { ok: breaker.getDataState().mode !== 'unavailable', anomalies };
 }
 
 export async function fetchCo2Monitoring(): Promise<Co2Monitoring | null> {
   const hydrated = getHydratedData('co2Monitoring') as GetCo2MonitoringResponse | undefined;
   if (hydrated?.monitoring) {
+    // Warm the breaker under the same key a later recurring call reads
+    // (#7048). The currentPpm guard mirrors its shouldCache so a payload
+    // without a reading is accepted for this render but not cached.
+    if (hydrated.monitoring.currentPpm) co2Breaker.recordSuccess(hydrated);
     return toDisplayCo2Monitoring(hydrated.monitoring);
   }
 
@@ -101,6 +109,10 @@ export async function fetchOceanIceData(): Promise<OceanIceIndicators | null> {
   const hydrated = getHydratedData('oceanIce') as GetOceanIceDataResponse | OceanIceSeedSnakeShape | undefined;
   const hydratedProto = normalizeHydratedOceanIce(hydrated);
   if (hydratedProto) {
+    // Warm the breaker under the same key a later recurring call reads
+    // (#7048), wrapping the normalized payload in the response shape its
+    // cache entries hold. The data-present guard mirrors its shouldCache.
+    oceanIceBreaker.recordSuccess({ data: hydratedProto });
     return toDisplayOceanIceData(hydratedProto);
   }
 

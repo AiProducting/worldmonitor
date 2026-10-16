@@ -157,4 +157,4 @@ The value is in the combination. Multiple independent signals converging on the 
 
 ---
 
-**See what's coming at [worldmonitor.app](https://www.worldmonitor.app). Prediction markets, AI forecasting, and 56 map layers, all free.**
+**See what's coming at [worldmonitor.app](https://www.worldmonitor.app). Prediction markets, AI forecasting, and map layers, all free.**

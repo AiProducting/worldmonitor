@@ -1,3 +1,68 @@
+export type DataSourceId =
+  | 'acled'
+  | 'opensky'
+  | 'wingbits'
+  | 'ais'
+  | 'usgs'
+  | 'gdelt'
+  | 'gdelt_doc'
+  | 'rss'
+  | 'polymarket'
+  | 'predictions'
+  | 'pizzint'
+  | 'outages'
+  | 'cyber_threats'
+  | 'weather'
+  | 'ontario_511'
+  | 'alberta_511'
+  | 'manitoba_511'
+  | 'toronto_roads'
+  | 'bc_open511'
+  | 'economic'
+  | 'oil'
+  | 'spending'
+  | 'firms'
+  | 'acled_conflict'
+  | 'ucdp'
+  | 'hapi'
+  | 'ucdp_events'
+  | 'unhcr'
+  | 'climate'
+  | 'worldpop'
+  | 'giving'
+  | 'bis'
+  | 'bls'
+  | 'wto_trade'
+  | 'supply_chain'
+  | 'security_advisories'
+  | 'gpsjam'
+  | 'sanctions_pressure'
+  | 'radiation'
+  | 'treasury_revenue';
+
+// AppContext lives in src/app/app-context.ts because it references
+// components, services, and utils (top-level aggregate type).
+
+export type HappyContentCategory =
+  | 'science-health'
+  | 'nature-wildlife'
+  | 'humanity-kindness'
+  | 'innovation-tech'
+  | 'climate-wins'
+  | 'culture-community';
+
+export interface TechHQ {
+  id: string;
+  company: string;
+  city: string;
+  country: string;
+  lat: number;
+  lon: number;
+  type: 'faang' | 'unicorn' | 'public';
+  employees?: number;
+  marketCap?: string;
+}
+
 export interface DeductContextDetail {
   query?: string;
   geoContext: string;
@@ -13,10 +78,23 @@ export interface Feed {
   region?: string;
   propagandaRisk?: PropagandaRisk;
   stateAffiliated?: string;  // e.g., "Russia", "China", "Iran"
-  lang?: string;             // ISO 2-letter code for filtering
+  lang?: string;             // ISO 2-letter code for filtering (locale boost)
+  strategicDefault?: boolean; // always default-on regardless of UI language
 }
 
-export type { ThreatClassification, ThreatLevel, EventCategory } from '@/services/threat-classifier';
+export type ThreatLevel = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export type EventCategory =
+  | 'conflict' | 'protest' | 'disaster' | 'diplomatic' | 'economic'
+  | 'terrorism' | 'cyber' | 'health' | 'environmental' | 'military'
+  | 'crime' | 'infrastructure' | 'tech' | 'general';
+
+export interface ThreatClassification {
+  level: ThreatLevel;
+  category: EventCategory;
+  confidence: number;
+  source: 'keyword' | 'ml' | 'llm';
+}
 
 export type StoryPhase = 'breaking' | 'developing' | 'sustained' | 'fading';
 
@@ -27,15 +105,16 @@ export interface StoryMeta {
   phase: StoryPhase;
 }
 
-export type StoryPhase = 'breaking' | 'developing' | 'sustained' | 'fading';
 
-export interface StoryMeta {
-  firstSeen: number;        // epoch ms
-  mentionCount: number;
-  sourceCount: number;
-  phase: StoryPhase;
+export interface NewsLocationMarker {
+  lat: number;
+  lon: number;
+  title: string;
+  threatLevel: string;
+  timestamp?: Date;
+  /** Original loaded article identity; marker titles may include inferred locations. */
+  article?: Pick<NewsItem, 'link' | 'title' | 'source'>;
 }
-
 
 export interface NewsItem {
   source: string;
@@ -54,16 +133,20 @@ export interface NewsItem {
   isAlert: boolean;
   monitorColor?: string;
   tier?: number;
-  threat?: import('@/services/threat-classifier').ThreatClassification;
+  threat?: ThreatClassification;
   lat?: number;
   lon?: number;
   locationName?: string;
   lang?: string;
-  // Happy variant: positive content category
-  happyCategory?: import('@/services/positive-classifier').HappyContentCategory;
-  // Image URL extracted from RSS media/enclosure tags
+  happyCategory?: HappyContentCategory;
   imageUrl?: string;
   importanceScore?: number;
+  /**
+   * 0-100 source-reliability score, distinct from importanceScore.
+   * Measures truthfulness inputs (tier, propaganda risk, corroboration),
+   * not newsworthiness. 0 is a real low score and must not be treated as absent.
+   */
+  credibilityScore?: number;
   corroborationCount?: number;
   storyMeta?: StoryMeta;
   /**
@@ -99,15 +182,23 @@ export interface ClusteredEvent {
   primaryTitle: string;
   primarySource: string;
   primaryLink: string;
+  /** Articles in the cluster — a volume signal, not a corroboration signal. */
   sourceCount: number;
+  /**
+   * Distinct PUBLISHERS behind those articles (#6428). Any "N sources"
+   * corroboration claim shown to a user reads this, never sourceCount:
+   * one newsroom's editions are one publisher.
+   */
+  uniquePublisherCount: number;
   topSources: Array<{ name: string; tier: number; url: string }>;
   allItems: NewsItem[];
   firstSeen: Date;
   lastUpdated: Date;
   isAlert: boolean;
   monitorColor?: string;
+  credibilityScore?: number;
   velocity?: VelocityMetrics;
-  threat?: import('@/services/threat-classifier').ThreatClassification;
+  threat?: ThreatClassification;
   lat?: number;
   lon?: number;
   lang?: string;
@@ -160,6 +251,14 @@ export interface CryptoData {
   price: number;
   change: number;
   sparkline?: number[];
+}
+
+export interface TokenData {
+  name: string;
+  symbol: string;
+  price: number;
+  change24h: number;
+  change7d: number;
 }
 
 export type EscalationTrend = 'escalating' | 'stable' | 'de-escalating';
@@ -254,6 +353,12 @@ export interface APTGroup {
   sponsor: string;
   lat: number;
   lon: number;
+  mitreId?: string;
+  mitreUrl?: string;
+  description?: string;
+  tactics?: string[];
+  targetSectors?: string[];
+  active?: boolean;
 }
 
 export type CyberThreatType = 'c2_server' | 'malware_host' | 'phishing' | 'malicious_url';
@@ -552,6 +657,16 @@ export interface PanelConfig {
   enabled: boolean;
   priority?: number;
   premium?: 'locked' | 'enhanced';
+  /** Absolute panel text scale. When absent, the panel follows the global scale. */
+  fontScale?: 0.9 | 1 | 1.1 | 1.25 | 1.5 | 2;
+  /**
+   * Set by `enforceFreePanelLimit` when the free-tier pro gate — not the user —
+   * is what turned this panel off. Distinguishes "hidden because you aren't Pro"
+   * from "you hid it in settings", so the gate can be reversed on upgrade
+   * without overriding a deliberate choice. Used for both `cw-*` panels and
+   * ordinary panels disabled by the free panel-count cap.
+   */
+  proGated?: boolean;
 }
 
 export interface MapLayers {
@@ -563,8 +678,13 @@ export interface MapLayers {
   ais: boolean;
   nuclear: boolean;
   irradiators: boolean;
+  radiationWatch?: boolean;
   sanctions: boolean;
   weather: boolean;
+  /** Official Canada road events and conditions from Ontario, Alberta, Toronto, and British Columbia. */
+  canadaRoads: boolean;
+  /** Alberta, B.C., and Saskatchewan province-owned emergency alerts (#6610, #6659). */
+  canadaAlerts: boolean;
   economic: boolean;
   waterways: boolean;
   outages: boolean;
@@ -573,6 +693,7 @@ export interface MapLayers {
   protests: boolean;
   flights: boolean;
   military: boolean;
+  aircraftEmergencies?: boolean;
   natural: boolean;
   spaceports: boolean;
   minerals: boolean;
@@ -799,6 +920,7 @@ export type MilitaryOperator =
 
 export interface MilitaryFlight {
   id: string;
+  source?: string;
   callsign: string;
   hexCode: string;             // ICAO 24-bit address
   registration?: string;
@@ -965,6 +1087,7 @@ export interface PizzIntLocation {
   address: string;
   current_popularity: number;
   percentage_of_usual: number | null;
+  no_live_signal?: boolean;
   is_spike: boolean;
   spike_magnitude: number | null;
   data_source: string;
@@ -1026,6 +1149,7 @@ export interface ForecastPoint {
   hour: number;
   windKt: number;
   category: number;
+  geometryKind?: string;
 }
 
 export interface PastTrackPoint {
@@ -1033,6 +1157,7 @@ export interface PastTrackPoint {
   lon: number;
   windKt: number;
   timestamp: number;
+  geometryKind?: string;
 }
 
 /** A single agency report retained on a canonical tropical cyclone event. */
@@ -1076,6 +1201,13 @@ export interface NaturalEvent {
   movementSpeedKt?: number;
   forecastTrack?: ForecastPoint[];
   conePolygon?: number[][][];
+  coneGeometryKind?: string;
+  windRadii?: Array<{
+    thresholdKt?: number | null;
+    thresholdLabel?: string;
+    polygons?: number[][][][];
+    geometryKind?: string;
+  }>;
   pastTrack?: PastTrackPoint[];
   canonicalId?: string;
   matchingConfidence?: string;
@@ -1156,8 +1288,18 @@ export interface CascadeResult {
   }[];
 }
 
-// Re-export port types
-export type { Port, PortType } from '@/config/ports';
+export type PortType = 'container' | 'oil' | 'lng' | 'naval' | 'mixed' | 'bulk';
+
+export interface Port {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  country: string;
+  type: PortType;
+  rank?: number;
+  note: string;
+}
 
 // AI Regulation Types
 export type RegulationType = 'comprehensive' | 'sectoral' | 'voluntary' | 'proposed';
@@ -1380,6 +1522,8 @@ export interface GulfInvestment {
 
 export interface MapProtestCluster {
   id: string;
+  /** Explicit leaf/group discriminant set at Supercluster flatten time (see DeckGLMap). */
+  _kind: 'leaf' | 'group';
   _clusterId?: number;
   lat: number;
   lon: number;
@@ -1398,11 +1542,13 @@ export interface MapProtestCluster {
 
 export interface MapTechHQCluster {
   id: string;
+  /** Explicit leaf/group discriminant set at Supercluster flatten time (see DeckGLMap). */
+  _kind: 'leaf' | 'group';
   _clusterId?: number;
   lat: number;
   lon: number;
   count: number;
-  items: import('@/config/tech-geo').TechHQ[];
+  items: TechHQ[];
   city: string;
   country: string;
   primaryType: 'faang' | 'unicorn' | 'public';
@@ -1414,6 +1560,8 @@ export interface MapTechHQCluster {
 
 export interface MapTechEventCluster {
   id: string;
+  /** Explicit leaf/group discriminant set at Supercluster flatten time (see DeckGLMap). */
+  _kind: 'leaf' | 'group';
   _clusterId?: number;
   lat: number;
   lon: number;
@@ -1428,6 +1576,8 @@ export interface MapTechEventCluster {
 
 export interface MapDatacenterCluster {
   id: string;
+  /** Explicit leaf/group discriminant set at Supercluster flatten time (see DeckGLMap). */
+  _kind: 'leaf' | 'group';
   _clusterId?: number;
   lat: number;
   lon: number;
@@ -1454,7 +1604,10 @@ export interface CountryBriefSignals {
   aisDisruptions: number;
   satelliteFires: number;
   radiationAnomalies: number;
-  temporalAnomalies: number;
+  /** Observed country anomalies; null when the cluster snapshot is unavailable. */
+  temporalAnomalies: number | null;
+  /** Global observations, never included in country counts or severity totals. */
+  globalTemporalAnomalies?: number | null;
   cyberThreats: number;
   earthquakes: number;
   displacementOutflow: number;
@@ -1472,3 +1625,5 @@ export interface CountryBriefSignals {
   sanctionsDesignations: number;
   sanctionsNewDesignations: number;
 }
+
+export type CountrySignalCounts = { [K in keyof CountryBriefSignals]: CountryBriefSignals[K] | null };

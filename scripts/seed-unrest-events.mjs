@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { loadEnvFile, CHROME_UA, runSeed, httpsProxyFetchRaw, resolveProxyForConnect, describeErr, writeExtraKeyWithMeta, sleep } from './_seed-utils.mjs';
+import { loadEnvFile, CHROME_UA, runSeed, httpsProxyFetchRaw, resolveProxyForConnect, describeErr, readSeedSnapshot, writeExtraKeyWithMeta, sleep } from './_seed-utils.mjs';
 import { getAcledToken } from './shared/acled-oauth.mjs';
+import { GDELT_BULK_UNREST_KEY } from './_gdelt-bulk-contract.mjs';
 
 loadEnvFile(import.meta.url);
 
@@ -19,6 +20,11 @@ const ACLED_PAGE_DELAY_MS = 250;
 const MAX_SOURCE_URLS = 5;
 const GDELT_THEME_MIN_DELAY_MS = 5_500;
 const GDELT_THEME_JITTER_MS = 1_000;
+// The 15-minute bulk materializer can miss several cycles without forcing an
+// immediate failover, but a preserved snapshot older than 3h must not be
+// republished as fresh unrest data.
+export const GDELT_BULK_UNREST_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+export const GDELT_BULK_MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 // ---------- ACLED Event Type Mapping (from _shared.ts) ----------
 
@@ -37,21 +43,6 @@ function classifySeverity(fatalities, eventType) {
   if (fatalities > 0 || eventType.toLowerCase().includes('riot')) return 'SEVERITY_LEVEL_HIGH';
   if (eventType.toLowerCase().includes('protest')) return 'SEVERITY_LEVEL_MEDIUM';
   return 'SEVERITY_LEVEL_LOW';
-}
-
-function classifyGdeltSeverity(count, name) {
-  const lowerName = name.toLowerCase();
-  if (count > 100 || lowerName.includes('riot') || lowerName.includes('clash')) return 'SEVERITY_LEVEL_HIGH';
-  if (count < 25) return 'SEVERITY_LEVEL_LOW';
-  return 'SEVERITY_LEVEL_MEDIUM';
-}
-
-function classifyGdeltEventType(name) {
-  const lowerName = name.toLowerCase();
-  if (lowerName.includes('riot')) return 'UNREST_EVENT_TYPE_RIOT';
-  if (lowerName.includes('strike')) return 'UNREST_EVENT_TYPE_STRIKE';
-  if (lowerName.includes('demonstration')) return 'UNREST_EVENT_TYPE_DEMONSTRATION';
-  return 'UNREST_EVENT_TYPE_PROTEST';
 }
 
 function normalizeSourceUrl(value) {
@@ -100,7 +91,7 @@ function mergeSourceUrls(...groups) {
 
 // ---------- Deduplication (from _shared.ts) ----------
 
-function deduplicateEvents(events) {
+export function deduplicateEvents(events) {
   const unique = new Map();
   for (const event of events) {
     const lat = event.location?.latitude ?? 0;
@@ -108,22 +99,17 @@ function deduplicateEvents(events) {
     const latKey = Math.round(lat * 10) / 10;
     const lonKey = Math.round(lon * 10) / 10;
     const dateKey = new Date(event.occurredAt).toISOString().split('T')[0];
-    const key = `${latKey}:${lonKey}:${dateKey}`;
+    const key = `${event.sourceType}:${latKey}:${lonKey}:${dateKey}`;
 
     const existing = unique.get(key);
     if (!existing) {
       unique.set(key, event);
-    } else if (event.sourceType === 'UNREST_SOURCE_TYPE_ACLED' && existing.sourceType !== 'UNREST_SOURCE_TYPE_ACLED') {
-      event.sources = [...new Set([...event.sources, ...existing.sources])];
-      event.sourceUrls = mergeSourceUrls(event.sourceUrls, existing.sourceUrls);
-      unique.set(key, event);
-    } else if (existing.sourceType === 'UNREST_SOURCE_TYPE_ACLED') {
-      existing.sources = [...new Set([...existing.sources, ...event.sources])];
-      existing.sourceUrls = mergeSourceUrls(existing.sourceUrls, event.sourceUrls);
     } else {
       existing.sources = [...new Set([...existing.sources, ...event.sources])];
       existing.sourceUrls = mergeSourceUrls(existing.sourceUrls, event.sourceUrls);
-      if (existing.sources.length >= 2) existing.confidence = 'CONFIDENCE_LEVEL_HIGH';
+      if (existing.sourceType === 'UNREST_SOURCE_TYPE_GDELT') {
+        existing.confidence = 'CONFIDENCE_LEVEL_LOW';
+      }
     }
   }
   return Array.from(unique.values());
@@ -411,26 +397,65 @@ export async function fetchGdeltEvents(opts = {}) {
     events.push({
       id: `gdelt-${loc.lat.toFixed(2)}-${loc.lon.toFixed(2)}-${Date.now()}`,
       title: `${loc.name} (${loc.count} reports)`,
-      summary: '',
-      eventType: classifyGdeltEventType(loc.name),
+      summary: 'Unverified media signal. This location is mentioned in unrest-related articles; a local event is not verified.',
+      eventType: 'UNREST_EVENT_TYPE_UNSPECIFIED',
       city: loc.name.split(',')[0]?.trim() || '',
       country,
       region: '',
       location: { latitude: loc.lat, longitude: loc.lon },
       occurredAt: Date.now(),
-      severity: classifyGdeltSeverity(loc.count, loc.name),
+      severity: 'SEVERITY_LEVEL_UNSPECIFIED',
       fatalities: 0,
       sources: ['GDELT'],
       sourceType: 'UNREST_SOURCE_TYPE_GDELT',
       tags: [],
       actors: [],
-      confidence: loc.count > 20 ? 'CONFIDENCE_LEVEL_HIGH' : 'CONFIDENCE_LEVEL_MEDIUM',
+      confidence: 'CONFIDENCE_LEVEL_LOW',
       sourceUrls: loc.sourceUrls,
     });
   }
 
   console.log(`  GDELT: ${totalMentions} mentions → ${events.length} aggregated events`);
   return events;
+}
+
+export async function readMaterializedGdeltEvents({
+  _readSnapshot = () => readSeedSnapshot(GDELT_BULK_UNREST_KEY, { strict: true }),
+  _now = Date.now,
+} = {}) {
+  const snapshot = await _readSnapshot();
+  if (!snapshot || !Array.isArray(snapshot.events)) {
+    throw new Error(`${GDELT_BULK_UNREST_KEY} missing or malformed`);
+  }
+  const fetchedAtMs = typeof snapshot.fetchedAt === 'number'
+    ? snapshot.fetchedAt
+    : Date.parse(snapshot.fetchedAt);
+  if (!Number.isFinite(fetchedAtMs)) {
+    throw new Error(`${GDELT_BULK_UNREST_KEY} fetchedAt is unparseable: ${snapshot.fetchedAt}`);
+  }
+  const ageMs = _now() - fetchedAtMs;
+  if (ageMs > GDELT_BULK_UNREST_MAX_AGE_MS) {
+    throw new Error(
+      `${GDELT_BULK_UNREST_KEY} stale snapshot`
+      + ` (${Math.round(ageMs / 60000)}min old; max ${GDELT_BULK_UNREST_MAX_AGE_MS / 60000}min)`,
+    );
+  }
+  if (ageMs < -GDELT_BULK_MAX_FUTURE_SKEW_MS) {
+    throw new Error(
+      `${GDELT_BULK_UNREST_KEY} future snapshot`
+      + ` (${Math.round(-ageMs / 60000)}min ahead; max ${GDELT_BULK_MAX_FUTURE_SKEW_MS / 60000}min)`,
+    );
+  }
+  return {
+    ...snapshot,
+    events: snapshot.events.map(event => ({
+      ...event,
+      eventType: 'UNREST_EVENT_TYPE_UNSPECIFIED',
+      severity: 'SEVERITY_LEVEL_UNSPECIFIED',
+      confidence: 'CONFIDENCE_LEVEL_LOW',
+      summary: 'Unverified media signal. This location is mentioned in unrest-related articles; a local event is not verified.',
+    })),
+  };
 }
 
 // ---------- Main Fetch ----------
@@ -445,13 +470,14 @@ async function fetchUnrestEvents() {
       maxPages: UNREST_RESOLUTION_MAX_PAGES,
       label: 'ACLED resolution',
     }),
-    fetchGdeltEvents(),
+    readMaterializedGdeltEvents(),
   ]);
 
   const acled = results[0].status === 'fulfilled' ? results[0].value : null;
   const acledResolution = results[1].status === 'fulfilled' ? results[1].value : null;
   const acledEvents = acled?.events ?? [];
-  const gdeltEvents = results[2].status === 'fulfilled' ? results[2].value : [];
+  const gdeltSnapshot = results[2].status === 'fulfilled' ? results[2].value : null;
+  const gdeltEvents = gdeltSnapshot?.events ?? [];
 
   if (results[0].status === 'rejected') console.log(`  ACLED failed: ${describeErr(results[0].reason)}`);
   if (results[1].status === 'rejected') console.log(`  ACLED resolution failed: ${describeErr(results[1].reason)}`);
@@ -472,7 +498,13 @@ async function fetchUnrestEvents() {
 
   console.log(`  Merged: ${acledEvents.length} ACLED + ${gdeltEvents.length} GDELT = ${sorted.length} deduplicated`);
 
-  return { events: sorted, clusters: [], pagination: undefined };
+  return {
+    events: sorted,
+    clusters: [],
+    pagination: gdeltSnapshot
+      ? { gdeltFetchedAt: gdeltSnapshot.fetchedAt }
+      : undefined,
+  };
 }
 
 function validate(data) {

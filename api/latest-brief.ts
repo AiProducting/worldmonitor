@@ -29,12 +29,11 @@ export const config = { runtime: 'edge' };
 import { getCorsHeaders, isDisallowedOrigin } from './_cors.js';
 // @ts-expect-error — JS module, no declaration file
 import { jsonResponse } from './_json-response.js';
-// @ts-expect-error — JS module, no declaration file
 import { readRawJsonFromUpstash } from './_upstash-json.js';
 // @ts-expect-error — JS module, no declaration file
 import { captureSilentError } from './_sentry-edge.js';
 import { validateBearerToken } from '../server/auth-session';
-import { getEntitlements } from '../server/_shared/entitlement-check';
+import { checkProEntitlement } from '../server/_shared/pro-entitlement';
 import { signBriefUrl, BriefUrlError } from '../server/_shared/brief-url';
 import { assertBriefEnvelope } from '../server/_shared/brief-render.js';
 
@@ -45,7 +44,7 @@ const ISSUE_SLOT_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
 // Per-attempt timeouts for the cache-read retry helper. Worst-case wall
 // time = FIRST_ATTEMPT_MS + RETRY_ATTEMPT_MS per read × 2 reads = 18s,
 // which leaves headroom under Vercel Edge's ~25s initial-response cap
-// after `validateBearerToken` + `getEntitlements` preflight. Retry uses
+// after `validateBearerToken` + `checkProEntitlement` preflight. Retry uses
 // a shorter budget on the theory that a transient blip clears in <3s; a
 // real Upstash outage will time out the retry quickly and fall through
 // to the 503 fallback before the platform kills the function.
@@ -86,6 +85,7 @@ export async function readWithOneRetry<T>(
       console.warn(`[api/latest-brief] ${label} aborted on timeout — retrying once (${RETRY_ATTEMPT_MS}ms)`);
       captureSilentError(err, {
         tags: { route: 'api/latest-brief', step: 'upstash-retry-attempt', label },
+        fingerprint: ['api/latest-brief', 'upstash-retry-attempt', err instanceof Error ? err.name : 'Error'],
         ctx,
       });
       return await attempt(RETRY_ATTEMPT_MS);
@@ -111,7 +111,10 @@ async function readBriefPreview(
   timeoutMs: number,
   ctx?: { waitUntil: (p: Promise<unknown>) => void },
 ): Promise<BriefPreview | null> {
-  const raw = await readRawJsonFromUpstash(`brief:${userId}:${issueSlot}`, timeoutMs);
+  // Seeder-owned keys (#7674): the Railway digest composer writes
+  // brief:{userId}:{slot} and brief:latest:{userId} bare — read them raw in
+  // every environment so preview resolves the real envelopes.
+  const raw = await readRawJsonFromUpstash(`brief:${userId}:${issueSlot}`, timeoutMs, true);
   if (raw == null) return null;
   // Reuse the renderer's strict validator so a "ready" preview never
   // points at an envelope that the hosted magazine route will reject.
@@ -126,6 +129,7 @@ async function readBriefPreview(
     );
     captureSilentError(err, {
       tags: { route: 'api/latest-brief', step: 'envelope-assertion', issueSlot },
+      fingerprint: ['api/latest-brief', 'envelope-assertion', err instanceof Error ? err.name : 'Error'],
       ctx,
     });
     return null;
@@ -146,7 +150,7 @@ async function readBriefPreview(
  * brief, or the pointer has expired past its 7d TTL).
  */
 async function readLatestPointer(userId: string, timeoutMs: number): Promise<string | null> {
-  const raw = await readRawJsonFromUpstash(`brief:latest:${userId}`, timeoutMs);
+  const raw = await readRawJsonFromUpstash(`brief:latest:${userId}`, timeoutMs, true);
   if (raw == null) return null;
   const slot = (raw as { issueSlot?: unknown } | null)?.issueSlot;
   if (typeof slot !== 'string' || !ISSUE_SLOT_RE.test(slot)) return null;
@@ -194,8 +198,18 @@ export default async function handler(
     return jsonResponse({ error: 'UNAUTHENTICATED' }, 401, cors);
   }
 
-  const ent = await getEntitlements(session.userId);
-  if (!ent || ent.features.tier < 1) {
+  const proAccess = await checkProEntitlement(session.userId, session.role, cors);
+  if (!proAccess.allowed) {
+    // #5600: an entitlement the backend could not VERIFY is not a confirmed
+    // free user. This is the endpoint the live repro caught rendering "Pro
+    // required. Upgrade to unlock" to a customer who had paid 90 seconds
+    // earlier — answer the shared retryable contract (503 + Retry-After) for
+    // those states before the terminal upsell. Note this covers lookup failure
+    // and renewal verification only; the day-0 poisoned-marker cohort arrives
+    // as a plain tier-0 answer and is bounded by
+    // NOT_APPLICABLE_VERIFICATION_TTL_SECONDS instead.
+    const { billingDenial } = proAccess;
+    if (billingDenial) return billingDenial;
     return jsonResponse(
       {
         error: 'pro_required',
@@ -256,7 +270,7 @@ export default async function handler(
     // this into "composing", which would falsely signal empty state
     // to the dashboard panel. 503 lets the client show a retry path.
     console.error('[api/latest-brief] Upstash read failed:', (err as Error).message);
-    captureSilentError(err, { tags: { route: 'api/latest-brief', step: 'upstash-read' }, ctx });
+    captureSilentError(err, { tags: { route: 'api/latest-brief', step: 'upstash-read' }, fingerprint: ['api/latest-brief', 'upstash-read', err instanceof Error ? err.name : 'Error'], ctx });
     return jsonResponse({ error: 'service_unavailable' }, 503, cors);
   }
 

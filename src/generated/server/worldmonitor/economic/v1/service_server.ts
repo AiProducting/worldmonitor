@@ -167,6 +167,8 @@ export interface GetChinaMacroSnapshotResponse {
   sourceDecisions: ChinaMacroSourceDecision[];
   releaseEvents: ChinaReleaseEvent[];
   unavailable: boolean;
+  schemaVersion: number;
+  pillars: ChinaMacroPillarPulse[];
 }
 
 export interface ChinaMacroIndicator {
@@ -184,6 +186,38 @@ export interface ChinaMacroIndicator {
   stale: boolean;
   unavailableReason: string;
   contextOnly: boolean;
+  geography: string;
+  seasonalAdjustment: string;
+  periodKind: string;
+  observationPeriod: string;
+  releaseTime: string;
+  retrievalTime: string;
+  direction: string;
+  directionReason: string;
+  comparisonBasis: string;
+  comparisonValue: number;
+  hasComparisonValue: boolean;
+  revisionState: string;
+  vintageId: string;
+  revisionSequence: number;
+  provenanceJson: string;
+  vintages: ChinaMacroVintage[];
+  transportStatus: string;
+  transportFailureReason: string;
+}
+
+export interface ChinaMacroVintage {
+  vintageId: string;
+  sequence: number;
+  state: string;
+  value: number;
+  hasValue: boolean;
+  observationPeriod: string;
+  periodKind: string;
+  releaseTime: string;
+  retrievalTime: string;
+  supersededBy: string;
+  provenanceJson: string;
 }
 
 export interface ChinaMacroSourceDecision {
@@ -194,6 +228,12 @@ export interface ChinaMacroSourceDecision {
   checkedAt: string;
   optional: boolean;
   requestCount: number;
+  publisherId: string;
+  redirectBehavior: string;
+  requestBudget: number;
+  robotsStatus: string;
+  termsStatus: string;
+  sourceUrl: string;
 }
 
 export interface ChinaReleaseEvent {
@@ -207,6 +247,24 @@ export interface ChinaReleaseEvent {
   status: string;
   source: string;
   sourceUrl: string;
+}
+
+export interface ChinaMacroPillarPulse {
+  pillar: string;
+  direction: string;
+  reason: string;
+  observationIds: string[];
+}
+
+export interface GetChinaActivityNowcastRequest {
+}
+
+export interface GetChinaActivityNowcastResponse {
+  generatedAt: string;
+  methodVersion: string;
+  comparisonState: string;
+  upstreamUnavailable: boolean;
+  payloadJson: string;
 }
 
 export interface GetEnergyCapacityRequest {
@@ -440,6 +498,7 @@ export interface GetEconomicCalendarResponse {
   toDate: string;
   total: number;
   unavailable: boolean;
+  asOf: string;
 }
 
 export interface EconomicEvent {
@@ -840,6 +899,137 @@ export interface TenderSourceStatus {
   paced: boolean;
 }
 
+export interface GetUsCpiMonthlyRequest {
+  history: boolean;
+  limit?: number;
+}
+
+export interface GetUsCpiMonthlyResponse {
+  months: UsCpiMonth[];
+  unavailable: boolean;
+}
+
+export interface UsCpiMonth {
+  month: number;
+  headline?: UsCpiReading;
+  core?: UsCpiReading;
+  food?: UsCpiReading;
+  energy?: UsCpiReading;
+  shelter?: UsCpiReading;
+  services?: UsCpiReading;
+}
+
+export interface UsCpiReading {
+  index: number;
+  monthOverMonth?: UsCpiPercentChange;
+  yearOverYear?: UsCpiPercentChange;
+}
+
+export interface UsCpiPercentChange {
+  percent: number;
+}
+
+export interface GetUsTreasuryParYieldCurveRequest {
+  history: boolean;
+  limit?: number;
+}
+
+export interface GetUsTreasuryParYieldCurveResponse {
+  curves: UsTreasuryParYieldCurve[];
+  unavailable: boolean;
+}
+
+export interface UsTreasuryParYieldCurve {
+  date: number;
+  oneMonth?: number;
+  oneAndAHalfMonth?: number;
+  twoMonth?: number;
+  threeMonth?: number;
+  fourMonth?: number;
+  sixMonth?: number;
+  oneYear?: number;
+  twoYear?: number;
+  threeYear?: number;
+  fiveYear?: number;
+  sevenYear?: number;
+  tenYear?: number;
+  twentyYear?: number;
+  thirtyYear?: number;
+}
+
+export interface GetUsInterestRatesRequest {
+  history: boolean;
+  limit?: number;
+}
+
+export interface GetUsInterestRatesResponse {
+  series: UsInterestRateSeries[];
+  unavailable: boolean;
+}
+
+export interface UsInterestRateSeries {
+  id: string;
+  points: UsInterestRateObservation[];
+}
+
+export interface UsInterestRateObservation {
+  date: number;
+  percent: number;
+}
+
+export interface GetWorldCpiMonthlyRequest {
+  history: boolean;
+  country: string;
+  limit?: number;
+}
+
+export interface GetWorldCpiMonthlyResponse {
+  countries: WorldCpiCountry[];
+  unavailable: boolean;
+}
+
+export interface WorldCpiCountry {
+  country: string;
+  source: string;
+  frequency: string;
+  indexBase: string;
+  periods: WorldCpiPeriod[];
+}
+
+export interface WorldCpiPeriod {
+  period: number;
+  reading?: WorldCpiReading;
+}
+
+export interface WorldCpiReading {
+  index: number;
+  periodOverPeriod?: WorldCpiPercentChange;
+  yearOverYear?: WorldCpiPercentChange;
+}
+
+export interface WorldCpiPercentChange {
+  percent: number;
+}
+
+export interface GetGovernmentYieldCurveRequest {
+  country: string;
+  history: boolean;
+  limit?: number;
+}
+
+export interface GetGovernmentYieldCurveResponse {
+  country: string;
+  source: string;
+  measure: string;
+  curves: YieldCurvePoint[];
+  unavailable: boolean;
+}
+
+export interface YieldCurvePoint {
+  date: number;
+  tenors: Record<string, number>;
+}
+
 export interface FieldViolation {
   field: string;
   description: string;
@@ -891,6 +1081,7 @@ export interface EconomicServiceHandler {
   getEnergyPrices(ctx: ServerContext, req: GetEnergyPricesRequest): Promise<GetEnergyPricesResponse>;
   getMacroSignals(ctx: ServerContext, req: GetMacroSignalsRequest): Promise<GetMacroSignalsResponse>;
   getChinaMacroSnapshot(ctx: ServerContext, req: GetChinaMacroSnapshotRequest): Promise<GetChinaMacroSnapshotResponse>;
+  getChinaActivityNowcast(ctx: ServerContext, req: GetChinaActivityNowcastRequest): Promise<GetChinaActivityNowcastResponse>;
   getEnergyCapacity(ctx: ServerContext, req: GetEnergyCapacityRequest): Promise<GetEnergyCapacityResponse>;
   getBisPolicyRates(ctx: ServerContext, req: GetBisPolicyRatesRequest): Promise<GetBisPolicyRatesResponse>;
   getBisExchangeRates(ctx: ServerContext, req: GetBisExchangeRatesRequest): Promise<GetBisExchangeRatesResponse>;
@@ -915,6 +1106,11 @@ export interface EconomicServiceHandler {
   getOilInventories(ctx: ServerContext, req: GetOilInventoriesRequest): Promise<GetOilInventoriesResponse>;
   getEnergyCrisisPolicies(ctx: ServerContext, req: GetEnergyCrisisPoliciesRequest): Promise<GetEnergyCrisisPoliciesResponse>;
   listGlobalTenders(ctx: ServerContext, req: ListGlobalTendersRequest): Promise<ListGlobalTendersResponse>;
+  getUsCpiMonthly(ctx: ServerContext, req: GetUsCpiMonthlyRequest): Promise<GetUsCpiMonthlyResponse>;
+  getUsTreasuryParYieldCurve(ctx: ServerContext, req: GetUsTreasuryParYieldCurveRequest): Promise<GetUsTreasuryParYieldCurveResponse>;
+  getUsInterestRates(ctx: ServerContext, req: GetUsInterestRatesRequest): Promise<GetUsInterestRatesResponse>;
+  getWorldCpiMonthly(ctx: ServerContext, req: GetWorldCpiMonthlyRequest): Promise<GetWorldCpiMonthlyResponse>;
+  getGovernmentYieldCurve(ctx: ServerContext, req: GetGovernmentYieldCurveRequest): Promise<GetGovernmentYieldCurveResponse>;
 }
 
 export function createEconomicServiceRoutes(
@@ -1168,6 +1364,43 @@ export function createEconomicServiceRoutes(
 
           const result = await handler.getChinaMacroSnapshot(ctx, body);
           return new Response(JSON.stringify(result as GetChinaMacroSnapshotResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/economic/v1/get-china-activity-nowcast",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const body = {} as GetChinaActivityNowcastRequest;
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getChinaActivityNowcast(ctx, body);
+          return new Response(JSON.stringify(result as GetChinaActivityNowcastResponse), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });
@@ -2134,6 +2367,248 @@ export function createEconomicServiceRoutes(
 
           const result = await handler.listGlobalTenders(ctx, body);
           return new Response(JSON.stringify(result as ListGlobalTendersResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/economic/v1/get-us-cpi-monthly",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: GetUsCpiMonthlyRequest = {
+            history: params.get("history") === "true",
+            limit: Number(params.get("limit") ?? "0"),
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("getUsCpiMonthly", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getUsCpiMonthly(ctx, body);
+          return new Response(JSON.stringify(result as GetUsCpiMonthlyResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/economic/v1/get-us-treasury-par-yield-curve",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: GetUsTreasuryParYieldCurveRequest = {
+            history: params.get("history") === "true",
+            limit: Number(params.get("limit") ?? "0"),
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("getUsTreasuryParYieldCurve", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getUsTreasuryParYieldCurve(ctx, body);
+          return new Response(JSON.stringify(result as GetUsTreasuryParYieldCurveResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/economic/v1/get-us-interest-rates",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: GetUsInterestRatesRequest = {
+            history: params.get("history") === "true",
+            limit: Number(params.get("limit") ?? "0"),
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("getUsInterestRates", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getUsInterestRates(ctx, body);
+          return new Response(JSON.stringify(result as GetUsInterestRatesResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/economic/v1/get-world-cpi-monthly",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: GetWorldCpiMonthlyRequest = {
+            history: params.get("history") === "true",
+            country: params.get("country") ?? "",
+            limit: Number(params.get("limit") ?? "0"),
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("getWorldCpiMonthly", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getWorldCpiMonthly(ctx, body);
+          return new Response(JSON.stringify(result as GetWorldCpiMonthlyResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/economic/v1/get-government-yield-curve",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: GetGovernmentYieldCurveRequest = {
+            country: params.get("country") ?? "",
+            history: params.get("history") === "true",
+            limit: Number(params.get("limit") ?? "0"),
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("getGovernmentYieldCurve", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getGovernmentYieldCurve(ctx, body);
+          return new Response(JSON.stringify(result as GetGovernmentYieldCurveResponse), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });

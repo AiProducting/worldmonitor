@@ -1,6 +1,11 @@
 'use strict';
 
 const { buildLlmCallEvent, emitLlmEvents } = require('./llm-telemetry.cjs');
+const {
+  OPENROUTER_FREE_BACKUP_MODEL,
+  OPENROUTER_FREE_PRIMARY_MODEL,
+  OPENROUTER_PROVIDER_ROUTING,
+} = require('./llm-model-policy.cjs');
 
 const SERVICE_UA = 'worldmonitor-llm/1.0';
 
@@ -33,18 +38,11 @@ const LLM_PROVIDERS = [
     timeout: 25_000,
   },
   // NOTE (#4944): this chain is the brief-prose transport (sole requirer:
-  // seed-digest-notifications → brief-llm, pinned to openrouter via
-  // skipProviders). Its model moves to DeepSeek in the U4 brief-voice
-  // cutover — gated on the U3 shadow evaluation — together with the
-  // brief cache-version bumps. Do not swap it in isolation.
-  {
-    name: 'groq',
-    envKey: 'GROQ_API_KEY',
-    apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
-    model: 'llama-3.1-8b-instant',
-    headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': SERVICE_UA }),
-    timeout: 15_000,
-  },
+  // seed-digest-notifications → brief-llm, pinned to openrouter via an exact
+  // allowedProviders list). The brief no longer takes its model from here. It
+  // names its own through `opts.modelOverrides` in scripts/lib/brief-llm.mjs,
+  // so the entries below are the defaults for every OTHER consumer. A default
+  // changed here still has to bump every cache generation fed by it.
   {
     name: 'openrouter',
     envKey: 'OPENROUTER_API_KEY',
@@ -53,10 +51,28 @@ const LLM_PROVIDERS = [
     headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://worldmonitor.app', 'X-Title': 'World Monitor', 'User-Agent': SERVICE_UA }),
     timeout: 20_000,
   },
+  {
+    name: 'openrouter-free',
+    envKey: 'OPENROUTER_API_KEY',
+    apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+    model: OPENROUTER_FREE_PRIMARY_MODEL,
+    headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://worldmonitor.app', 'X-Title': 'World Monitor', 'User-Agent': SERVICE_UA }),
+    extraBody: { reasoning: { enabled: false }, provider: OPENROUTER_PROVIDER_ROUTING },
+    timeout: 20_000,
+  },
+  {
+    name: 'openrouter-free-backup',
+    envKey: 'OPENROUTER_API_KEY',
+    apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+    model: OPENROUTER_FREE_BACKUP_MODEL,
+    headers: (key) => ({ 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://worldmonitor.app', 'X-Title': 'World Monitor', 'User-Agent': SERVICE_UA }),
+    extraBody: { reasoning: { enabled: false }, provider: OPENROUTER_PROVIDER_ROUTING },
+    timeout: 20_000,
+  },
 ];
 
 /**
- * Call an LLM using the Ollama → Groq → OpenRouter provider chain.
+ * Call an LLM using the Ollama → paid OpenRouter → fixed free OpenRouter chain.
  *
  * @param {string} systemPrompt
  * @param {string} userPrompt
@@ -64,11 +80,23 @@ const LLM_PROVIDERS = [
  * @param {number} [opts.maxTokens=500]
  * @param {number} [opts.temperature=0.3]
  * @param {number} [opts.timeoutMs] - Override per-provider timeout
+ * @param {string[]} [opts.allowedProviders] - Optional exact provider allowlist
+ * @param {string[]} [opts.skipProviders] - Optional provider denylist
+ * @param {Record<string, string>} [opts.modelOverrides] - Per-provider model override, keyed by provider name
  * @param {string} [opts.stage] - llm_call telemetry surface tag (#4944 U5)
  * @returns {Promise<string|null>} Generated text, or null if all providers fail
  */
 async function callLLM(systemPrompt, userPrompt, opts = {}) {
-  const { maxTokens = 500, temperature = 0.3, timeoutMs, skipProviders, stage = 'llm-chain' } = opts;
+  const {
+    maxTokens = 500,
+    temperature = 0.3,
+    timeoutMs,
+    allowedProviders,
+    skipProviders,
+    modelOverrides,
+    stage = 'llm-chain',
+  } = opts;
+  const allowedSet = allowedProviders ? new Set(allowedProviders) : null;
   const skipSet = skipProviders ? new Set(skipProviders) : null;
 
   const promptChars = (systemPrompt?.length ?? 0) + (userPrompt?.length ?? 0);
@@ -76,12 +104,14 @@ async function callLLM(systemPrompt, userPrompt, opts = {}) {
   let attemptIndex = 0;
 
   for (const provider of LLM_PROVIDERS) {
+    if (allowedSet && !allowedSet.has(provider.name)) continue;
     if (skipSet?.has(provider.name)) continue;
     const envVal = process.env[provider.envKey];
     if (!envVal) continue;
 
     const apiUrl = provider.apiUrlFn ? provider.apiUrlFn(envVal) : provider.apiUrl;
-    const model = typeof provider.model === 'function' ? provider.model() : provider.model;
+    const model = modelOverrides?.[provider.name]
+      ?? (typeof provider.model === 'function' ? provider.model() : provider.model);
     const timeout = timeoutMs ?? provider.timeout;
 
     // Skipped/unconfigured providers never sent the prompt — only real

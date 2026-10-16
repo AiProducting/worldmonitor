@@ -2,22 +2,23 @@ import { motion } from 'motion/react';
 import { ArrowRight } from 'lucide-react';
 import { t } from '../i18n';
 import { DASHBOARD_PATH } from '../routes';
+import depthProofStats from '../generated/depth-stats.json';
 
 export const FinalCta = () => (
   <section className="py-28 px-6 border-t border-wm-border relative overflow-hidden">
     <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_100%,rgba(74,222,128,0.10)_0%,transparent_55%)] pointer-events-none" aria-hidden="true" />
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={false}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: '-60px' }}
       transition={{ duration: 0.6 }}
       className="max-w-3xl mx-auto text-center relative"
     >
       <h2 className="text-3xl md:text-5xl font-display font-bold tracking-tight">{t('welcome.cta.title')}</h2>
-      <p className="text-wm-muted mt-4">{t('welcome.cta.subtitle')}</p>
+      <p className="text-wm-muted mt-4">{t('welcome.cta.subtitle', depthProofStats)}</p>
       <div className="mt-9">
         <a
-          href={`${DASHBOARD_PATH}?ref=welcome-final`}
+          href={DASHBOARD_PATH}
           data-umami-event="welcome-cta"
           data-umami-event-target="welcome-final"
           className="bg-wm-green text-wm-bg px-10 py-4 rounded-sm font-mono text-sm uppercase tracking-wider font-bold hover:bg-green-400 transition-colors inline-flex items-center gap-2"

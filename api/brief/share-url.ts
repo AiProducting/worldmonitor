@@ -32,17 +32,17 @@ export const config = { runtime: 'edge' };
 import { getCorsHeaders, isDisallowedOrigin } from '../_cors.js';
 // @ts-expect-error — JS module, no declaration file
 import { jsonResponse } from '../_json-response.js';
-// @ts-expect-error — JS module, no declaration file
 import { readRawJsonFromUpstash, redisPipeline } from '../_upstash-json.js';
 // @ts-expect-error — JS module, no declaration file
 import { captureSilentError } from '../_sentry-edge.js';
 import { validateBearerToken } from '../../server/auth-session';
-import { getEntitlements } from '../../server/_shared/entitlement-check';
+import { checkProEntitlement } from '../../server/_shared/pro-entitlement';
 import {
   BriefShareUrlError,
   BRIEF_PUBLIC_POINTER_PREFIX,
   buildPublicBriefUrl,
   encodePublicPointer,
+  publicBaseUrl,
 } from '../../server/_shared/brief-share-url';
 
 const ISSUE_SLOT_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
@@ -54,17 +54,11 @@ const ISSUE_SLOT_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
 // keeps the two sides in lockstep.
 const BRIEF_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-/**
- * Public base URL for the share links we mint. Pinned to
- * WORLDMONITOR_PUBLIC_BASE_URL in prod to prevent host-header
- * reflection from producing share URLs pointing at preview deploys
- * or other non-canonical origins.
- */
-function publicBaseUrl(req: Request): string {
-  const pinned = process.env.WORLDMONITOR_PUBLIC_BASE_URL;
-  if (pinned) return pinned.replace(/\/+$/, '');
-  return new URL(req.url).origin;
-}
+// The destination selector lives with the hash derivation so the private
+// magazine view (api/brief/[userId]/[issueDate].ts) mints the same share URL
+// this route does. Re-exported here because tests/brief-share-url.test.mts
+// pins the round-trip contract through this module.
+export { publicBaseUrl };
 
 export default async function handler(
   req: Request,
@@ -92,8 +86,16 @@ export default async function handler(
     return jsonResponse({ error: 'UNAUTHENTICATED' }, 401, cors);
   }
 
-  const ent = await getEntitlements(session.userId);
-  if (!ent || ent.features.tier < 1) {
+  const proAccess = await checkProEntitlement(session.userId, session.role, cors);
+  if (!proAccess.allowed) {
+    // #5600: an entitlement the backend could not VERIFY is not a confirmed
+    // free user. Answer the shared retryable contract (503 + Retry-After) for
+    // those states before falling back to the terminal upsell. Note this covers
+    // lookup failure and renewal verification only — the day-0 poisoned-marker
+    // cohort arrives as a plain tier-0 answer and still gets the 403; that
+    // window is bounded by NOT_APPLICABLE_VERIFICATION_TTL_SECONDS instead.
+    const { billingDenial } = proAccess;
+    if (billingDenial) return billingDenial;
     return jsonResponse(
       { error: 'pro_required', message: 'Sharing is available on the Pro plan.' },
       403,
@@ -138,7 +140,9 @@ export default async function handler(
   if (!callerProvidedSlot) {
     // No slot given → fall back to the latest-pointer the cron writes.
     try {
-      const latest = await readRawJsonFromUpstash(`brief:latest:${session.userId}`);
+      // Seeder-owned pointer (#7674): the Railway digest cron writes
+      // brief:latest:{userId} bare — read it raw in every environment.
+      const latest = await readRawJsonFromUpstash(`brief:latest:${session.userId}`, 3_000, true);
       const slot = (latest as { issueSlot?: unknown } | null)?.issueSlot;
       if (typeof slot === 'string' && ISSUE_SLOT_RE.test(slot)) {
         issueSlot = slot;
@@ -152,7 +156,7 @@ export default async function handler(
       }
     } catch (err) {
       console.error('[api/brief/share-url] latest pointer read failed:', (err as Error).message);
-      captureSilentError(err, { tags: { route: 'api/brief/share-url', step: 'latest-pointer-read' }, ctx });
+      captureSilentError(err, { tags: { route: 'api/brief/share-url', step: 'latest-pointer-read' }, fingerprint: ['api/brief/share-url', 'latest-pointer-read', err instanceof Error ? err.name : 'Error'], ctx });
       return jsonResponse({ error: 'service_unavailable' }, 503, cors);
     }
   }
@@ -167,10 +171,12 @@ export default async function handler(
   // gives a clean 503 path if Upstash is down.
   let existing: unknown;
   try {
-    existing = await readRawJsonFromUpstash(`brief:${session.userId}:${issueSlot}`);
+    // Seeder-owned envelope (#7674): the Railway digest composer writes it
+    // bare — read it raw in every environment.
+    existing = await readRawJsonFromUpstash(`brief:${session.userId}:${issueSlot}`, 3_000, true);
   } catch (err) {
     console.error('[api/brief/share-url] Upstash read failed:', (err as Error).message);
-    captureSilentError(err, { tags: { route: 'api/brief/share-url', step: 'envelope-read' }, ctx });
+    captureSilentError(err, { tags: { route: 'api/brief/share-url', step: 'envelope-read' }, fingerprint: ['api/brief/share-url', 'envelope-read', err instanceof Error ? err.name : 'Error'], ctx });
     return jsonResponse({ error: 'service_unavailable' }, 503, cors);
   }
   if (existing == null) {
@@ -206,6 +212,12 @@ export default async function handler(
   // JSON.parse's the Redis value; a bare colon-delimited string would
   // throw at parse time and the public route would 503 instead of
   // resolving the pointer.
+  //
+  // App-owned pointer (#7674): share-url routes are the only writers of
+  // brief:public-pointer:*, so this write and the public route's read ride
+  // the deployment-prefixed helper default. publicBaseUrl keeps previews on
+  // their deployment origin and pins production to the canonical origin,
+  // which keeps every returned URL in the pointer's namespace.
   const pointerKey = `${BRIEF_PUBLIC_POINTER_PREFIX}${hash}`;
   const pointerValue = JSON.stringify(encodePublicPointer(session.userId, issueSlot));
   const writeResult = await redisPipeline([

@@ -30,8 +30,9 @@ service InfrastructureService {
     option (sebuf.http.config) = {path: "/get-temporal-baseline", method: HTTP_METHOD_GET};
   }
 
-  // RecordBaselineSnapshot batch-updates baseline statistics using Welford's online algorithm.
+  // RecordBaselineSnapshot is deprecated and DISABLED. Client-supplied shared baseline writes are rejected.
   rpc RecordBaselineSnapshot(RecordBaselineSnapshotRequest) returns (RecordBaselineSnapshotResponse) {
+    option deprecated = true;
     option (sebuf.http.config) = {path: "/record-baseline-snapshot"};
   }
 
@@ -40,7 +41,7 @@ service InfrastructureService {
     option (sebuf.http.config) = {path: "/get-cable-health", method: HTTP_METHOD_GET};
   }
 
-  // ListTemporalAnomalies returns server-computed temporal anomalies for news and satellite_fires.
+  // ListTemporalAnomalies returns computed news and satellite-fire anomalies with scores, observed values, baselines, tracked signal types, and computation time.
   rpc ListTemporalAnomalies(ListTemporalAnomaliesRequest) returns (ListTemporalAnomaliesResponse) {
     option (sebuf.http.config) = {path: "/list-temporal-anomalies", method: HTTP_METHOD_GET};
   }

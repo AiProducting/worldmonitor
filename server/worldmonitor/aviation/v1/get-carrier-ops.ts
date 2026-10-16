@@ -6,20 +6,54 @@ import type {
 } from '../../../../src/generated/server/worldmonitor/aviation/v1/service_server';
 import { cachedFetchJson } from '../../../_shared/redis';
 import { markNoCacheResponse } from '../../../_shared/response-headers';
-import { parseStringArray, DEFAULT_WATCHED_AIRPORTS } from './_shared';
+import {
+    parseStringArray,
+    DEFAULT_WATCHED_AIRPORTS,
+    IATA_RE,
+    MAX_AIRPORTS_PER_REQUEST,
+    requireLiveAviationAccess,
+} from './_shared';
+import { aviationStackBudgetCycle } from './_avstack-budget';
 import { listAirportFlights } from './list-airport-flights';
 
-const CACHE_TTL = 300;
+// 15min, matching list-airport-flights — see the TTL note there. This route is
+// the more expensive of the two: every miss fans out to listAirportFlights once
+// PER AIRPORT, so one uncached request is N paid AviationStack calls, not one.
+const CACHE_TTL = 900;
 
 export async function getCarrierOps(
     ctx: ServerContext,
     req: GetCarrierOpsRequest,
 ): Promise<GetCarrierOpsResponse> {
+    // Metered route — gate before anything else, and before the per-airport
+    // fan-out below turns one request into N paid calls.
+    await requireLiveAviationAccess(ctx.request);
+
     const rawAirports = parseStringArray(req.airports);
-    const airports = rawAirports.length > 0 ? rawAirports.map(a => a.toUpperCase()) : DEFAULT_WATCHED_AIRPORTS.slice(0, 3);
-    const minFlights = req.minFlights ?? 3;
-    const cacheKey = `aviation:carrier-ops:${airports.sort().join(',')}:v1`;
     const now = Date.now();
+
+    // Every airport in this list becomes its own PAID AviationStack call below,
+    // and `parseStringArray` bounds neither the length nor the shape of what a
+    // caller sends. Unbounded, `?airports=A,B,...,Z` was an anonymous multiplier
+    // on spend — 26 codes, 26 paid calls, one request. Validate then truncate:
+    //   - non-IATA codes are rejected outright rather than dropped, so a typo
+    //     surfaces instead of silently returning a different airport set (and so
+    //     arbitrary strings cannot inflate cache-key cardinality);
+    //   - the survivors are capped, matching how list-airport-flights clamps
+    //     `limit` rather than erroring.
+    const requested = rawAirports.map(a => a.toUpperCase());
+    if (requested.some(a => !IATA_RE.test(a))) {
+        return { carriers: [], source: 'invalid', updatedAt: now };
+    }
+    const airports = (requested.length > 0 ? requested : DEFAULT_WATCHED_AIRPORTS.slice(0, 3))
+        .slice(0, MAX_AIRPORTS_PER_REQUEST);
+
+    // The generated GET decoder emits 0 when min_flights is absent
+    // (`Number(params.get("min_flights") ?? "0")`), and `??` does not treat 0
+    // as missing — so 0 means "use the default" here. An explicit 0 is not a
+    // usable filter (every carrier group has >= 1 flight).
+    const minFlights = req.minFlights > 0 ? req.minFlights : 3;
+    const cacheKey = `aviation:carrier-ops:${[...airports].sort().join(',')}:v2:${aviationStackBudgetCycle()}`;
     let unavailableSource = 'unavailable';
 
     try {

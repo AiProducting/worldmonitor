@@ -23,6 +23,57 @@ crons.hourly(
   {},
 );
 
+// Bounded recovery for account deletions whose scheduled continuation was
+// dropped. Without it the by_status_updatedAt index has no reader, and a user
+// whose erase stalled sits write-fenced and already anonymized while their
+// subscription keeps billing, recoverable only by clicking Delete again or by
+// support running the runbook. The mutation only re-arms rows already staler
+// than PENDING_STALE_AFTER_MS, so a live retry backoff is never doubled, and
+// re-running a step is a no-op because every stepper re-queries its leftovers.
+crons.hourly(
+  "account-deletion-stalled-reaper",
+  { minuteUTC: 7 },
+  internal.accountDeletion.batches.reapStalledDeletions,
+  {},
+);
+
+// Bounded recovery for Company Monitoring purge generations whose scheduled
+// continuation was dropped. The mutation independently enforces the ordinary
+// lapse purgeAfter deadline, so an hourly wake cannot bypass the 24h grace.
+crons.hourly(
+  "company-monitoring-stalled-purge-reaper",
+  { minuteUTC: 37 },
+  internal.companyMonitoring.accounts.reapStalledAccountPurges,
+  {},
+);
+
+// Company Monitoring account roots are provisioned on first use and are no
+// longer touched by entitlement writes (#6256), so lapses are pulled here
+// instead of pushed from billing. Scanning only companyMonitoringAccounts means
+// this costs nothing for the subscribers who never use the feature. The 24h
+// purgeAfter grace still applies downstream, so detection latency of one tick
+// is absorbed by a window that already exists.
+crons.hourly(
+  "company-monitoring-entitlement-reconciler",
+  { minuteUTC: 47 },
+  internal.companyMonitoring.accounts.reconcileAccountEntitlements,
+  {},
+);
+
+// Retention sweep for the preference-write rate limiter (#6706). The limiter
+// used to drop expired-window rows inline on every write, which widened that
+// mutation's OCC read set from one counter row to the caller's entire row set
+// and livelocked users writing from two tabs. Collecting them here keeps the
+// write path's read set at exactly the current window. Hourly, not daily: a
+// user writing continuously produces one row per 60s window, so an hourly tick
+// bounds the table at ~60 rows per active user instead of ~1440.
+crons.hourly(
+  "user-prefs-rate-limit-prune",
+  { minuteUTC: 52 },
+  internal.userPreferences.pruneStaleWriteRateLimits,
+  {},
+);
+
 // PRO-launch broadcast ramp runner. Wakes once a day at 13:00 UTC
 // (~9am ET / 6am PT / 3pm CET — early enough that any kill-gate
 // trip can be triaged within US business hours, late enough that
@@ -38,6 +89,24 @@ crons.daily(
   "api-plan-limit-prune",
   { hourUTC: 4, minuteUTC: 45 },
   internal.apiPlanLimitNotices.pruneApiPlanLimitData,
+  {},
+);
+
+// Daily retention prune for the append-only historical intelligence store
+// (#5694). The table has no natural ceiling — every seeder run appends the
+// events it published — and each row carries a 512-float vector, so the
+// vector index is the real cost being bounded here. Ages rows past
+// INTEL_HISTORY_RETENTION_DAYS out by `ingestedAt` in bounded per-run
+// batches that self-drain. Also drains expired retraction tombstones
+// (#5743) in the same pass, by `retractedAt` — a handful of hand-created
+// rows do not justify a second scheduled function. See `prune` in
+// convex/intelHistory.ts. 04:30 UTC sits between the plan-limit prune
+// (04:45) and the wave-runs cleanup (04:00) so the three delete-heavy jobs
+// never overlap.
+crons.daily(
+  "intel-history-prune",
+  { hourUTC: 4, minuteUTC: 30 },
+  internal.intelHistory.prune,
   {},
 );
 
@@ -125,7 +194,8 @@ crons.daily(
 );
 
 // Dunning + winback scan (#4932). Schedules the due day-3/day-7 payment-
-// failure reminders and the 30-day winback (at most one step per
+// failure reminders, retries of unsent day-0 notices and cancellation
+// confirmations, and the 30-day winback (at most one step per
 // subscription per tick; every send re-validates live state). 14:30 UTC =
 // ~10:30am ET, inside US business hours so a reply/complaint gets seen the
 // same day, and 90 minutes after the broadcast ramp runner (13:00) so the

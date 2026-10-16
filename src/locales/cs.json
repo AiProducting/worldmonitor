@@ -7,7 +7,7 @@
     "closeBtn": "Zavřít",
     "limitedCoverage": "Omezené pokrytí",
     "instabilityIndex": "Index nestability",
-    "notTracked": "Nesledováno — {{country}} není v seznamu CII tier-1",
+    "notTracked": "Nesledováno — {{country}} není v seznamu tier-1 Country Instability Index",
     "intelBrief": "Zpravodajská svodka",
     "generatingBrief": "Generuji zpravodajskou svodku...",
     "topNews": "Hlavní zprávy",
@@ -16,7 +16,7 @@
     "predictionMarkets": "Predikční trhy",
     "loadingMarkets": "Načítám predikční trhy...",
     "infrastructure": "Ohrožení infrastruktury",
-    "briefUnavailable": "AI svodka není k dispozici — nastavte GROQ_API_KEY v Nastavení.",
+    "briefUnavailable": "AI svodka není k dispozici — nastavte OPENROUTER_API_KEY v Nastavení.",
     "cached": "Z mezipaměti",
     "fresh": "Aktuální",
     "noMarkets": "Nenalezeny žádné predikční trhy",
@@ -38,7 +38,7 @@
       "conflictEvents": "konflikty",
       "activeStrikes": "aktivní stávky/útoky",
       "aviationDisruptions": "narušení letišť",
-      "gpsJammingZones": "zóny rušení GPS"
+      "gpsJammingZones": "Zóny rušení navigace"
     },
     "timeAgo": {
       "m": "před {{count}} min",
@@ -77,6 +77,20 @@
       "activeStrikes": "Detekováno aktivních útoků/stávek: {{count}}"
     },
     "militaryActivity": "Vojenská aktivita",
+    "defenseIndustrial": {
+      "title": "Defense Industrial Base",
+      "expenditure": "Military spend",
+      "personnel": "Personnel",
+      "armsImports": "Arms imports",
+      "concentration": "Index koncentrace dodavatelů",
+      "suppliers": "Arms suppliers ({{start}}–{{end}})",
+      "source": "Zdroje: Světová banka a SIPRI Arms Transfers Database. Ukazatel objemu transferu měří relativní zbrojní transfery, ne finanční hodnotu.",
+      "sourceWorldBank": "Source: World Bank.",
+      "snapshotAssembled": "Snímek {{source}} sestaven {{time}}",
+      "unavailable": "Not available",
+      "coverage": "Mapped coverage",
+      "supplierRetained": "Supplier data retained from the last successful importer refresh."
+    },
     "economicIndicators": "Ekonomické ukazatele",
     "ownFlights": "Vlastní lety",
     "foreignFlights": "Zahraniční lety",
@@ -93,14 +107,14 @@
     "nearbyPorts": "Blízké přístavy",
     "detected": "Zjištěno",
     "notDetected": "Ne",
-    "ciiUnavailable": "Skóre CII pro tuto zemi není k dispozici.",
+    "ciiUnavailable": "Skóre Country Instability Index není pro tuto zemi dostupné.",
     "chips": {
       "criticalNews": "Kritické zprávy",
       "protests": "Protesty",
       "militaryAir": "Vojenské letectví",
       "navalVessels": "Námořní plavidla",
       "outages": "Výpadky",
-      "aisDisruptions": "Poruchy AIS",
+      "aisDisruptions": "Přerušení sledování lodí",
       "satelliteFires": "Satelitní požáry",
       "temporalAnomalies": "Časové anomálie",
       "cyberThreats": "Kybernetické hrozby",
@@ -112,11 +126,13 @@
       "doNotTravel": "Necestovat",
       "reconsiderTravel": "Zvážit cestu",
       "exerciseCaution": "Dbát opatrnosti",
+      "normalPrecautions": "Běžná preventivní opatření",
       "advisory": "Cestovní upozornění",
       "activeSirens": "Aktivní sirény",
       "sirens24h": "Sirény / 24h",
       "aviationDisruptions": "Letecké poruchy",
-      "gpsJammingZones": "Zóny rušení GPS"
+      "gpsJammingZones": "Zóny rušení navigace",
+      "temporalUnavailable": "Časové pozorování není k dispozici"
     },
     "countryFacts": "Fakta o zemi",
     "loadingFacts": "Načítání faktů o zemi...",
@@ -129,27 +145,28 @@
       "currencies": "Měny",
       "area": "Rozloha"
     },
-    "loadingResilienceScore": "Loading resilience score…",
-    "resilienceScoreUnavailable": "Resilience score unavailable.",
+    "loadingResilienceScore": "Načítání skóre odolnosti…",
+    "resilienceScoreUnavailable": "Skóre odolnosti není k dispozici.",
     "china": {
       "title": "Přehled země: Čína",
       "description": "Aktuální makro, trh, obchod, energetika a provozní dostupnost z existujících veřejných datových kontraktů.",
-      "macroPolicy": "Makro a politika",
-      "marketCredit": "Trh a úvěr",
-      "tradeSupply": "Obchod a dodavatelský řetězec",
+      "policyEvents": "Politika a vymáhání",
       "energy": "Energetika",
       "availability": "Rizika a letectví",
       "observed": "K datu:",
+      "published": "Publikováno:",
+      "effective": "Platné od:",
+      "sectors": "Sektory:",
+      "entities": "Entity:",
+      "translation": "Překlad:",
       "source": "Zdroj:",
-      "imfGrowth": "Prognóza růstu MMF",
-      "creditGdp": "Úvěr k HDP",
+      "imfGrowth": "Prognóza růstu Mezinárodního měnového fondu",
+      "creditGdp": "Kredit v poměru k ekonomickému výstupu",
       "strategicTrade": "Strategická obchodní expozice",
       "crudeImports": "Dovoz ropy",
       "gasDemand": "Poptávka po plynu",
       "energyMix": "Energetický mix",
       "coal": "uhlí",
-      "aviationAvailability": "Dostupnost letectví",
-      "hazardAvailability": "Dostupnost rizik",
       "noMajorDisruptions": "Nebyla hlášena žádná závažná narušení",
       "activeDisruptions_one": "{{count}} aktivní výpadek",
       "activeDisruptions_few": "{{count}} aktivní výpadky",
@@ -165,18 +182,128 @@
       "ccfiSource": "Šanghajská lodní burza",
       "comtradeSource": "UN Comtrade, vykazující země 156",
       "sourceUnavailable": "Zdroj nedostupný",
-      "macroUnavailable": "Makroekonomická a politická data jsou momentálně nedostupná.",
-      "marketUnavailable": "Tržní a úvěrová data jsou momentálně nedostupná.",
-      "tradeUnavailable": "Data o obchodu a dodavatelském řetězci jsou momentálně nedostupná.",
-      "energyUnavailable": "Energetická data jsou momentálně nedostupná.",
-      "availabilityUnavailable": "Data o rizicích a letectví jsou momentálně nedostupná.",
+      "policyUnavailable": "Official policy and enforcement events are currently unavailable.",
+      "policyPartial": "{{count}} official agencies are temporarily degraded.",
       "status": {
         "loading": "Načítání",
         "available": "Dostupné",
         "partial": "Částečné",
         "stale": "Zastaralé",
         "unavailable": "Nedostupné"
+      },
+      "macroSignals": "Makrosignály",
+      "crossStraitActivity": "Aktivita přes průliv",
+      "corporateDisclosures": "Firemní zveřejnění",
+      "corridorConditions": "Podmínky koridoru",
+      "activityNowcast": "Nowcast aktivity",
+      "decisionSignalsUnavailable": "Snímek rozhodovacích signálů Číny je momentálně nedostupný."
+    },
+    "foodStocks": "Food stocks",
+    "foodStocksHelp": "Produkce, nabídka a distribuce komodit USDA (poměr zásob k užití) podle tržního roku se světovým podílem pro kontext. Potravinové bilance FAOSTAT poskytují produkci a domácí nabídku, kdy produkce, nabídka a distribuce nemají úplný bilanci země.",
+    "loadingFoodStocks": "Loading food stocks…",
+    "foodStocksUnavailable": "Food stocks unavailable.",
+    "foodStocksProLocked": "Upgrade to PRO for commodity stocks-to-use",
+    "foodStocksCommodity": "Commodity",
+    "foodStocksMarketingYear": "Marketing year",
+    "foodStocksRatio": "Stocks-to-use",
+    "foodStocksWorld": "World",
+    "commodities": {
+      "wheat": "Wheat",
+      "corn": "Corn",
+      "rice": "Rice",
+      "soybeans": "Soybeans",
+      "barley": "Barley",
+      "palmOil": "Palm oil"
+    },
+    "demographicsCapability": {
+      "title": "Demographics & Workforce",
+      "help": "Věková struktura, vzdělávací pipeline a kapacita průmyslové pracovní síly z UN World Population Prospects, UNESCO Institute for Statistics a World Bank World Development Indicators a ILOSTAT.",
+      "loading": "Loading demographics and workforce data…",
+      "unavailable": "Demographics and workforce data unavailable.",
+      "proLocked": "Upgrade to PRO for demographics and workforce data",
+      "notAvailable": "Not available",
+      "ageStructure": "Age structure",
+      "education": "Education pipeline",
+      "industrialWorkforce": "Industrial workforce",
+      "medianAge": "Median age",
+      "oldAgeDependency": "Old-age dependency",
+      "totalDependency": "Total dependency",
+      "workingAgePopulation": "Working-age population",
+      "workingAgeProjection": "Working-age population (+10 years)",
+      "tertiaryEnrollment": "Tertiary enrollment",
+      "stemGraduates": "Absolventi vědy, technologií, inženýrství a matematiky",
+      "researchers": "Researchers",
+      "craftTrades": "Craft and trades workers",
+      "plantOperators": "Plant and machine operators",
+      "trainedIndustrialWorkforce": "Combined industrial workforce",
+      "manufacturingShare": "Manufacturing employment",
+      "source": "Sources: {{sources}}.",
+      "retained": "{{stage}} data retained from the last successful refresh."
+    },
+    "fiveFactorScorecard": {
+      "title": "Pětifaktorová rezilienční tabulka",
+      "help": "Frozen v1 důkazy pro potraviny, energii, demografii, technologii a obranu. Rozbalte řádek pro zobrazení vstupů, původu zdroje a důvodů chybějících dat.",
+      "loading": "Nahrávání pětifaktorové tabulky…",
+      "unavailable": "Pětifaktorová tabulka není k dispozici.",
+      "proLocked": "Upgradujte na PRO pro pětifaktorovou rezilienční tabulku",
+      "insufficient": "Nedostatečná data",
+      "notAvailable": "Nedostupné",
+      "noEvidence": "Pro tento pilíř nejsou k dispozici žádné důkazy.",
+      "score": "{{score}}/5",
+      "coverage": "{{coverage}}% pokrytí",
+      "methodologyVersion": "Methodologie v{{version}}",
+      "methodologyLink": "Zobrazit metodologii",
+      "pillars": {
+        "food": "Potraviny",
+        "energy": "Energie",
+        "demographics": "Demografie",
+        "technology": "Technologie",
+        "defense": "Obrana"
+      },
+      "reasons": {
+        "source-unavailable": "Zdroje nejsou k dispozici",
+        "country-unavailable": "Země není k dispozici",
+        "invalid-value": "Neplatná hodnota zdroje",
+        "stale": "Důkazy jsou zastaralé",
+        "coverage-below-floor": "Pokrytí je pod minimálním limitem pro hodnocení",
+        "required-group-missing": "Chybí povinná skupina důkazů",
+        "missing-population": "Populace není k dispozici",
+        "redistribution-blocked": "Znovudistribuce zdroje není povolena",
+        "pillar-unavailable": "Pilíř není k dispozici"
+      },
+      "inputs": {
+        "population": "Populace",
+        "food_productionBalance": "Produkční bilance",
+        "food_stocksToUse": "Zásoby k využití",
+        "food_waterSecurity": "Dostupnost vody",
+        "food_importDiversity": "Rozmanitost dovozu",
+        "energy_productionBalance": "Produkční bilance",
+        "energy_lowCarbonShare": "Díl podíl nízkouhlíkových zdrojů",
+        "energy_gridEfficiency": "Efektivita sítě",
+        "demographics_totalDependency": "Celková závislost",
+        "demographics_oldAgeDependency": "Závislost na starších",
+        "demographics_workingAgeProjection": "Předpokládaný počet pracovníků",
+        "demographics_tertiaryEnrollment": "Vstup do terciárního vzdělání",
+        "demographics_researchersPerMillion": "Vědci na milion obyvatel",
+        "demographics_stemGraduateShare": "Podíl absolventů vědy, technologií, inženýrství a matematiky",
+        "demographics_trainedIndustrialShare": "Díl vycvičené průmyslové pracovní síly",
+        "demographics_manufacturingEmploymentShare": "Díl zaměstnanosti v průmyslu",
+        "technology_internetUse": "Používání internetu",
+        "technology_mobileSubscriptions": "Přihlášky k mobilnímu internetu",
+        "technology_fixedBroadband": "Připojení k pevné širokopásmové síti",
+        "technology_rdSpend": "Výdaje na výzkum a vývoj",
+        "technology_researchersPerMillion": "Vědci na milion obyvatel",
+        "technology_stemGraduateShare": "Podíl absolventů vědy, technologií, inženýrství a matematiky",
+        "technology_electricityAccess": "Přístup k elektřině",
+        "defense_expenditureUsd": "Výdaje na obranu (USD)",
+        "defense_expenditurePctGdp": "Výdaje na obranu (% HDP)",
+        "defense_personnel": "Personal ozbrojených sil",
+        "defense_industrialBalance": "Bilance průmyslu obrany",
+        "defense_supplierDiversity": "Rozmanitost dodavatelů zbraní"
       }
+    },
+    "defenseIndustrialBase": {
+      "proLocked": "Upgradujte na PRO pro závislosti dodavatelů zbraní a vojenskou kapacitu"
     }
   },
   "header": {
@@ -209,21 +336,21 @@
     "sourceRegionTopical": "Tématické",
     "sourceRegionIntel": "Zpravodajství",
     "sourceRegionTechNews": "Tech novinky",
-    "sourceRegionAiMl": "AI a ML",
-    "sourceRegionStartupsVc": "Startupy a VC",
+    "sourceRegionAiMl": "AI a strojové učení",
+    "sourceRegionStartupsVc": "Startupy a rizikový kapitál",
     "sourceRegionRegionalTech": "Regionální ekosystémy",
     "sourceRegionDeveloper": "Vývojáři",
     "sourceRegionCybersecurity": "Kybernetická bezpečnost",
     "sourceRegionTechPolicy": "Politika a výzkum",
     "sourceRegionTechMedia": "Média a podcasty",
     "sourceRegionMarkets": "Trhy a analýzy",
-    "sourceRegionFixedIncomeFx": "Pevné výnosy a Forex",
+    "sourceRegionFixedIncomeFx": "Dluhopisy a zahraniční měny",
     "sourceRegionCommodities": "Komodity",
     "sourceRegionCryptoDigital": "Krypto a digitál",
     "sourceRegionCentralBanks": "Centrální banky a ekonomika",
     "sourceRegionDeals": "Transakce a korporace",
     "sourceRegionFinRegulation": "Finanční regulace",
-    "sourceRegionGulfMena": "Záliv a MENA",
+    "sourceRegionGulfMena": "Zatoka a Střední východ a Severní Afrika",
     "filterPanels": "Filtrovat panely...",
     "resetLayout": "Obnovit rozložení",
     "resetLayoutTooltip": "Obnovit výchozí uspořádání panelů",
@@ -235,15 +362,15 @@
     "panelCatTopical": "Tématické",
     "panelCatDataTracking": "Data a sledování",
     "panelCatTechAi": "Technologie a AI",
-    "panelCatStartupsVc": "Startupy a VC",
+    "panelCatStartupsVc": "Startupy a rizikový kapitál",
     "panelCatSecurityPolicy": "Bezpečnost a politika",
     "panelCatMarkets": "Trhy",
-    "panelCatFixedIncomeFx": "Pevné výnosy a Forex",
+    "panelCatFixedIncomeFx": "Dluhopisy a zahraniční měny",
     "panelCatCommodities": "Komodity",
     "panelCatCryptoDigital": "Krypto a digitál",
     "panelCatCentralBanks": "Centrální banky a ekonomika",
     "panelCatDeals": "Transakce a instituce",
-    "panelCatGulfMena": "Záliv a MENA",
+    "panelCatGulfMena": "Zatoka a Střední východ a Severní Afrika",
     "downloadApp": "Stáhnout aplikaci",
     "selectRegion": "Vybrat region",
     "cached": "ULOŽENO V MEZIPAMĚTI",
@@ -257,7 +384,7 @@
     "panelCatCommodityEcon": "Ekonomika a obchod",
     "panelCatHappyNews": "Dobré zprávy",
     "panelCatHappyPlanet": "Planeta a dárcovství",
-    "embed": "Embed"
+    "embed": "Vložit"
   },
   "panels": {
     "liveNews": "Živé zprávy",
@@ -292,24 +419,25 @@
     "tech": "Technologie",
     "crypto": "Krypto",
     "heatmap": "Teplotní mapa sektorů",
-    "ai": "AI/ML",
+    "ai": "AI a strojové učení",
     "layoffs": "Sledování propouštění",
     "monitors": "Moje monitory",
     "satelliteFires": "Požáry",
-    "macroSignals": "Tržní radar",
-    "etfFlows": "Sledování BTC ETF",
+    "macroSignals": "Podmínky trhu Bitcoin",
+    "etfFlows": "Toky prostředků Bitcoin",
     "stablecoins": "Stablecoiny",
     "deduction": "Dedukce situace",
     "ucdpEvents": "UCDP Konflikty",
     "giving": "Globální dárcovství",
-    "displacement": "UNHCR Vysídlení",
+    "displacement": "Uprchlíci a přesídlení",
     "climate": "Klimatické anomálie",
     "populationExposure": "Expozice obyvatelstva",
     "securityAdvisories": "Bezpečnostní varování",
     "orefSirens": "Sirény v Izraeli",
     "telegramIntel": "Telegram Intel",
-    "startups": "Startupy a VC",
-    "vcblogs": "Postřehy z VC a eseje",
+    "xIntel": "X News Accounts",
+    "startups": "Startupy a rizikový kapitál",
+    "vcblogs": "Poznatky a články o rizikovém kapitálu",
     "regionalStartups": "Globální startupové zprávy",
     "unicorns": "Sledování jednorožců",
     "accelerators": "Akcelerátory a Demo Days",
@@ -321,13 +449,13 @@
     "cloud": "Cloud a infrastruktura",
     "dev": "Vývojářská komunita",
     "github": "GitHub trendy",
-    "ipo": "IPO a SPAC",
-    "funding": "Financování a VC",
+    "ipo": "Veřejná uvedení a fúze fikcí podniků",
+    "funding": "Financování a rizikový kapitál",
     "producthunt": "Product Hunt",
     "events": "Tech události",
     "serviceStatus": "Stav služeb",
     "techReadiness": "Index tech. připravenosti",
-    "gccInvestments": "Investice GCC",
+    "gccInvestments": "Investice Rady pro spolupráci v Zálivu",
     "geoHubs": "Geopolitická centra",
     "gulfEconomies": "Ekonomiky Perského zálivu",
     "gulfIndices": "Indexy Perského zálivu",
@@ -339,7 +467,7 @@
     "oilInventories": "Zásoby ropy",
     "energyCrisis": "Sledovač energetické krize",
     "goldIntelligence": "Zlatá inteligence",
-    "wsbTickerScanner": "WSB Ticker Scanner",
+    "wsbTickerScanner": "Skener WallStreetBets",
     "internetDisruptions": "Přerušení internetu",
     "internetDisruptionsTabs": {
       "outages": "Výpadky",
@@ -351,7 +479,7 @@
     "groceryBasket": "Index potravin",
     "groceryItem": "Položka",
     "bigmacDesc": "Ceny Big Macu v zemích Středního východu (Big Mac Index)",
-    "bigmacWow": "WoW",
+    "bigmacWow": "Změna týden na týden",
     "bigmacCountry": "Země",
     "faoFoodPriceIndex": "FAO Index cen potravin",
     "fuelPrices": "Ceny paliv",
@@ -365,7 +493,8 @@
     "consumerPrices": "Ceny pro spotřebitele",
     "fearGreed": "Strach a chamtivost",
     "marketBreadth": "Šíře trhu",
-    "climateNews": "Zprávy o klimatu"
+    "climateNews": "Zprávy o klimatu",
+    "fx": "Kurzy zahraniční měny"
   },
   "commands": {
     "prefixes": {
@@ -430,7 +559,7 @@
         "minimal": "Minimální vrstvy (konflikty + hotspoty)"
       },
       "layer": {
-        "ais": "Přepnout sledování lodí AIS",
+        "ais": "Přepnout sledování lodí",
         "flights": "Přepnout vojenské lety",
         "conflicts": "Přepnout konfliktní zóny",
         "hotspots": "Přepnout zpravodajské hotspoty",
@@ -445,7 +574,9 @@
         "displacement": "Přepnout toky vysídlení",
         "climate": "Přepnout klimatické anomálie",
         "outages": "Přepnout výpadky internetu",
-        "tradeRoutes": "Přepnout obchodní trasy"
+        "tradeRoutes": "Přepnout obchodní trasy",
+        "canadaRoads": "Toggle Canada roads overlay",
+        "canadaAlerts": "Toggle Canada provincial emergency alerts overlay"
       },
       "view": {
         "dark": "Přepnout na tmavý režim",
@@ -471,6 +602,10 @@
       "recent": "Nedávná hledání",
       "empty": "Hledejte data nebo spouštějte příkazy",
       "noResults": "Žádné výsledky",
+      "resultAnnouncement_one": "{{count}} výsledek pro {{query}}",
+      "resultAnnouncement_few": "{{count}} výsledky pro {{query}}",
+      "resultAnnouncement_many": "{{count}} výsledku pro {{query}}",
+      "resultAnnouncement_other": "{{count}} výsledků pro {{query}}",
       "navigate": "přejít",
       "select": "vybrat",
       "close": "zavřít",
@@ -562,8 +697,8 @@
     },
     "mobileWarning": {
       "title": "Mobilní zobrazení",
-      "description": "Prohlížíte si zjednodušenou mobilní verzi zaměřenou na region MENA se základními vrstvami.",
-      "tip": "Tip: K přepínání regionů použijte tlačítka zobrazení (GLOBÁLNÍ/USA/MENA). Klepnutím na značky zobrazíte podrobnosti.",
+      "description": "Prohlížíte zjednodušenou mobilní verzi zaměřenou na region Střední východ a Severní Afrika s povolenými základními vrstvami.",
+      "tip": "Tip: Pomocí tlačítek zobrazení (GLOBAL/US/Střední východ a Severní Afrika) přepínejte regiony. Klepnutím na značky zobrazíte podrobnosti.",
       "dontShowAgain": "Příště nezobrazovat",
       "gotIt": "Rozumím"
     },
@@ -607,7 +742,7 @@
         "URLHAUS_AUTH_KEY": "Používá se pro API URLhaus a ThreatFox.",
         "OTX_API_KEY": "Volitelný zdroj pro obohacení vrstvy kybernetických hrozeb.",
         "ABUSEIPDB_API_KEY": "Volitelný zdroj pro obohacení reputace škodlivých IP adres.",
-        "FINNHUB_API_KEY": "Akciové kurzy a tržní data v reálném čase.",
+        "FINNHUB_API_KEY": "Zpožděné nebo přednahrané akciové kurzy a tržní data. Klíč není živý přenos.",
         "NASA_FIRMS_API_KEY": "Systém informací o požárech pro řízení zdrojů (FIRMS).",
         "OLLAMA_API_URL": "např. http://127.0.0.1:11434 (Ollama) nebo http://127.0.0.1:1234/v1 (LM Studio) — koncový bod kompatibilní s OpenAI.",
         "OLLAMA_MODEL": "např. llama3.1:8b — značka modelu k použití pro sumarizaci."
@@ -671,14 +806,14 @@
       "fresh": "Aktuální",
       "noMarkets": "Nenalezeny žádné predikční trhy",
       "predictionMarkets": "Predikční trhy",
-      "unavailable": "AI svodka není k dispozici — nastavte GROQ_API_KEY v Nastavení."
+      "unavailable": "AI svodka není k dispozici — nastavte OPENROUTER_API_KEY v Nastavení."
     },
     "countryBrief": {
       "identifying": "Identifikuji zemi...",
       "locating": "Lokalizuji region...",
       "limitedCoverage": "Omezené pokrytí",
       "instabilityIndex": "Index nestability",
-      "notTracked": "Nesledováno — {{country}} není v seznamu CII tier-1",
+      "notTracked": "Nesledováno — {{country}} není v seznamu tier-1 Country Instability Index",
       "intelBrief": "Zpravodajská svodka",
       "generatingBrief": "Generuji zpravodajskou svodku...",
       "topNews": "Hlavní zprávy",
@@ -687,7 +822,7 @@
       "predictionMarkets": "Predikční trhy",
       "loadingMarkets": "Načítám predikční trhy...",
       "infrastructure": "Ohrožení infrastruktury",
-      "briefUnavailable": "AI svodka není k dispozici — nastavte GROQ_API_KEY v Nastavení.",
+      "briefUnavailable": "AI svodka není k dispozici — nastavte OPENROUTER_API_KEY v Nastavení.",
       "cached": "Z mezipaměti",
       "fresh": "Aktuální",
       "noMarkets": "Nenalezeny žádné predikční trhy",
@@ -709,7 +844,7 @@
         "conflictEvents": "konflikty",
         "activeStrikes": "aktivní stávky/útoky",
         "aviationDisruptions": "narušení letišť",
-        "gpsJammingZones": "zóny rušení GPS"
+        "gpsJammingZones": "Zóny rušení navigace"
       },
       "timeAgo": {
         "m": "před {{count}} min",
@@ -737,9 +872,12 @@
         "space": "VESMÍR"
       },
       "paused": "Webkamery pozastaveny",
-      "pausedIdle": "Webkamery pozastaveny — pohněte myší pro obnovení",
       "play": "Přehrát",
-      "previewStatus": "Živý náhled"
+      "previewStatus": "Připraveno k přehrání",
+      "connecting": "Připojování…",
+      "unverified": "Nelze potvrdit, že je tento stream živý",
+      "offline": "{{city}} je nyní offline",
+      "noFeeds": "V této oblasti nejsou momentálně žádné živé webkamery"
     },
     "monitor": {
       "placeholder": "Klíčová slova (oddělená čárkou)",
@@ -786,14 +924,16 @@
       "gov": "Vláda",
       "noSpending": "Žádné nedávné vládní zakázky",
       "awards": "zakázky",
-      "noIndicatorData": "Zatím žádná data ukazatelů - FRED se možná načítá",
-      "fredKeyMissing": "Vyžadován API klíč FRED — pro povolení ekonomických ukazatelů ho přidejte v Nastavení",
+      "noIndicatorData": "Zatím žádná data indikátoru – údaje Federálního rezervního systému se pravděpodobně načítají",
+      "fredKeyMissing": "Je vyžadován klíč API Federal Reserve Economic Data. Přidejte jej v Nastavení, abyste povolili ekonomické indikátory.",
       "in": "v",
       "centralBanks": "Centrální banky",
-      "noBisData": "Data BIS jsou dočasně nedostupná - zkusím to znovu",
+      "laborMarket": "Labor Market",
+      "metroUnemployment": "Metro Unemployment",
+      "noBisData": "Údaje Banky pro mezinárodní vypořádání jsou dočasně nedostupné – bude se pokusit znovu",
       "policyRate": "Úroková sazba",
-      "creditToGdp": "Úvěry / HDP",
-      "realEer": "Reálný EER",
+      "creditToGdp": "Kredit v poměru k ekonomickému výstupu",
+      "realEer": "Reálný efektivní směnný kurz",
       "cut": "snížení",
       "hike": "zvýšení",
       "hold": "beze změny",
@@ -806,7 +946,7 @@
         "watchDetail": "Podmínky na trzích vyžadují pozornější sledování.",
         "steadyDetail": "Makroekonomické podmínky jsou nyní stabilní."
       },
-      "infoTooltip": "<strong>Makro stres</strong> Makro indikátory, vládní výdaje a údaje centrálních bank:<ul><li><strong>Indikátory</strong>: VIX, sazby, výnosová křivka, pracovní trh, inflace</li><li><strong>Vláda</strong>: Nedávné US vládní smlouvy</li><li><strong>Centrální banky</strong>: Sazby BIS a údaje o výměnných kurzech</li></ul>"
+      "infoTooltip": "<strong>Makrostrukturální stres</strong> Makropodíly, vládní výdaje a údaje centrální banky:<ul><li><strong>Indikátory</strong>: VIX, sazby, výnosová křivka, práce, inflace</li><li><strong>Vláda</strong>: Nedávné přidělení vládních kontraktů USA</li><li><strong>Centrální banky</strong>: Údaje Banky pro mezinárodní vypořádání o sazbách měnové politiky a směnných kurzech</li></ul>"
     },
     "supplyChain": {
       "chokepoints": "Úzká hrdla",
@@ -827,8 +967,8 @@
       "mineral": "Minerál",
       "topProducers": "Největší producenti",
       "risk": "Riziko",
-      "aisDisruptions": "Poruchy AIS",
-      "wowChange": "změna týden na týden",
+      "aisDisruptions": "Přerušení sledování lodí",
+      "wowChange": "Změna týden na týden",
       "riskLevel": "Úroveň rizika",
       "flowUnavailable": "Data o tocích nejsou dostupná",
       "containerRates": "Ceny kontejnerů",
@@ -837,7 +977,13 @@
       "loadingHistory": "Načítání historie tranzitu…",
       "historyUnavailable": "Historie tranzitu není dostupná",
       "transitDataUnavailable": "Data tranzitu nejsou dostupná (upstream částečný)",
-      "infoTooltip": "<strong>Monitor dodavatelského řetězce</strong> Globální logistika a sledování zdrojů:<ul><li><strong>Průsmyky</strong>: Stav námořního tranzitu, skóre přerušení a počet lodí</li><li><strong>Přeprava</strong>: Trendy Baltic Dry Index a nákladních sazeb</li><li><strong>Nerostné suroviny</strong>: Riziko koncentrace kritických nerostných surovin (HHI) a hlavní výrobci</li></ul>Klikněte na kartu průsmyku pro rozšíření grafu historie tranzitu."
+      "infoTooltip": "<strong>Supply Chain Monitor</strong> Globální sledování logistiky a zdrojů:<ul><li><strong>Kritická místa</strong>: Stav námořní dopravy, skóre přerušení a počty plavidel</li><li><strong>Námořní doprava</strong>: Baltic Dry Index a trendy nákladních sazeb</li><li><strong>Minerály</strong>: Riziko koncentrace kritických nerostů (index koncentrace výroby) a hlavní producenti</li></ul>Kliknutím na kartu kritického místa rozbalíte graf historie tranzitu.",
+      "mineStage": "Mine",
+      "refineryStage": "Refine",
+      "stageUnavailable": "No published figures for this stage",
+      "withheldNote": "W withheld",
+      "productionCaption": "Country shares of actual production. The map deposits layer shows where resources sit; this table shows who mines or refines them.",
+      "productionProLocked": "Upgrade na PRO pro podíly zemí dolů a rafinerií s koncentrací (index koncentrace producenta) podle stupně."
     },
     "tradePolicy": {
       "tariffs": "Cla",
@@ -846,8 +992,8 @@
       "noTariffData": "Data o clech nejsou k dispozici",
       "noFlowData": "Data o obchodních tocích nejsou k dispozici",
       "noBarriers": "Hlášeny žádné obchodní bariéry",
-      "apiKeyMissing": "Vyžadován API klíč WTO — přidejte jej v Nastavení",
-      "upstreamUnavailable": "Data WTO jsou dočasně nedostupná — zobrazuji data z mezipaměti",
+      "apiKeyMissing": "Vyžadován klíč rozhraní Světové obchodní organizace — přidejte jej v Nastavení",
+      "upstreamUnavailable": "Data Světové obchodní organizace dočasně nedostupná — zobrazuji uložená data",
       "exports": "Export",
       "imports": "Import",
       "yoyChange": "Meziroční změna",
@@ -856,36 +1002,37 @@
       "lowTariff": "Nízké",
       "overview": "Přehled",
       "noOverviewData": "Žádná data přehledu cel nejsou dostupná",
-      "mfnAppliedRate": "Aplikovaná sazba MFN",
-      "baselineMfnTariff": "Základní tarif MFN",
+      "mfnAppliedRate": "Obecná nepreferenční celní sazba",
+      "baselineMfnTariff": "Obecná základní sazba cel",
       "effectiveTariffRateLabel": "Efektivní sazba cla",
       "gapLabel": "Rozdíl",
-      "gapVsMfnLabel": "Rozdíl vs MFN",
+      "gapVsMfnLabel": "Rozdíl od obecné sazby cel",
       "noEffectiveCoverageForCountry": "Žádné pokrytí efektivní sazby pro tuto zemi",
-      "effectiveMinusBaseline": "Efektivní sazba mínus základní sazba WTO MFN",
-      "wtoBaselineMeta": "WTO MFN aplikovaná sazba | {{year}}",
-      "overviewNoteNoEffective": "Tyto údaje jsou základní sazby WTO MFN, nikoli aktuální zatížení tarify z jednostranných tarifních opatření.",
-      "usBaselineLabel": "Základní sazba WTO MFN USA",
-      "overviewNoteTail": "Tyto karty zobrazují závazky základních sazeb WTO, nikoli živé efektivní zatížení tarify.",
+      "effectiveMinusBaseline": "Efektivní sazba minus obecná základní sazba cel",
+      "wtoBaselineMeta": "Světová obchodní organizace obecná základní sazba cel | {{year}}",
+      "overviewNoteNoEffective": "Tyto údaje představují sazby režimu nejvyšších výhod Světové obchodní organizace, nikoli aktuální zatížení cel z jednostranných akcí v oblasti cel.",
+      "usBaselineLabel": "Obecná základní sazba cel USA",
+      "overviewNoteTail": "Tyto karty ukazují obecné sazby základních tarifů, ne aktuální efektivní zatížení cly.",
       "revenue": "Příjem USA",
       "noRevenueData": "Žádná data o daních z cel nejsou dostupná",
       "treasuryUnavailable": "Data ministerstva financí nejsou dočasně dostupná",
-      "fytdLabel": "FY{{year}} YTD",
+      "fytdLabel": "FY{{year}} od začátku roku",
       "vsPriorFy": "vs FY{{year}}",
-      "sourceWto": "WTO",
+      "sourceWto": "Světová obchodní organizace",
       "sourceTreasury": "Ministerstvo financí USA",
       "colDate": "Datum",
       "colMonthly": "Měsíčně",
-      "colFytd": "FY YTD",
+      "colFytd": "FY od začátku roku",
       "strategicFlows": "Strategické toky",
       "noComtradeData": "Žádná data o strategických tocích nejsou dostupná",
       "comtradeUnavailable": "Data OSN Comtrade nejsou dočasně dostupná",
       "sourceComtrade": "OSN Comtrade",
+      "comtradeNationalScope": "UN Comtrade rows are national-level official statistics for the reporting country. They are not a town, corridor, factory, port, or shipment export ledger.",
       "anomalyBadge": "Anomálie",
       "colReporter": "Země",
       "colCommodity": "Komodita",
       "colTradeValue": "Obchodní hodnota",
-      "infoTooltip": "<strong>Obchodní politika</strong> Sledování základních sazeb WTO a dopadů cel:<ul><li><strong>Přehled</strong>: Základní sazby WTO MFN s kontextem efektivní sazby USA, pokud je dostupný</li><li><strong>Cla</strong>: Trendy tarifů WTO MFN vs odhad efektivního tarifu USA</li><li><strong>Obchodní toky</strong>: Objemy vývozů/dovozu se změnami rok na rok</li><li><strong>Bariéry</strong>: Technické bariéry obchodu (oznámení TBT/SPS)</li><li><strong>Příjem</strong>: Měsíční příjmy z amerických cel (data MTS ministerstva financí USA)</li></ul>"
+      "infoTooltip": "<strong>Obchodní politika</strong> Obecné nepreferenční sazby cel Světové obchodní organizace s efektivními sazbami USA, pokud jsou dostupné. Zahrnuje trendy cel, obchodní toky, technické a potravinářské překážky a měsíční příjmy z cel USA."
     },
     "gdelt": {
       "empty": "K tomuto tématu nejsou žádné nedávné články"
@@ -902,7 +1049,10 @@
       "yes": "Ano",
       "no": "Ne",
       "vol": "Obj",
-      "closes": "Zavírá"
+      "closes": "Zavírá",
+      "leanYes": "Lean Yes",
+      "leanNo": "Lean No",
+      "tossUp": "Toss-up"
     },
     "stablecoins": {
       "pegHealth": "Zdraví vazby (Peg)",
@@ -910,7 +1060,8 @@
       "token": "Token",
       "mcap": "Trž. kap.",
       "vol24h": "Obj. 24h",
-      "chg24h": "Změna 24h"
+      "chg24h": "Změna 24h",
+      "infoTooltip": "<strong>Stablecoins</strong> Peg health, market cap, and 24h volume for major USD-pegged tokens (USDT, USDC, DAI, BUSD). A broken peg signals systemic risk."
     },
     "status": {
       "updatedAt": "Aktualizováno {{time}}"
@@ -926,10 +1077,18 @@
       "skipToEnd": "Skip to end"
     },
     "pizzint": {
+      "indexSource": "Index: World Monitor · data podniků:",
+      "statusNormal": "NORMÁLNÍ",
+      "statusNoData": "BEZ DAT",
+      "statusNoBaseline": "BEZ ZÁKLADU",
+      "vsUsual": "oproti obvyklému",
       "title": "Pentagon Pizza Index",
       "defcon": "DEFCON {{level}}",
       "updated": "Aktualizováno před {{timeAgo}}",
       "tensionsTitle": "Geopolitické napětí",
+      "tensionsSource": "Napětí: World Monitor na základě událostí GDELT",
+      "insufficientData": "Nedostatek dat",
+      "pizzaUnavailable": "Aktivita pizzerií není dostupná",
       "source": "Zdroj:",
       "statusClosed": "ZAVŘENO",
       "statusSpike": "NÁRŮST",
@@ -941,11 +1100,11 @@
       "minutesAgo": "před {{m}} min",
       "hoursAgo": "před {{h}} h",
       "defconLabels": {
-        "1": "COCKED PISTOL - MAXIMÁLNÍ PŘIPRAVENOST",
-        "2": "FAST PACE - OZBROJENÉ SÍLY PŘIPRAVENY",
-        "3": "ROUND HOUSE - ZVÝŠENÁ PŘIPRAVENOST SIL",
-        "4": "DOUBLE TAKE - ZVÝŠENÝ ZPRAVODAJSKÝ DOHLED",
-        "5": "FADE OUT - NEJNIŽŠÍ PŘIPRAVENOST"
+        "1": "Maximální aktivita",
+        "2": "Vysoká aktivita",
+        "3": "Zvýšená aktivita",
+        "4": "Nad normálem",
+        "5": "Normální aktivita"
       }
     },
     "strategicPosture": {
@@ -956,7 +1115,7 @@
       "units": {
         "fighters": "Stíhačky",
         "tankers": "Tankery",
-        "awacs": "AWACS",
+        "awacs": "Letecké včasné varování",
         "recon": "Průzkumné",
         "transport": "Transportní",
         "bombers": "Bombardéry",
@@ -970,17 +1129,17 @@
         "auxiliary": "Pomocná plavidla",
         "navalVessels": "Námořní plavidla"
       },
-      "infoTooltip": "<strong>Metodika</strong><p>Agreguje vojenská letadla a námořní plavidla podle válčiště (theater).</p><ul><li><strong>Normální:</strong> Základní aktivita</li><li><strong>Zvýšená:</strong> Nad hranicí (50+ letadel)</li><li><strong>Kritická:</strong> Vysoká koncentrace (100+ letadel)</li></ul><p><strong>Úderná schopnost:</strong> Tankery + AWACS + Stíhačky přítomné v dostatečném počtu pro trvalé operace.</p>",
+      "infoTooltip": "<strong>Metodologie</strong><p>Agreguje vojenská letadla a válečné lodě podle operačního oblasti.</p><ul><li><strong>Normální:</strong> Základní aktivita</li><li><strong>Zvýšená:</strong> Nad prahovou hodnotu (50+ letadel)</li><li><strong>Kritická:</strong> Vysoká koncentrace (100+ letadel)</li></ul><p><strong>Schopné udělat úder:</strong> Tankery + Letecké včasné varování + Stíhače přítomni v dostatečném počtu pro trvalé operace.</p>",
       "scanningTheaters": "Skenování válčišť",
       "positions": "Pozice letadel",
       "navalVesselsLoading": "Námořní plavidla",
       "theaterAnalysis": "Analýza válčiště",
-      "connectingStreams": "Připojování k živým streamům ADS-B a AIS...",
+      "connectingStreams": "Připojování k živým tokům transpondérů letadel a sledování plavidel...",
       "initialLoadNote": "Úvodní načtení trvá 30-60 sekund, než se nahromadí sledovací data",
       "acquiringData": "Získávání dat",
-      "acquiringDesc": "Připojování k síti ADS-B pro vojenská letová data. Při prvním načtení to může trvat 30-60 sekund.",
-      "openSkyAdsb": "OpenSky ADS-B",
-      "aisVesselStream": "AIS Stream Plavidel",
+      "acquiringDesc": "Připojování k síti transpondérů letadel pro data vojenských letů. Při prvním načtení to může trvat 30–60 sekund.",
+      "openSkyAdsb": "Transpondér letadel OpenSky",
+      "aisVesselStream": "Tok sledování plavidel",
       "retryNow": "Zkusit znovu",
       "feedRateLimited": "Zdroj omezen rychlostí (Rate Limited)",
       "rateLimitedDesc": "API OpenSky má limity požadavků. Panel to zkusí znovu za několik minut automaticky, nebo to můžete zkusit hned.",
@@ -1026,9 +1185,6 @@
       "datacenter": "Datové centrum",
       "base": "Základna",
       "nuclear": "Jaderné zařízení"
-    },
-    "community": {
-      "joinDiscussion": "Help Shape What's Next"
     },
     "threatLabels": {
       "critical": "KRIT",
@@ -1079,7 +1235,7 @@
       "views": {
         "global": "Globální",
         "americas": "Amerika",
-        "mena": "MENA",
+        "mena": "Střední východ a severní Afrika",
         "europe": "Evropa",
         "asia": "Asie",
         "latam": "Latinská Amerika",
@@ -1113,7 +1269,7 @@
         "ucdpEvents": "UCDP události",
         "displacementFlows": "Toky vysídlení",
         "climateAnomalies": "Klimatické anomálie",
-        "weatherAlerts": "Upozornění na počasí",
+        "weatherAlerts": "Varování před nebezpečným počasím (NWS, ECCC, WMO SWIC)",
         "strategicWaterways": "Strategické vodní cesty",
         "economicCenters": "Ekonomická centra",
         "criticalMinerals": "Kritické minerály",
@@ -1121,19 +1277,21 @@
         "financialCenters": "Finanční centra",
         "centralBanks": "Centrální banky",
         "commodityHubs": "Komoditní centra",
-        "gulfInvestments": "Investice GCC",
+        "gulfInvestments": "Investice Rady pro spolupráci v Zálivu",
         "tradeRoutes": "Obchodní cesty",
         "iranAttacks": "Útoky Íránu",
-        "gpsJamming": "RUŠENÍ GPS",
+        "gpsJamming": "Rušení navigace",
         "dayNight": "Den/Noc",
-        "ciiChoropleth": "Nestabilita CII",
+        "ciiChoropleth": "Nestabilita zemí",
         "positiveEvents": "Pozitivní události",
         "kindness": "Skutky laskavosti",
         "happiness": "Světové štěstí",
         "speciesRecovery": "Obnova druhů",
         "renewableInstallations": "Čistá energie",
         "radiationSpike": "Skokový nárůst radiace",
-        "radiationElevated": "Zvýšená radiace"
+        "radiationElevated": "Zvýšená radiace",
+        "canadaRoads": "Canada Roads",
+        "canadaAlerts": "Canada Alerts (AB + BC + SK)"
       },
       "tooltip": {
         "earthquake": "Zemětřesení",
@@ -1160,7 +1318,12 @@
         "medium": "střední",
         "news": "Zprávy",
         "undisclosed": "Nezveřejněno",
-        "stake": "podíl"
+        "stake": "podíl",
+        "internallyDisplaced": "vnitřně vysídlených",
+        "sourceIomDtm": "Zdroj: IOM DTM",
+        "sinceDate": "od {{date}}",
+        "lastMonth": "minulý měsíc",
+        "sourceUnhcrOdp": "Zdroj: Portál operačních dat UNHCR"
       },
       "layerHelp": {
         "title": "Průvodce mapovými vrstvami",
@@ -1194,7 +1357,7 @@
           "infraDatacenters": "Výpočetní clustery AI >=10 000 GPU",
           "infraOutages": "Výpadky internetu a narušení služeb",
           "naturalEventsTech": "Zemětřesení, bouře, požáry (mohou ovlivnit datová centra)",
-          "weatherAlerts": "Upozornění na extrémní počasí",
+          "weatherAlerts": "Oficiální varování před nebezpečným počasím od národních meteorologických služeb (NWS, ECCC, WMO SWIC)",
           "economicCenters": "Burzy a centrální banky",
           "countriesOverlay": "Překryv názvů zemí",
           "financeExchanges": "Hlavní světové burzy podle úrovně trhu",
@@ -1206,7 +1369,7 @@
           "financeOutages": "Výpadky internetu, které mohou ovlivnit operace na trzích",
           "financeCyberThreats": "Bezpečnostní události kolem finanční infrastruktury",
           "macroWaterways": "Strategická úzká hrdla pro přepravu komodit",
-          "weatherAlertsMarket": "Události extrémního počasí s tržním významem",
+          "weatherAlertsMarket": "Oficiální varování před nebezpečným počasím s významem pro trhy (NWS, ECCC, WMO SWIC)",
           "naturalEventsMacro": "Zemětřesení, požáry, záplavy a další přírodní narušení",
           "timeRecent": "Filtrovat data na základě času za poslední hodiny",
           "timeExtended": "Zobrazit data z minulého týdne, měsíce nebo za celou dobu",
@@ -1221,7 +1384,7 @@
           "infraCablesFull": "Hlavní podmořské optické kabely (20 páteřních tras)",
           "infraPipelinesFull": "Ropovody/plynovody (Nord Stream, TAPI atd.)",
           "infraDatacentersFull": "Pouze výpočetní clustery AI >=10 000 GPU",
-          "transportShipping": "Živé sledování plavidel přes AIS (pozice lodí)",
+          "transportShipping": "Živé polohy plavidel z transpondérů plavidel",
           "transportDelays": "Zpoždění na letištích a pozastavení provozu (FAA)",
           "naturalEventsFull": "Zemětřesení (USGS) + bouře, požáry, sopky, povodně (NASA EONET)",
           "firesFull": "Aktivní lesní požáry a obvody požárů (NASA FIRMS)",
@@ -1235,11 +1398,13 @@
           "techCyberThreats": "Kybernetické útoky a bezpečnostní události",
           "techEvents": "Významné tech konference a události",
           "techFires": "Aktivní lesní požáry v blízkosti tech infrastruktury",
-          "financeGulfInvestments": "Investice státních fondů GCC a PZI",
+          "financeGulfInvestments": "Investice suverénních fondů a přímé zahraniční investice Rady pro spolupráci v Zálivu",
           "tradeRoutes": "Hlavní světové námořní trasy spojující přístavy přes strategická úzká hrdla",
           "dayNight": "Sluneční terminátor v reálném čase ukazující denní a noční zóny",
           "geoBoundaries": "Demilitarizované zóny, linie příměří a sporné hranice",
-          "ciiChoropleth": "Tepelná mapa Country Instability Index — zbarvuje země podle skóre CII (zelená=stabilní, červená=kritická)"
+          "ciiChoropleth": "Tepelná mapa Country Instability Index — barevně rozlišuje země podle skóre (zelená=stabilní, červená=kritické)",
+          "canadaRoads": "Official road incidents, alerts, conditions, closures, construction, and hazards across supported Canadian jurisdictions",
+          "canadaAlerts": "Provincial public-safety alerts from Alberta Emergency Alert, B.C. Evacuation Orders and Alerts, and SaskAlert"
         },
         "notes": {
           "timeAffects": "Ovlivňuje: Zemětřesení, Počasí, Protesty, Výpadky"
@@ -1254,8 +1419,8 @@
       "sectionFollowing": "Following",
       "sectionAll": "All",
       "sourceStates": {
-        "degraded": "degraded",
-        "stale": "stale"
+        "degraded": "snížená kvalita",
+        "stale": "zastaralý"
       }
     },
     "insights": {
@@ -1265,12 +1430,12 @@
       "rankingStories": "Hodnocení důležitých zpráv...",
       "analyzingSentiment": "Analýza sentimentu...",
       "generatingBrief": "Generování světové svodky...",
-      "infoTooltip": "<strong>Analýza pomocí AI</strong><br>• <strong>Světová svodka</strong>: AI souhrn (Groq/OpenRouter)<br>• <strong>Sentiment</strong>: Analýza tónu zpráv<br>• <strong>Rychlost</strong>: Rychle se šířící příběhy<br>• <strong>Oblasti zájmu</strong>: Koreluje subjekty ve zprávách se signály na mapě (vojsko, protesty, výpadky)<br><em>Pouze pro desktop • Poháněno Llama 3.3 + Focal Point Detection</em>",
+      "infoTooltip": "<strong>Analýza pomocí AI</strong><br>• <strong>Světová svodka</strong>: AI souhrn (OpenRouter)<br>• <strong>Sentiment</strong>: Analýza tónu zpráv<br>• <strong>Rychlost</strong>: Rychle se šířící příběhy<br>• <strong>Oblasti zájmu</strong>: Koreluje subjekty ve zprávách se signály na mapě (vojsko, protesty, výpadky)<br><em>Pouze pro desktop • Poháněno Llama 3.3 + Focal Point Detection</em>",
       "streamQualityLabel": "Kvalita videa",
       "streamQualityDesc": "Nastavte kvalitu pro všechny živé streamy (nižší šetří data)",
       "mapFlashLabel": "Puls živých událostí",
       "mapFlashDesc": "Probliknutí lokalit na mapě při příchodu bleskových zpráv",
-      "aiFlowCloudLabel": "Cloud AI (Groq & OpenRouter)",
+      "aiFlowCloudLabel": "Cloud AI (OpenRouter)",
       "aiFlowCloudDesc": "Odesílat titulky do cloudu pro sumarizaci AI (doporučeno)",
       "aiFlowBrowserLabel": "Lokální model v prohlížeči",
       "aiFlowBrowserDesc": "Spustit AI lokálně ve vašem prohlížeči",
@@ -1323,7 +1488,7 @@
       "briefCommodity": "KOMODITNÍ SHRNUTÍ",
       "briefEnergy": "ENERGETICKÉ SHRNUTÍ",
       "briefWorld": "SVĚTOVÉ SHRNUTÍ",
-      "mlDetected": "DETEKOVÁNO ML",
+      "mlDetected": "Strojové učení DETEKOVÁNO",
       "geographicConvergence": "GEOGRAFICKÁ KONVERGENCE",
       "focalPoints": "OHNISKOVÉ BODY",
       "toneMixed": "Smíšený",
@@ -1336,7 +1501,11 @@
       "sources_many": "{{count}} zdrojů",
       "provenanceTitle": "Původ pokrytí: počet příjatých příběhů a odlišných zdrojů, ze kterých byl tento přehled vybrán",
       "compiledFrom": "Sestaveno z {{stories}} příběhů z {{sources}} zdrojů",
-      "briefFreshness": "Vygenerováno před {{minutes}}m · nejnovější zdroj starý {{hours}}h"
+      "briefFreshness": "Vygenerováno před {{minutes}}m · nejnovější zdroj starý {{hours}}h",
+      "briefStoryDetails": "Podrobnosti zprávy ({{count}})",
+      "streamIdleStopLabel": "Zastavit živé video při nečinnosti",
+      "streamIdleStopDesc": "Zastaví Live News a Live Webcams po této době bez aktivity a zobrazí upozornění na panelu.",
+      "streamIdleStopNever": "Nikdy"
     },
     "cascade": {
       "filters": {
@@ -1393,7 +1562,7 @@
       "noData": "žádná data",
       "enable": "Povolit",
       "convergenceMetric": "Konvergence",
-      "ciiDeviation": "Odchylka CII",
+      "ciiDeviation": "Odchylka Country Instability Index",
       "infraEvents": "Události infra",
       "highAlerts": "Vysoké pohotovosti",
       "topRisks": "Hlavní rizika",
@@ -1405,10 +1574,10 @@
         "hoursAgo": "před {{count}} h"
       },
       "infoTooltip": "<strong>Metodika</strong> Kompozitní skóre (0-100) slučující:<ul><li>50 % Nestabilita zemí (váženo top 5)</li><li>30 % Geografické konvergenční zóny</li><li>20 % Incidenty infrastruktury</li></ul>Automaticky se obnovuje každých 5 minut.",
-      "cachedCiiStatus": "Cached CII {{states}}",
+      "cachedCiiStatus": "Uložené Country Instability Index {{states}}",
       "sourceStates": {
-        "degraded": "degraded",
-        "stale": "stale"
+        "degraded": "snížená kvalita",
+        "stale": "zastaralý"
       },
       "dataFreshness": "Data Freshness",
       "sourcesDetail": "{{active}}/{{total}} sources"
@@ -1437,11 +1606,11 @@
       "internetUsersIndicator": "Uživatelé internetu",
       "mobileSubscriptionsIndicator": "Mobilní předplatná",
       "broadbandAccess": "Přístup k širokopásmovému připojení",
-      "rdExpenditure": "Výdaje na výzkum a vývoj (V&V)",
+      "rdExpenditure": "Výdaje na výzkum a vývoj",
       "analyzingCountries": "Analýza 200+ zemí...",
       "source": "Zdroj: Světová banka",
       "updated": "Aktualizováno: {{date}}",
-      "infoTooltip": "<strong>Globální technologická připravenost</strong><br>Kompozitní skóre (0-100) na základě dat Světové banky:<br><br><strong>Zobrazené metriky:</strong><br>🌐 Uživatelé internetu (% populace)<br>📱 Mobilní předplatná (na 100 obyvatel)<br>🔬 Výdaje na V&V (% HDP)<br><br><strong>Váhy:</strong> V&V (35 %), Internet (30 %), Širokopásmové (20 %), Mobilní (15 %)<br><br><em>— = Žádná nedávná data nejsou k dispozici</em><br><em>Zdroj: World Bank Open Data (2019-2024)</em>",
+      "infoTooltip": "<strong>Připravenost technologií</strong> Složený ukazatel Světové banky, 0–100. Váhy jsou výzkum a vývoj 35 %, internet 30 %, širokopásmové připojení 20 % a mobilní zařízení 15 %. Uživatelé internetu jsou procentem populace; mobilní odběry na 100 osob; výdaje na výzkum jako podíl ekonomického výstupu. Chybějící hodnoty jsou zobrazeny jako pomlčka. Data pokrývají roky 2019–2024.",
       "dataPreparing": "Aktualizace dat technologické připravenosti — zobrazí se krátce."
     },
     "populationExposure": {
@@ -1495,7 +1664,7 @@
       },
       "infoTooltip": "Satelitní tepelné detekce NASA FIRMS VIIRS napříč monitorovanými zónami konfliktů. Vysoká intenzita = jas >360K & spolehlivost >80 %.",
       "possibleExplosions": "Detekováno {{count}} možná výbucha",
-      "explosionTooltip": "Tepelný podpis odpovídající výbuchu (FRP >80 MW, jas >380 K)"
+      "explosionTooltip": "Tepelný podpis odpovídající výbuchu (radiační výkon ohně >80 MW, jas >380 K)"
     },
     "ucdpEvents": {
       "stateBased": "Státní",
@@ -1531,30 +1700,30 @@
       "wallets": "Peněženky",
       "ofTotal": "% z celku",
       "topReceivers": "Největší příjemci",
-      "oecdOda": "OECD ODA",
+      "oecdOda": "Oficiální rozvojová asistence Organizace pro hospodářskou spolupráci a rozvoj",
       "cafIndex": "Index CAF",
       "candidGrants": "Granty Candid",
       "dataLag": "Zpoždění dat",
       "infoTooltip": "<strong>Index globální dárcovské aktivity</strong> Kompozitní index sledující osobní dárcovství napříč crowdfundingovými platformami a krypto peněženkami.<ul><li><strong>Platformy</strong>: Vzorkování kampaní GoFundMe, GlobalGiving, JustGiving</li><li><strong>Krypto</strong>: Příliv do on-chain charitativních peněženek (Endaoment, Giving Block)</li><li><strong>Institucionální</strong>: OECD ODA, CAF World Giving Index, granty Candid</li></ul>Index je orientační (ne přesné částky v dolarech). Kombinuje živé vzorkování s publikovanými výročními zprávami.",
-      "benchmarkTitle": "Global Giving Benchmarks",
-      "benchmarkInfoTooltip": "<strong>Global Giving Benchmarks</strong> Published platform and institutional claims with source periods and verification status. Annualized figures are estimates, not live activity.",
+      "benchmarkTitle": "Globální srovnávací hodnoty darování",
+      "benchmarkInfoTooltip": "<strong>Globální srovnávací hodnoty darování</strong> Zveřejněná tvrzení platforem a institucí se zdrojovými obdobími a stavem ověření. Anualizované hodnoty jsou odhady, nikoli aktivita v reálném čase.",
       "status": {
-        "published": "Published benchmarks with verified source coverage.",
-        "partial": "Published benchmarks with partial source coverage.",
-        "legacy": "Legacy snapshot; source details are unavailable.",
-        "cached": "Showing a cached snapshot; refresh unavailable."
+        "published": "Zveřejněné srovnávací hodnoty s ověřeným pokrytím zdrojů.",
+        "partial": "Zveřejněné srovnávací hodnoty s částečným pokrytím zdrojů.",
+        "legacy": "Starý snímek; podrobnosti zdroje nejsou k dispozici.",
+        "cached": "Zobrazení snímku z mezipaměti; obnovení není k dispozici."
       },
-      "trackedAnnualized": "Tracked platform giving — annualized estimate",
-      "annualizedDaily": "Annualized daily estimate",
-      "atLeast": "At least",
-      "about": "About",
-      "sourceNotVerified": "Source not verified",
-      "reportedCumulative": "Reported cumulative total",
+      "trackedAnnualized": "Sledované dary platformy — anualizovaný odhad",
+      "annualizedDaily": "Denní anualizovaný odhad",
+      "atLeast": "Nejméně",
+      "about": "Přibližně",
+      "sourceNotVerified": "Zdroj neověřen",
+      "reportedCumulative": "Hlášený kumulativní součet",
       "sourcePeriod": "{{source}} · {{period}}",
-      "benchmark": "Published benchmark",
-      "sourcesMethodology": "Sources & methodology",
-      "methodologyIntro": "Only verified annual or defensibly annualized platform claims enter the headline. Cumulative and institutional figures remain separate context.",
-      "partialEstimate": "Partially verified estimate"
+      "benchmark": "Zveřejněná srovnávací hodnota",
+      "sourcesMethodology": "Zdroje a metodologie",
+      "methodologyIntro": "Do titulku vstupují pouze ověřená roční nebo obhajitelně anualizovaná tvrzení platforem. Kumulativní a institucionální hodnoty zůstávají samostatným kontextem.",
+      "partialEstimate": "Částečně ověřený odhad"
     },
     "displacement": {
       "refugees": "Uprchlíci",
@@ -1563,6 +1732,7 @@
       "total": "Celkem",
       "origins": "Původy",
       "hosts": "Hostitelé",
+      "internal": "Vnitřní",
       "badges": {
         "crisis": "KRIZE",
         "high": "VYSOKÁ",
@@ -1571,7 +1741,15 @@
       "country": "Země",
       "status": "Stav",
       "count": "Počet",
-      "infoTooltip": "<strong>Data o vysídlení UNHCR</strong> Globální počty uprchlíků, žadatelů o azyl a IDP (vnitřně přesídlených) od UNHCR.<ul><li><strong>Původy</strong>: Země, ze kterých lidé utíkají</li><li><strong>Hostitelé</strong>: Země hostící uprchlíky</li><li>Odznaky krizí: >1M | Vysoká: >500K vysídlených</li></ul>Data se aktualizují ročně. Licence CC BY 4.0."
+      "latestRound": "Poslední kolo",
+      "internalNote": "IOM DTM: vnitřně vysídlené osoby, poslední kolo průzkumu pro každou operaci. Operace v jedné zemi se mohou překrývat, proto se nesčítají.",
+      "infoTooltip": "<strong>Přesun obyvatel</strong> Uprchlíci, žadatelé o azyl a osoby vysídlené ve své zemi. Pohled na původ a prijímající zemi ukazuje, odkud lidé utíkají a kam. Odznaky krize označují více než milion vysídlených osob; vysoké značky více než 500 000. Roční data Úřadu vysokého komisaře Spojených národů pro uprchlíky, licence CC BY 4.0.",
+      "crossBorder": "Přeshraniční",
+      "situation": "Situace",
+      "latestChange": "Poslední změna",
+      "accelerating": "Zrychluje se",
+      "inDays": "za {{days}} dní",
+      "crossBorderNote": "Operační datový portál Úřadu vysokého komisaře Spojených národů pro uprchlíky: osoby, které překročily hranice v každé krizi, z nejnovějších zpráv zemí. Situace se překrývají, proto se nesčítají dohromady."
     },
     "climate": {
       "noAnomalies": "Nebyly zjištěny žádné významné anomálie",
@@ -1594,6 +1772,8 @@
       "relatedAssetsNear": "Související aktiva blízko {{location}}",
       "summaryError": "Shrnutí se nepodařilo vytvořit",
       "summaryFailed": "Shrnutí selhalo",
+      "sourceCoverage": "{{covered}}/{{total}} zdrojů",
+      "sourceCoverageHint": "Zobrazeno {{covered}} z {{total}} zapnutých zdrojů — tento panel své zdroje při každé aktualizaci střídá",
       "sortBy": "Seřadit podle",
       "sortNewest": "Nejnovější",
       "sortRelevance": "Relevance"
@@ -1601,7 +1781,9 @@
     "breakingNews": {
       "critical": "KRITICKÉ",
       "high": "VYSOKÉ",
-      "dismiss": "Zavřít"
+      "dismiss": "Zavřít",
+      "alertsRegion": "Breaking news alerts",
+      "viewPanel": "View related panel"
     },
     "intelligenceFindings": {
       "breakingAlerts": "Blesková upozornění",
@@ -1645,22 +1827,47 @@
       "noEventsIn7Days": "Žádné události za 7 dní"
     },
     "gdeltIntel": {
-      "infoTooltip": "<strong>GDELT Zpravodajství</strong> Globální sledování zpráv v reálném čase:<ul><li>Vybrané tematické kategorie (konflikty, kybernetika atd.)</li><li>Články ze 100+ jazyků přeloženy</li><li>Aktualizace každých 15 minut</li></ul>Zdroj: Projekt GDELT (gdeltproject.org)"
+      "infoTooltip": "<strong>Zpravodajství o zprávách</strong> Globální sledování zpráv v reálném čase:<ul><li>Vybrané tematické kategorie (konflikty, kybernetika atd.)</li><li>Články ze 100+ jazyků přeloženy</li><li>Aktualizace každých 15 minut</li><li>14-day media tone &amp; volume trend per topic</li></ul>Zdroj: Projekt GDELT (gdeltproject.org)"
     },
     "telegramIntel": {
-      "infoTooltip": "Signály v reálném čase z monitorovaných OSINT kanálů Telegramu",
+      "infoTooltip": "Signály v reálném čase z monitorovaných kanálů open-source intelligence na Telegramu",
       "loading": "Připojování k relé Telegramu...",
       "empty": "Nejsou k dispozici žádné zprávy",
       "disabled": "Relé Telegramu není aktivní",
+      "watchlistPlaceholder": "Přidat veřejný kanál pomocí @username",
+      "resolving": "Ověřování kanálu...",
+      "invalidUsername": "Použijte veřejné @username na Telegramu",
+      "resolveFailed": "Kanál se nepodařilo najít",
+      "watchlistLimit": "Můžete sledovat až {{count}} vlastních kanálů",
+      "previewMembers": "Počet členů: {{count}}",
+      "addChannel": "Přidat kanál",
+      "added": "Přidáno",
+      "remove": "Odebrat",
+      "custom": "Vlastní",
       "filterAll": "Vše",
       "filterBreaking": "Bleskové zprávy",
       "filterConflict": "Konflikt",
-      "filterOsint": "OSINT",
+      "filterOsint": "open-source intelligence",
       "filterMiddleeast": "Blízký východ",
       "live": "ŽIVĚ",
       "viewSource": "Zobrazit zdroj",
       "filterGeopolitics": "Geopolitika",
       "filterCyber": "Kyber"
+    },
+    "xIntel": {
+      "infoTooltip": "Curated public news-account posts from X. Official API only.",
+      "loading": "Connecting to X news-account relay...",
+      "empty": "No posts available",
+      "disabled": "X news-account relay not active",
+      "filterAll": "All",
+      "filterBreaking": "Breaking",
+      "filterConflict": "Conflict",
+      "filterOsint": "open-source intelligence",
+      "filterMiddleeast": "Middle East",
+      "live": "LIVE",
+      "viewSource": "View Source",
+      "filterGeopolitics": "Geopolitics",
+      "filterCyber": "Cyber"
     },
     "investments": {
       "infoTooltip": "Databáze přímých zahraničních investic Saúdské Arábie a SAE do globální kritické infrastruktury. Kliknutím na řádek přejdete k investici na mapě.",
@@ -1702,14 +1909,15 @@
       "infoTooltip": "<strong>Predikční trhy</strong> Trhy s reálnými penězi pro prognózy:<ul><li>Ceny odrážejí odhady pravděpodobnosti davu</li><li>Vyšší objem = spolehlivější signál</li><li>Zaměření na geopolitiku a aktuální dění</li></ul>Zdroj: Polymarket (polymarket.com)"
     },
     "etfFlows": {
-      "unavailable": "Data ETF dočasně nedostupná",
-      "rateLimited": "Data ETF dočasně nedostupná (limit rychlosti) — zkusím to znovu krátce",
+      "unavailable": "data fondů obchodovaných na burze dočasně nedostupná",
+      "rateLimited": "data fondů obchodovaných na burze dočasně nedostupná (omezení rychlosti) — opakuji za chvíli",
       "netFlow": "Čistý tok",
       "estFlow": "Odhad toku",
       "totalVol": "Celk. objem",
-      "etfs": "ETF",
+      "etfs": "Fondy obchodované na burze",
       "netInflow": "ČISTÝ PŘÍLIV",
       "netOutflow": "ČISTÝ ODLIV",
+      "netNeutral": "ČISTĚ NEUTRÁLNÍ",
       "table": {
         "ticker": "Ticker",
         "issuer": "Vydavatel",
@@ -1717,7 +1925,7 @@
         "volume": "Objem",
         "change": "Změna"
       },
-      "infoTooltip": "<strong>BTC ETF Tracker</strong> Sleduje odhadované denní toky prostředků pro americké spotové Bitcoin ETF:<ul><li>Směr a velikost přítoku/odtoku</li><li>Objem a změna ceny na fond</li><li>Čisté souhrné toky napříč všemi sledovanými ETF</li></ul>"
+      "infoTooltip": "<strong>Toky bitcoinových fondů</strong> Sleduje denní odhadované toky fondů pro americké spotové bitcoinové fondy obchodované na burze:<ul><li>Směr a velikost přílivu/odlivu</li><li>Objem a změna ceny na fond</li><li>Čisté celkové toky všech sledovaných fondů</li></ul>"
     },
     "macroSignals": {
       "overall": "Celkově",
@@ -1735,7 +1943,7 @@
         "fearGreed": "Strach a chamtivost",
         "momentum": "Momentum"
       },
-      "infoTooltip": "<strong>BTC Režim</strong> Složený signální dashboard pro pozicování Bitcoinu a appetit na riziko:<ul><li><strong>Likvidita</strong>: Proxy čisté likvidity Fed</li><li><strong>Tok</strong>: 5denní výnosy BTC vs QQQ</li><li><strong>Režim</strong>: Rotace QQQ vs XLP (risk-on/off)</li><li><strong>BTC Trend</strong>: Cena vs SMA50/200, Mayerův násobek</li><li><strong>Hash Rate</strong>: 30denní změna síťového hashe</li><li><strong>Strach & Chamtivost</strong>: Index sentimentu trhu</li></ul>Tento panel je určen pro režim a pozicování, ne pro široká makroekonomická data."
+      "infoTooltip": "<strong>Podmínky na trhu s bitcoinem</strong> Ovládací panel složeného signálu pro pozicování bitcoinu a chuť k riziku:<ul><li><strong>Likvidita</strong>: Proxy čisté likvidity Fedu</li><li><strong>Tok</strong>: Návratnost BTC vs QQQ za 5 dní</li><li><strong>Režim</strong>: Rotace QQQ vs XLP (na riziko/pryč od rizika)</li><li><strong>Trend BTC</strong>: Cena vs SMA50/200, Mayer Multiple</li><li><strong>Hash Rate</strong>: 30denní změna síťového hashe</li><li><strong>Strach a chamtivost</strong>: Index tržního sentimentu</li></ul>Tento panel je určen pro režim a pozicování, nikoli pro širší makrodata."
     },
     "panel": {
       "showMethodologyInfo": "Zobrazit informace o metodice",
@@ -1792,15 +2000,11 @@
     },
     "liveNews": {
       "notLive": "{{name}} právě nevysílá živě",
-      "cannotEmbed": "{{name}} nelze přehrát — může být omezeno ve vašem regionu (chyba {{code}})",
-      "botCheck": "YouTube vyžaduje přihlášení k přehrání {{name}}",
       "signInToYouTube": "Přihlaste se do YouTube",
       "openOnYouTube": "Otevřít na YouTube",
       "manage": "Spravovat kanály",
       "addChannel": "Přidat kanál",
       "remove": "Odstranit",
-      "youtubeHandle": "Úchyt (handle) YouTube (např. @Kanal)",
-      "youtubeHandleOrUrl": "Úchyt (handle) nebo URL YouTube",
       "displayName": "Zobrazovaný název (volitelné)",
       "channelSettings": "Nastavení kanálu",
       "save": "Uložit",
@@ -1815,13 +2019,25 @@
       "regionMiddleEast": "Blízký východ",
       "regionAfrica": "Afrika",
       "regionOceania": "Oceánie",
-      "invalidHandle": "Zadejte platný úchyt YouTube (např. @NazevKanalu)",
       "verifying": "Ověřování…",
       "noResults": "Nebyly nalezeny žádné kanály odpovídající \"{{term}}\"",
       "hlsUrl": "URL HLS streamu (volitelné)",
       "invalidHlsUrl": "Zadejte platnou URL HLS streamu (.m3u8)",
       "playLiveFeed": "Přehrát živý přenos",
-      "readyStatus": "Připraveno, až budete"
+      "readyStatus": "Připraveno, až budete",
+      "embedBlocked": "YouTube nyní nehraje {{name}} na jiných webech",
+      "unavailable": "{{name}} se nyní nedá přehrát",
+      "noStream": "Pro {{name}} zatím není nastavený live stream",
+      "needsChannelUrl": "Přidejte {{name}} znovu s jeho adresou kanálu (youtube.com/channel/UC…) nebo adresou živého videa",
+      "connecting": "Připojování k {{name}}…",
+      "recording": "Nahrávání",
+      "unverified": "Nelze potvrdit, že je tento stream živý",
+      "playNextChannel": "Přehrát další kanál",
+      "channelOrVideoUrl": "Kanál nebo video YouTube",
+      "channelUrlHint": "Vložte adresu kanálu (youtube.com/channel/UC…) nebo adresu živého videa",
+      "youtubeChannel": "Kanál YouTube",
+      "insecureStream": "{{name}} používá nezabezpečený (http) stream, který prohlížeče blokují. Přidejte jej znovu se zabezpečenou (https) adresou streamu",
+      "httpsStreamHint": "Prohlížeče blokují nezabezpečené (http) streamy. Vložte zabezpečenou (https) adresu streamu"
     },
     "map": {
       "showMap": "Zobrazit mapu",
@@ -1859,16 +2075,42 @@
       "topTargets": "Nejčastější cílové země"
     },
     "commodities": {
-      "infoTooltip": "<strong>Commodities</strong> Tradeable non-energy commodity tape focused on metals and materials. Energy prices live in Energy Complex; macro stress indicators live in Macro Stress."
+      "infoTooltip": "<strong>Commodities</strong> Tradeable non-energy commodity tape focused on metals and materials. Energy prices live in Energy Complex; macro stress indicators live in Macro Stress.",
+      "commodities": "Commodities",
+      "physicalPremiums": "Physical premium",
+      "physical": "Physical",
+      "paper": "Paper",
+      "premium": "Premium",
+      "asOf": "As of {{date}}",
+      "metals": {
+        "gold": "Gold",
+        "silver": "Silver"
+      },
+      "divergence": {
+        "compositeValue": "Index fyzického tlaku: {{value}} / 100",
+        "fiveDayTrend": "Trend prémie za pět obchodních dní",
+        "regimes": {
+          "normal": "Normální",
+          "elevated": "Zvýšený",
+          "stressed": "Napjatý",
+          "extreme": "Extrémní"
+        },
+        "states": {
+          "insufficientHistory": "Zahřívání: {{count}} / {{required}} obchodních bodů",
+          "staleInput": "Fyzická reference je zastaralá",
+          "missingInput": "Signál divergence není k dispozici"
+        },
+        "twentyDayTrend": "Trend prémie za dvacet obchodních dní"
+      }
     },
     "crypto": {
       "infoTooltip": "<strong>Crypto</strong> Live prices, 24h changes, and volume for major cryptocurrencies. Data sourced from CoinGecko."
     },
     "gulfEconomies": {
-      "infoTooltip": "<strong>Gulf Economies</strong> Real-time Gulf stock indices, currency rates, and oil prices for GCC economies (Saudi Arabia, UAE, Kuwait, Qatar, Bahrain, Oman)."
+      "infoTooltip": "<strong>Gulf Economies</strong> Indexy akcií Perského zálivu, směnné kurzy měn a ceny ropy pro ekonomiky Rady pro spolupráci zemí Perského zálivu (Saúdská Arábie, SAE, Kuvajt, Katar, Bahrajn, Omán)."
     },
     "groceryBasket": {
-      "infoTooltip": "<strong>Grocery Index</strong> Global grocery basket price comparison across 24 countries — tracks real-world consumer goods inflation beyond headline CPI."
+      "infoTooltip": "<strong>Grocery Index</strong> Globální srovnání cen nákupního košíku potravin v 24 zemích — sleduje skutečnou inflaci spotřebitelských zboží mimo hlavní index spotřebitelských cen."
     },
     "bigmac": {
       "infoTooltip": "<strong>Real Big Mac Index</strong> The Economist's Big Mac Index measures purchasing power parity by comparing McDonald's burger prices across countries. Updated when new data is published (quarterly/annually)."
@@ -1892,7 +2134,7 @@
       "infoTooltip": "<strong>Daily Market Brief</strong> AI-generated daily summary of global market conditions, key macro trends, and sector-level signals — refreshes each trading day."
     },
     "centralBankWatch": {
-      "infoTooltip": "<strong>Central Bank Watch</strong> Latest statements, rate decisions, and communications from the Federal Reserve, ECB, Bank of England, and other major central banks worldwide."
+      "infoTooltip": "<strong>Central Bank Watch</strong> Nejnovější prohlášení, rozhodnutí o sazbách a komunikace Federálního rezervního systému, Evropské centrální banky, Bank of England a dalších velkých centrálních bank po celém světě."
     },
     "airlineIntel": {
       "infoTooltip": "<strong>Letecké zpravodajství</strong> Provozní data leteckých společností v reálném čase: pozastavení tras, uzavření vzdušného prostoru, upozornění dopravců a nouzová přesměrování. Zdroj: NOTAM leteckých úřadů a bulletiny dopravců.",
@@ -1915,7 +2157,7 @@
       "infoTooltip": "<strong>WM Analytik</strong> AI analytik s živým kontextem napříč geopolitickou, tržní, vojenskou a ekonomickou doménou. Poháněn systémem Claude s daty v reálném čase z aktivních kanálů WorldMonitor."
     },
     "cotPositioning": {
-      "infoTooltip": "<strong>CFTC COT Pozice</strong> Zpráva o závazcích obchodníků: čisté pozice komerčních subjektů, velkých spekulantů a malých obchodníků v komoditních a finančních futures. Publikováno týdně (pátek). Zdroj: CFTC."
+      "infoTooltip": "<strong>Futures positioning</strong> Týdenní čisté pozice komerčních obchodníků, velkých spekulantů a malých obchodníků v komoditních a finančních futures. Zdroj: Commitments of Traders zpráva od Commodity Futures Trading Commission, zveřejněna v pátek."
     },
     "counters": {
       "infoTooltip": "<strong>Živé počítadla</strong> Extrapolovaná počítadla v reálném čase pro globální metriky: vojenské výdaje, přírodní katastrofy, zátěž nemocemi a další. Čísla jsou statistické odhady založené na ročních datových sazbách."
@@ -1963,12 +2205,12 @@
       "methodologyNote": "Úrovně Alert / Warning / Watch pocházejí z redakčního klíčového slova klasifikátoru — viz /docs/methodology/disease-alert-level pro tabulku klíčových slov a omezení."
     },
     "earningsCalendar": {
-      "infoTooltip": "<strong>Kalendář výsledků</strong> Nadcházející a nedávné výsledkové zprávy velkých veřejných společností. Zobrazuje odhady EPS vs. skutečnost, tržby a klasifikaci překonání/nesplnění. Zdroj: poskytovatelé finančních dat.",
+      "infoTooltip": "<strong>Earnings Calendar</strong> Nadcházející a nedávné hlášení zisků velkých veřejných společností. Ukazuje odhady zisků na akcii versus skutečné údaje, příjmy a klasifikaci úspěchu/neúspěchu. Zdroj: poskytovatelé finančních dat.",
       "title": "Kalendář výsledků",
       "today": "DNES · {{date}}",
       "tomorrow": "ZÍTRA · {{date}}",
-      "epsActual": "EPS {{value}}",
-      "epsEstimate": "EPS odhad {{value}}",
+      "epsActual": "zisk na akcii {{value}}",
+      "epsEstimate": "zisk na akcii odhad {{value}}",
       "revenueActual": "{{value}} tržby",
       "revenueEstimate": "{{value}} odhad",
       "surprise": {
@@ -1982,12 +2224,12 @@
       }
     },
     "economicCalendar": {
-      "infoTooltip": "<strong>Ekonomický kalendář</strong> Plánované makroekonomické publikace: CPI, NFP, GDP, PMI a rozhodnutí centrálních bank. Zobrazuje prognózu vs. skutečnost vs. předchozí. Události s vysokým dopadem jsou zvýrazněny. Zdroj: poskytovatelé ekonomických dat."
+      "infoTooltip": "<strong>Economic Calendar</strong> Naplánované makroekonomické uvolňování dat: index spotřebitelských cen, nezaměstnanost mimo zemědělství, hrubý domácí produkt, index nákupních manažerů a rozhodnutí centrální banky. Ukazuje prognózu versus skutečnost versus předchozí. Vysoce dopadové události jsou zvýrazněny. Zdroj: poskytovatelé ekonomických dat."
     },
     "fsi": {
-      "infoTooltip": "<strong>Ukazatel finančního stresu</strong> Index finančního stresu Federální rezervní banky Kansas City (KCFSI): měří stres na finančních trzích USA pomocí 11 ukazatelů včetně výnosových spreadů, volatility a křížových korelací. Kladné hodnoty indikují nadprůměrný stres. Zdroj: Federální rezervní banka Kansas City.",
+      "infoTooltip": "<strong>Financial Stress Indicator</strong> World Monitor poměr vysokovýnosových kreditů k dlouhodobým dluhopisům, upraven o volatilitu akcií a vysokovýnosový spread: (HYG / TLT) / (VIX × High-yield spread / 100). Toto není Kansas City Fed Financial Stress Index. Hodnota 1,5 nebo vyšší značí nízkou zátěž; pod 0,3 vysokou zátěž.",
       "title": "Indikátor finanční stability",
-      "usFsiValue": "HODNOTA US FSI",
+      "usFsiValue": "Hodnota US Financial Stress Indicator",
       "cissTitle": "EU CISS (Systemické napětí eurozóny)",
       "notAvailable": "N/A",
       "interpretation": {
@@ -2016,18 +2258,38 @@
       },
       "metrics": {
         "vix": "VIX",
-        "hySpread": "HY Spread",
+        "hySpread": "Vysokovýnosový spread",
         "hygPrice": "HYG Price",
         "tltPrice": "TLT Price"
       },
       "errors": {
-        "unavailable": "Data FSI není dostupná",
+        "unavailable": "Data Financial Stress Indicator nejsou dostupná",
         "failedToLoad": "Načtení se nezdařilo"
       },
-      "cissStale": "ECB nezveřejnila novější hodnotu — toto čtení může být zastaralé."
+      "cissStale": "Evropská centrální banka neuveřejnila novější hodnotu — toto čtení může být zastaralé."
+    },
+    "supplyVulnerability": {
+      "title": "Zranitelnost komodit",
+      "help": "Expozice země podle komodit z koncentrace dodavatelů, námořního tranzitu a dostupných strategických zásob.",
+      "loading": "Načítání zranitelnosti komodit…",
+      "unavailable": "Data o zranitelnosti komodit nejsou dostupná",
+      "noCoverage": "Pro tuto zemi nejsou dostatečné důkazy",
+      "unknown": "Neznámé",
+      "concentration": "Koncentrace",
+      "transit": "Tranzit",
+      "buffer": "Rezerva",
+      "sources": "Zdroje",
+      "methodology": "Metodika",
+      "hormuzTitle": "Závislosti na komoditách",
+      "dependentCountries": "Závislé země",
+      "dependentCommodities": "Závislé komodity",
+      "stateOk": "Aktuální",
+      "stateStale": "Zastaralý vstup",
+      "stateInsufficient": "Nedostatečná data",
+      "proLocked": "Upgradujte na PRO pro skórování zranitelnosti komodit"
     },
     "hormuzTracker": {
-      "infoTooltip": "<strong>Sledování obchodu v Hormuzu</strong> Sledování AIS plavidel v reálném čase přes Hormuzský průliv, nejkritičtější ropný úzký profil na světě. Monitoruje počty tankerů, narušení a týdenní změny toků. Přibližně 20 % světových dodávek ropy tudy denně prochází.",
+      "infoTooltip": "<strong>Hormuz Trade Tracker</strong> Živé sledování lodí Průlivem Hormuzem, nejkritičtějším úzkým místem pro ropu na světě. Sleduje počty tankerů, narušovací události a týdenní změny toku. Přibližně 20 % globální nabídky ropy denně projde tímto místem.",
       "title": "Hormuz Trade Tracker",
       "noData": "Žádná data",
       "notAvailable": "N/A",
@@ -2046,13 +2308,13 @@
       "infoTooltip": "<strong>Živé kamery</strong> Živé přenosy z geopoliticky významných míst po celém světě: konfliktní zóny, hlavní města, hraniční přechody a strategické úzké profily. Streamy z YouTube a veřejných sítí."
     },
     "macroTiles": {
-      "infoTooltip": "<strong>Makro ukazatele</strong> Klíčové makroekonomické ukazatele pro USA a eurozónu: CPI, nezaměstnanost, GDP a sazby centrálních bank. Hodnoty s rozdílem oproti předchozímu období. Zdroj: FRED (Ekonomická data Federálního rezervního systému)."
+      "infoTooltip": "<strong>Macro indicators</strong> Ceny, aktivita, politika a ukazatele měn pro USA, eurozónu a Čínu. Čína vyžaduje aktuální pokrytí. Každá dlaždice zobrazuje svůj zdroj a datum pozorování."
     },
     "monitors": {
       "infoTooltip": "<strong>Monitory klíčových slov</strong> Přidejte libovolný výraz pro sledování zmínek ve zprávách v reálném čase ze všech zdrojů WorldMonitor. Výsledky se aktualizují při příjmu odpovídajících článků."
     },
     "renewable": {
-      "infoTooltip": "<strong>Obnovitelná energie</strong> Podíl obnovitelných zdrojů na výrobě elektřiny podle regionu a roku a instalovaný výkon v USA pro solární, větrnou a uhelnou energii (MW). Zdroje: Světová banka (EG.ELC.RNEW.ZS) a EIA."
+      "infoTooltip": "<strong>Renewable Energy</strong> Podíl elektřiny z obnovitelných zdrojů dle regionu a roku, plus nainstalovaná kapacita v USA pro slunečníenergie, větrnou energii a uhlí (MW). Zdroje: Světová banka (EG.ELC.RNEW.ZS) a US Energy Information Administration."
     },
     "socialVelocity": {
       "infoTooltip": "<strong>Sociální rychlost</strong> Trendy a virální obsah s geopolitickým významem. Měří rychlost na sociálních médiích: jak rychle se příběh šíří vůči základní linii. Pomáhá odhalit vznikající narativy dříve, než se dostanou do mainstreamových médií."
@@ -2064,7 +2326,7 @@
       "infoTooltip": "<strong>Světové hodiny</strong> Místní čas v reálném čase a stav tržních seancí pro hlavní globální finanční centra. Zobrazuje stav otevřeno/zavřeno pro NYSE, LSE, TSE, SGX a další burzy."
     },
     "yieldCurve": {
-      "infoTooltip": "<strong>Výnosová křivka &amp; Sazby</strong> Výnosová křivka US Treasury (2Y, 5Y, 10Y, 30Y) a klíčové úrokové spready včetně indikátoru inverze 10Y-2Y. Zobrazuje také sazby eurozóny (EURIBOR, ESTR). Invertovaná křivka historicky předchází recesím. Zdroj: FRED."
+      "infoTooltip": "<strong>Yield Curve &amp; Rates</strong> Křivka výnosů amerických státních dluhopisů (2Y, 5Y, 10Y, 30Y) a klíčové rozpětí sazeb včetně indikátoru inverze 10Y-2Y. Také zobrazuje sazby eurozóny (EURIBOR, ESTR). Invertovaná křivka historicky předchází recesím. Zdroj: Federal Reserve Economic Data."
     },
     "pinnedWebcams": {
       "pinFromMap": "Připněte webkameru z mapy"
@@ -2073,13 +2335,13 @@
       "noData": "Zatím žádné vědecké objevy"
     },
     "oilInventories": {
-      "infoTooltip": "<strong>Zásoby ropy</strong> US ropa a rezervy SPR (týdenní EIA), skladování zemního plynu, procento naplnění EU plynu (GIE AGSI+) a zásoby OECD ropy v dnech pokrytí (měsíčně IEA)."
+      "infoTooltip": "<strong>Zásoby ropy</strong> Americké komerční zásyby surové ropy a strategické rezervy, zásoby zemního plynu, skladování evropského plynu a pokrytí zásob ropy. Zdroje zahrnují US Energy Information Administration a Mezinárodní energetickou agenturu."
     },
     "energyComplex": {
       "noData": "Údaje o energii jsou dočasně nedostupné - bude se opakovat",
       "liveTape": "Live páska",
       "liveTapeSource": "Tržní nabídky",
-      "infoTooltip": "<strong>Energetický komplex</strong> Fyzické a obchodovatelné energetické signály na jednom místě:<ul><li><strong>EIA metriky</strong>: WTI, Brent, US produkce a zásoby</li><li><strong>Live páska</strong>: Obchodovatelné energetické ceny, jako je ropa a zemní plyn</li><li><strong>Účel</strong>: Oddělení fyzického energetického stresu od širších makro a komoditních panelů</li></ul>"
+      "infoTooltip": "<strong>Energetický komplex</strong> Fyzikální a obchodovatelné energetické signály na jednom místě:<ul><li><strong>Metriky US Energy Information Administration</strong>: WTI, Brent, americká produkce a zásoby</li><li><strong>Živá páska</strong>: Obchodovatelné energetické ceny jako surová ropa a zemní plyn</li><li><strong>Účel</strong>: Oddělení fyzického energetického stresu od širších maker a komoditních panelů</li></ul>"
     },
     "consumerPrices": {
       "tabs": {
@@ -2090,23 +2352,23 @@
         "health": "Zdraví dat",
         "world": "World"
       },
-      "infoTooltip": "<strong>Ceny pro spotřebitele</strong> Sledování cen košu v reálném čase:<ul><li><strong>Přehled</strong>: Index základních potřeb, koš hodnoty a změna v průběhu týdne</li><li><strong>Kategorie</strong>: Trendy cen podle kategorie s 30denním rozsahem</li><li><strong>Pohyby</strong>: Největší rostoucí a klesající položky v tomto týdnu</li><li><strong>Rozdíl</strong>: Variance cen mezi prodejci pro stejný koš</li></ul>Data pocházejí z live scrapingu cen prodejců.",
+      "infoTooltip": "<strong>Spotřebitelské ceny</strong> Živé nákupní koše, týdenní změny, trendy kategorií, největší změny cen a rozdíly mezi prodejci. Světový přehled používá roční inflaci z Mezinárodního měnového fondu Světový ekonomický výhled.",
       "world": {
         "country": "Country",
-        "inflationYoY": "Inflation YoY",
+        "inflationYoY": "Roční inflace",
         "endOfPeriod": "End-of-Period",
         "year": "Year",
         "filterPlaceholder": "Filter countries…",
         "loading": "Loading global inflation…",
         "empty": "Inflation data not yet available",
         "noMatches": "No matching countries",
-        "source": "Source: IMF WEO · annual CPI inflation, all reporting economies",
+        "source": "Zdroj: Mezinárodní měnový fond – Světový ekonomický výhled · roční inflace spotřebitelských cen, všechny hlášené ekonomiky",
         "countSingular": "country",
         "countPlural": "countries"
       }
     },
     "marketImplications": {
-      "infoTooltip": "<strong>AI tržní důsledky</strong> Obchodní signály generované LLM odvozené z live geopolitických, komoditních a makroekonomických stavů po každém cyklu prognózy.<ul><li><strong>Směr</strong>: LONG / SHORT / HEDGE s hodnocením důvěry</li><li><strong>Časový horizont</strong>: 1W, 2W, 1M nebo 3M horizont</li><li><strong>Katalyzátor</strong>: Klíčový katalyzátor signálu</li><li><strong>Riziko</strong>: Výhrada nebo podmínka zneplatnění</li></ul><em>Pouze pro informační účely. Není investičním poradenstvím.</em>",
+      "infoTooltip": "<strong>AI tržní důsledky</strong> Obchodní signály generované LLM odvozené z live geopolitických, komoditních a makroekonomických stavů po každém cyklu prognózy.<ul><li><strong>Směr</strong>: LONG / SHORT / HEDGE</li><li><strong>Časový horizont</strong>: 1W, 2W, 1M nebo 3M horizont</li><li><strong>Katalyzátor</strong>: Klíčový katalyzátor signálu</li><li><strong>Riziko</strong>: Výhrada nebo podmínka zneplatnění</li></ul><em>Pouze pro informační účely. Není investičním poradenstvím.</em>",
       "title": "Implikace AI na trh",
       "directions": {
         "long": "LONG",
@@ -2121,10 +2383,79 @@
       "disclaimer": "Obchodní signály generované AI pouze pro informační účely. Není to investiční porada. Vždy si proveďte vlastní průzkum.",
       "unavailable": "Implikace AI na trh se generují po každém spuštění prognózy. Zkuste to za chvíli.",
       "signals_few": "{{count}} signály",
-      "signals_many": "{{count}} signálů"
+      "signals_many": "{{count}} signálů",
+      "unscored": "Narativní scénáře, bez hodnocení přesnosti."
     },
     "forecast": {
-      "infoTooltip": "<strong>AI Prognózy</strong> AI-generované odhady pravděpodobnosti pro geopolitické a ekonomické události:<ul><li>Pokrytí více domén: konflikty, trhy, dodavatelský řetězec, kyber, politika</li><li>Každá prognóza zobrazuje odhadovanou pravděpodobnost, úroveň důvěry a časový horizont</li><li>Kalibrováno proti baseline predikčních trhů, je-li k dispozici</li></ul>Prognózy se aktualizují, když přicházejí nové zpravodajské signály. Filtrujte podle domény pomocí záložek výše."
+      "infoTooltip": "<strong>AI Prognózy</strong> AI-generované odhady pravděpodobnosti pro geopolitické a ekonomické události:<ul><li>Pokrytí více domén: konflikty, trhy, dodavatelský řetězec, kyber, politika</li><li>Každá prognóza zobrazuje odhadovanou pravděpodobnost, úroveň důvěry a časový horizont</li></ul>Prognózy se aktualizují, když přicházejí nové zpravodajské signály. Filtrujte podle domény pomocí záložek výše.",
+      "record": {
+        "label": "Dosavadní výsledky",
+        "labelHint": "Jak si publikované předpovědi vedly po svém rozhodnutí za posledních {{days}} dní. Najeďte na číslo, abyste zjistili, co znamená.",
+        "unavailable": "Momentálně nedostupné",
+        "insufficient": "Zatím příliš málo nezávislých prognóz",
+        "brier": "Brierovo skóre {{score}} (n={{n}})",
+        "brierHint": "Brierovo skóre pro {{n}} ohodnocených předpovědí: průměrný čtverec rozdílu mezi předpovězenou pravděpodobností a tím, co se stalo. 0 je dokonalost, 0,25 odpovídá hodu mincí, nižší je lepší.",
+        "baseRate": "Skutečná četnost {{score}} (n={{n}})",
+        "baseRateHint": "Jaký výsledek by dosáhla strategie vždy předpovídat podle skutečné četnosti těchto {{n}} předpověď ({{pct}}% vyřešeno ano). Tato četnost je známa až po realizaci.",
+        "void": "Zrušeno {{pct}} % ({{count}} z {{resolved}})",
+        "voidHint": "Předpovědi, které byly rozhodnuty, ale nešlo je ohodnotit, z {{resolved}} rozhodnutých v daném období.",
+        "stale": "Neaktuální",
+        "staleHint": "Naposledy hodnoceno {{date}}. Hodnocení od té doby neproběhlo, takže tato čísla jsou starší, než by měla být.",
+        "fullRecord": "Úplné výsledky",
+        "skill": "Dovednost {{score}} vs skutečná četnost",
+        "skillHint": "Dovednost ve srovnání se {{n}} hodnocenými předpověďmi, oproti předpovědi vždy podle skutečné četnosti výsledků v daném období: 0 znamená stejnou chybu jako tato četnost, 1 je dokonalé, pod 0 znamená větší chybu. Úplný záznam ukazuje, zda je rozdíl jasný."
+      },
+      "reliability": {
+        "measured": "{{domain}} n={{n}} · dovednost {{skill}} vs skutečná četnost",
+        "measuredHint": "Jak zveřejněné předpovědi z domény {{domain}} dosahovaly výsledky ve {{n}} hodnocených předpověďích za posledních {{days}} dní, oproti předpovědi vždy podle skutečné četnosti předpověď z dané domény: 0 znamená stejnou chybu jako tato četnost, 1 je dokonalé, pod 0 znamená větší chybu. Brier {{score}} oproti {{base}} pro tuto četnost, kde je nižší lepší. Skóre domény zatím nemá interval nejistoty. Toto je záznam domény, ne předpověď.",
+        "unmeasured": "Zatím neměřeno",
+        "unmeasuredHint": "Předpovědi z oblasti {{domain}} mají {{n}} hodnocených výsledků za posledních {{days}} dní. Přesnost oblasti se zobrazí, jakmile její výsledky pocházejí alespoň z {{min}} rodin předpovědí, z nichž se alespoň {{outcomes}} naplnilo a stejný počet nenaplnil."
+      },
+      "resolution": {
+        "last": "Poslední: {{outcome}}",
+        "lastSr": "Předchozí období této předpovědi se vyřešilo jako {{outcome}}.",
+        "history": "Nedávná období (nejnovější první): {{list}}",
+        "outcome": {
+          "yes": "ANO",
+          "no": "NE",
+          "void": "NEPLATNÉ"
+        },
+        "void": {
+          "no_establishable_metric": "Zdroj dat neměl hodnotu pro tuto otázku",
+          "value_source_never_settled": "Zdroj dat nikdy nezveřejnil stanovenou hodnotu",
+          "count_source_window_not_retained": "Zdroj dat již neuchovával období otázky",
+          "unsupported_window": "Otázku nebylo možné ověřit podle jejího zdroje dat",
+          "unsupported_metric_key": "Otázku nebylo možné ověřit podle jejího zdroje dat",
+          "not_hard_spec": "Otázku nebylo možné ověřit podle jejího zdroje dat",
+          "missing_threshold": "Otázce chyběl práh",
+          "missing_deadline": "Otázce chyběl termín",
+          "missing_generated_at": "Předpovědi chybělo datum začátku",
+          "beyond_archive_horizon": "Archiv zpráv již nepokrýval toto období",
+          "no_archive_evidence": "Archiv zpráv o daném tématu nic neměl",
+          "all_judges_void": "Oba rozhodčí shledali důkazy nedostatečnými",
+          "judge_disagreement": "Rozhodčí se neshodli",
+          "judge_retry_exhausted": "Rozhodčí nevydali rozhodnutí",
+          "withheld_unpublished": "Tento druh předpovědi se již nezveřejňuje",
+          "resolver_envelope_bug": "Vyhodnoceno podle zdroje dat, který jsme nedokázali správně přečíst",
+          "market_price_not_outcome": "Zdroj ukazoval tržní cenu, ne to, jak byl trh rozhodnut",
+          "judged_evidence_unreliable": "Vyřazeno z hodnocení, dokud se neopraví podklady pro hodnotitele",
+          "other": "Nelze vyřešit",
+          "judged_old_selection": "Posouzeno metodou výběru důkazů, která se později ukázala jako nespolehlivá",
+          "late_read": "Zdroj dat nebyl přečten dostatečně blízko termínu",
+          "feed_unavailable": "Zdroj dat byl po termínu nedostupný",
+          "resolver_could_not_read_feed": "Náš vyhodnocovací systém nedokázal tento zdroj dat správně přečíst",
+          "base_rate_placeholder": "Otevřeno se zástupnou hodnotou základní míry, ne s prognózou modelu"
+        }
+      },
+      "horizons": {
+        "label": "Také skórováno v: {{list}}",
+        "hint": "Hlavní pravděpodobnost je hodnocena v horizontu předpovědi. Projekce v každém z těchto horizontů je také hodnocena proti své zdrojové položce za použití hodnoty, která byla pro tuto předpověď poprvé zveřejněna. Hodnoty projekcí nejsou zobrazeny, protože aktuální hodnota se může lišit od hodnocené."
+      },
+      "audit": {
+        "label": "Přesnost v auditu",
+        "hint": "V auditu od {{date}}. Audit zjistil chyby v hodnocení prognóz. Skóre jsou stažena, dokud nebudou provedeny opravy. Prognózy se dál publikují a zaznamenávají.",
+        "unverified": "Zaznamenaný výsledek, neověřený, dokud probíhá audit přesnosti."
+      }
     },
     "escalationCorrelation": {
       "infoTooltip": "<strong>Monitor eskalace</strong> Detekuje konvergující geopolitické signály:<ul><li>Koreluje vojenské pohyby, konfliktní události a zpravodajské skokové nárůsty</li><li>Hodnotí zóny konvergence podle závažnosti (kritická/vysoká/střední/nízká)</li><li>Sleduje trendy eskalace nebo de-eskalace v čase</li></ul>Kliknutím na kartu přiblížíte region na mapě."
@@ -2139,22 +2470,37 @@
       "infoTooltip": "<strong>Kaskáda katastrof</strong> Detekuje konvergující signály přírodních katastrof a infrastruktury:<ul><li>Koreluje zemětřesení, lesní požáry, povodně a extrémní počasí</li><li>Sleduje kaskádovité účinky na infrastrukturu a dodavatelský řetězec</li><li>Zvýrazňuje regiony se skládajícím se rizikem katastrofy</li></ul>Kliknutím na kartu přiblížíte postižený region."
     },
     "markets": {
-      "infoTooltip": "<strong>Trhy</strong> Ceny akcií v reálném čase, kmenové akcie a kryptoměny. Přizpůsobte si seznam sledovaných položek tlačítkem Sledovat. Minigrafy ukazují poslední cenový trend."
+      "infoTooltip": "<strong>Trhy</strong> Zpožděné nebo přednahrané ceny akcií, kmenové akcie a kryptoměny. Přizpůsobte si seznam sledovaných položek tlačítkem Sledovat. Minigrafy ukazují poslední cenový trend.",
+      "chart": {
+        "title": "Graf ceny {{symbol}}",
+        "close": "Zavřít graf"
+      },
+      "unavailable": {
+        "symbols": "{{symbols}} — {{reason}}",
+        "symbolsMore": "{{symbols}} +{{count}} more — {{reason}}",
+        "notFound": "no quote available",
+        "providerError": "quote lookup failed, retrying shortly",
+        "rateLimited": "quote provider rate limited, retrying shortly",
+        "notConfigured": "quote provider not configured",
+        "requestLimit": "too many symbols requested",
+        "budget": "not loaded yet, retrying shortly",
+        "seed": "market data temporarily unavailable"
+      }
     },
     "heatmap": {
       "infoTooltip": "<strong>Sektorová heatmapa</strong> Výkonnost sektoru S&P 500 na první pohled. Intenzita barvy odráží velikost denní změny. Zelená = zisky, Červená = ztráty."
     },
     "fuelPrices": {
-      "infoTooltip": "<strong>Ceny paliv</strong> Maloobchodní ceny benzínu a nafty na čerpacích stanicích v 30+ zemích, normalizované na USD/litr pro porovnání. Ceny pocházejí z oficiálních vládních open-data programů a jsou aktualizovány týdně. Nejlevnější a nejdražší země jsou zvýrazněny. Změna WoW se zobrazuje, je-li k dispozici data z předchozího týdne.",
+      "infoTooltip": "<strong>Fuel Prices</strong> Maloobchodní ceny benzínu a nafty na čerpacích stanicích v 30+ zemích, normalizované na USD/litr pro srovnání. Ceny pocházejí z oficiálních vládních programů otevřených dat a jsou aktualizovány týdně. Nejlevnější a nejdražší země jsou zvýrazněny. Změna týden na týden je zobrazena, pokud jsou dostupná data z předchozího týdne.",
       "countries": "zemí"
     },
     "faoFoodPriceIndex": {
-      "infoTooltip": "<strong>Index potravinových cen FAO</strong> Index cen potravin FFPI Organizace Spojených národů pro výživu a zemědělství sleduje mezinárodní exportní ceny za koš potravinářských komodit (Obiloviny, Mléčné výrobky, Maso, Oleje, Cukr), báze 2014-2016=100. Aktualizován měsíčně v první pátek v měsíci.",
-      "indexLabel": "FFPI (2014-16=100)",
-      "mom": "MoM",
-      "yoy": "YoY",
+      "infoTooltip": "<strong>FAO Food Price Index</strong> Index cen potravin Organizace OSN pro potraviny a zemědělství sleduje mezinárodní exportní ceny koše potravinářských komodit (Obiloviny, Mléčné výrobky, Maso, Oleje, Cukr), báze 2014–2016 = 100. Aktualizován měsíčně v první pátek každého měsíce.",
+      "indexLabel": "Ceny potravin (2014–2016 = 100)",
+      "mom": "Meziměsíční změna",
+      "yoy": "Meziročně",
       "asOf": "K datu",
-      "baseNote": "Báze: 2014-2016 = 100 | Zdroj: UN FAO",
+      "baseNote": "Báze: 2014–2016 = 100 | Zdroj: Organizace OSN pro potraviny a zemědělství",
       "ffpi": "Potraviny",
       "cereals": "Obiloviny",
       "meat": "Maso",
@@ -2168,14 +2514,14 @@
     },
     "liquidityShifts": {
       "title": "Posuny likvidity",
-      "infoTooltip": "<strong>Posuny likvidity</strong> Monitorování vysoké likvidity a denních posunů u ropy, zlata, stříbra, futures indexů akcií a top amerických akcií. COT net asset-manageru a net pákových fondů vs denní změna ceny.",
-      "cotSection": "Ropa / Zlato / Stříbro + Pozicování indexu (COT)",
+      "infoTooltip": "<strong>Liquidity Shifts</strong> Monitor vysoké likvidity a denních posunů pro ropu, zlato, stříbro, futures na index akcií a top americké akcie. Commitments of Traders sítě správců aktiv a sítě páčených fondů versus denní změna ceny.",
+      "cotSection": "Oil / Gold / Silver + Index Positioning (Commitments of Traders)",
       "stocksSection": "Top americké akcie: Denní posun",
       "longShort": "Long {{long}} / Short {{short}}",
       "lev": "Páka",
-      "noCot": "Nejsou dostupné žádné řádky COT.",
+      "noCot": "Nejsou dostupné žádné řádky Commitments of Traders.",
       "noStocks": "Nejsou dostupné žádné kotace top akcií.",
-      "reportDate": "Datum zprávy COT: {{date}}",
+      "reportDate": "Commitments of Traders report date: {{date}}",
       "unavailable": "Údaje o likviditě nejsou dostupné",
       "failed": "Chyba při načítání"
     },
@@ -2184,15 +2530,15 @@
       "infoTooltip": "<strong>Pozicování 24/7</strong> Stres pozicování z perpetuálních kontraktů z Hyperliquid. Obchodování nepřetržitě ukazuje, co se buduje, když jsou tradiční trhy zavřené. Složené skóre (0-100) z sazby financování, objemu, otevřeného zájmu a spot-perp bází. Zelená = dlouhé pozice přeplnění (býčí sklon), červená = krátké pozice přeplnění (medvědí sklon).",
       "commodities": "KOMODITY",
       "crypto": "KRYPTOMĚNY",
-      "fx": "DEVIZOVÝ TRH",
-      "warmup": "Vytváření základní linie. Historie objemu a OI se vyplní v příštích hodinách.",
+      "fx": "Devizové kurzy",
+      "warmup": "Budování původních hodnot. Historie objem a otevřeného zájmu se naplní během příští hodiny.",
       "footer": "5min · Hyperliquid perps · 24/7"
     },
     "goldIntelligence": {
-      "infoTooltip": "<strong>Gold Intelligence</strong> Spotová cena zlata, poměr zlata/stříbra, prémie zlata vs platiny, křížové ceny XAU (EUR, GBP, JPY, CNY, INR, CHF) a CFTC pozicování spravovaných peněz. Zdroje: Yahoo Finance, CFTC COT."
+      "infoTooltip": "<strong>Gold intelligence</strong> Ceny zlata v několika měnách, poměry zlato/stříbro a zlato/platina a pozice managed-money futures. Zdroje zahrnují Yahoo Finance a Commodity Futures Trading Commission."
     },
     "wsbTickerScanner": {
-      "infoTooltip": "<strong>WSB Ticker Scanner</strong> Zmínky tickerů v reálném čase z r/wallstreetbets, r/stocks a r/investing. Seřazeno podle frekvence zmínek a engagement. Rychlost měří, jak rychle ticker získává hybnost v celých příspěvcích."
+      "infoTooltip": "<strong>WallStreetBets Ticker Scanner</strong> Zmínky tickerů v reálném čase z r/wallstreetbets, r/stocks a r/investing. Řazeno podle frekvence zmínek a zapojení. Rychlost měří, jak rychle ticker získává momentum v příspěvcích."
     },
     "proBanner": {
       "badge": "PRO",
@@ -2259,9 +2605,10 @@
           "summaryVerified": "Odemčeno a připraveno, až budete chtít.",
           "channelsNote": "Preferujete Telegram, Slack, Discord nebo webhook?",
           "pointers": {
+            "search": "Prohledat celý panel",
             "widgets": "Vytvořit vlastní widget",
             "analyst": "Zeptat se AI analytika",
-            "apiKeys": "Získat své API a MCP klíče",
+            "mcpClients": "Nastavit MCP",
             "channels": "Nastavte si je v nastavení oznámení"
           }
         }
@@ -2304,13 +2651,14 @@
     },
     "sanctionsPressure": {
       "title": "Sankce a designace",
-      "infoTooltip": "OFAC sankce designace ze seznamů SDN a Consolidated Lists. Ukazuje, které země čelí největšímu tlaku na desig­nace, jaké programy to řídí a co bylo nově přidáno od poslední aktualizace.",
+      "infoTooltip": "Office of Foreign Assets Control Special Designated Nationals a Consolidated Lists plus Global Affairs Canada SEMA/JVCFOA designace. Ukazuje, které země čelí nejvyššímu tlaku designace, které programy to řídí a co bylo nově přidáno od poslední aktualizace.",
       "loading": "Načítání dat sankcí...",
       "unavailable": "Data sankcí není dostupná.",
       "summary": {
         "new": "Nový",
         "vessels": "Plavidla",
-        "aircraft": "Letadla"
+        "aircraft": "Letadla",
+        "sema": "SEMA"
       },
       "sections": {
         "countries": "Země s sankcemi",
@@ -2325,11 +2673,12 @@
       "footer": {
         "updated": "Aktualizováno {{time}}",
         "dataset": "dataset {{date}}",
-        "source": "Zdroj: OFAC"
+        "source": "Zdroj: Office of Foreign Assets Control · GAC SEMA"
       },
       "pills": {
         "newCount": "+{{count}} nových",
-        "new": "nový"
+        "new": "nový",
+        "sema": "sema-ca"
       },
       "designations_one": "{{count}} designace",
       "designations_other": "{{count}} designací",
@@ -2387,7 +2736,7 @@
       }
     },
     "defensePatents": {
-      "title": "Signál výzkumu a vývoje",
+      "title": "Signály výzkumu a vývoje",
       "infoTooltip": "Týdenní podání obranných a duálně použitelných patentů od společností Raytheon, Lockheed, Huawei, DARPA a dalších strategických organizací. Kategorie: H04B (komunikace), H01L (polovodiče), F42B (munice), G06N (AI), C12N (biotechnologie). Zdroj: USPTO Open Data Portal.",
       "loading": "Načítání podání výzkumu a vývoje…",
       "error": "Nepodařilo se načíst data patentů.",
@@ -2412,7 +2761,14 @@
       "analyzing": "Analyzování...",
       "viewOnMap": "Zobrazit na mapě",
       "signals_few": "{{count}} signály",
-      "signals_many": "{{count}} signálů"
+      "signals_many": "{{count}} signálů",
+      "waiting": "Čekání na další aktualizaci dat. Tento panel se aktualizuje automaticky.",
+      "offline": "Čekání na připojení. Tento panel se automaticky aktualizuje po obnovení připojení.",
+      "updated": "Aktualizováno {{time}}",
+      "saved": "Poslední známá aktualizace {{time}} · Kontrola aktualizací",
+      "savedOffline": "Poslední známá aktualizace {{time}} · Bez připojení",
+      "localSignals": "Na základě načtených signálů přehledu",
+      "emptySaved": "V poslední známé aktualizaci nebyla zjištěna konvergence."
     },
     "thermalEscalation": {
       "title": "Teplotní eskalace",
@@ -2461,7 +2817,7 @@
     },
     "chokepointStrip": {
       "title": "Stav průlivů",
-      "infoTooltip": "Živý stav sedmi globálních průlivů pro přepravu ropy a plynu. Odhady toků kalibrované z Portwatch DWT + AIS pozorování. Metodologie viz /docs/methodology/chokepoints.",
+      "infoTooltip": "Živý stav sedmi globálních průlivů pro přepravu ropy a plynu. Odhady toků jsou kalibrovány podle přepravní kapacity lodí Portwatch a pozorování ze sledování lodí. Metodologie je na /docs/methodology/chokepoints v dokumentaci.",
       "unknown": "neznámo",
       "shortName": {
         "hormuzStrait": "Hormuz",
@@ -2481,49 +2837,161 @@
         "noData": "Zatím žádná data o průlivech"
       },
       "attribution": {
-        "method": "Kalibrování Portwatch DWT + AIS",
-        "sampleLabel": "Signály narušení AIS",
-        "creditName": "EIA World Oil Transit Chokepoints"
+        "method": "Portwatch basis kapacity lodí + kalibrace sledování lodí",
+        "sampleLabel": "signály narušení sledování lodí",
+        "creditName": "US Energy Information Administration World Oil Transit Chokepoints"
       }
     },
     "mobileNav": {
-      "panelCategories": "Panel categories"
+      "panelCategories": "Kategorie panelů"
     },
     "panelFreshness": {
       "status": {
-        "fresh": "Fresh",
-        "stale": "Stale",
-        "veryStale": "Very stale",
-        "noData": "No data",
-        "disabled": "Disabled",
-        "error": "Error"
+        "fresh": "Aktuální",
+        "stale": "Zastaralý",
+        "veryStale": "Velmi zastaralý",
+        "noData": "Žádná data",
+        "disabled": "Zakázáno",
+        "error": "Chyba"
       },
       "labelWithAge": "{{status}} {{age}}",
-      "title": "Data freshness: {{status}}. {{sources}}",
+      "title": "Aktuálnost dat: {{status}}. {{sources}}",
       "sourceDetail": "{{name}}: {{status}}, {{update}}",
       "sourceDetailWithHealth": "{{name}}: {{status}}, {{update}}, {{detail}}",
-      "lastUpdated": "last updated {{time}}",
-      "neverUpdated": "never updated",
+      "lastUpdated": "poslední aktualizace {{time}}",
+      "neverUpdated": "nikdy neaktualizováno",
       "health": {
-        "partialCoverage": "partial coverage",
-        "contentStale": "content stale",
-        "seedStale": "seed stale",
-        "noSourceData": "no source data",
-        "sourceErrorReported": "source error reported",
-        "freshnessStoreUnavailable": "freshness store unavailable",
-        "freshnessStoreDegraded": "freshness store degraded"
+        "partialCoverage": "částečné pokrytí",
+        "contentStale": "obsah zastaralý",
+        "seedStale": "seed zastaralý",
+        "noSourceData": "žádná zdrojová data",
+        "sourceErrorReported": "hlášena chyba zdroje",
+        "freshnessStoreUnavailable": "úložiště čerstvosti nedostupné",
+        "freshnessStoreDegraded": "úložiště čerstvosti degradováno"
       },
       "time": {
-        "never": "never",
-        "justNow": "just now",
-        "minutesAgo": "{{count}}m ago",
-        "hoursAgo": "{{count}}h ago",
-        "daysAgo": "{{count}}d ago",
-        "compactNow": "now",
+        "never": "nikdy",
+        "justNow": "právě teď",
+        "minutesAgo": "před {{count}}m",
+        "hoursAgo": "před {{count}}h",
+        "daysAgo": "před {{count}}d",
+        "compactNow": "nyní",
         "compactMinutes": "{{count}}m",
         "compactHours": "{{count}}h",
         "compactDays": "{{count}}d"
       }
+    },
+    "exportGate": {
+      "signedOutDesc": "Přihlaste se pro export dat řídicího panelu jako CSV, JSON nebo PDF.",
+      "upgradeDesc": "Export dat (CSV, JSON, PDF) je součástí Pro Business.",
+      "upgradeCta": "Přejít na Pro Business",
+      "lockedAriaLabel": "Exportovat data — zamčeno. {{reason}}",
+      "unlockedAnnouncement": "Export dat odemčen.",
+      "preparingPdf": "Příprava PDF…",
+      "pdfFailed": "Zprávu PDF nelze vygenerovat. Zkuste to znovu nebo použijte export JSON."
+    },
+    "tabCap": {
+      "signedOutDesc": "Nepřihlášená pracovní prostředí jsou omezena na {{cap}} karet. Přihlaste se pro přidání dalších.",
+      "upgradeDesc": "Dosáhli jste limitu {{cap}} karet řídicího panelu.",
+      "upgradeCta": "Upgradovat pro více",
+      "lockedAriaLabel": "Přidat kartu — zamčeno. {{reason}}",
+      "unlockedAnnouncement": "Limit karet řídicího panelu zrušen."
+    },
+    "fx": {
+      "infoTooltip": "<strong>Currency rates</strong> Zátěž řadí 45 měn podle jejich největšího poklesu za 24 měsíců, se změnou za 12 měsíců. Spotové sazby používají samostatný základ amerického dolaru a eura. Sazby ruského rublu jsou rubly na jednotku. Zdroje zahrnují Yahoo Finance, Evropskou centrální banku a Banku Ruska.",
+      "tabs": {
+        "stress": "Měnová zátěž",
+        "spot": "Spot",
+        "rub": "RUB"
+      },
+      "currency": "Měna",
+      "pair": "Pár",
+      "rate": "Kurs",
+      "yoy": "12m",
+      "drawdown": "24m pokles",
+      "peakToTrough": "Vrchol → Dno",
+      "change1d": "1d",
+      "perUsd": "Za 1 USD",
+      "usdPerUnit": "USD za jednotku",
+      "usdBase": "Vůči americkému dolaru",
+      "eurBase": "Referenční sazby eura Evropské centrální banky",
+      "stressedCount": "{{stressed}} z {{total}} měn pod {{threshold}}",
+      "sourceYahoo": "Zdroj: Yahoo Finance",
+      "sourceEcb": "Zdroj: Evropská centrální banka",
+      "degraded": "Momentálně nedostupné: {{sources}}. Opakování za chvíli.",
+      "source": {
+        "stress": "Devizová zátěž",
+        "usd": "Kurzy amerického dolaru",
+        "eur": "Sazby eura Evropské centrální banky",
+        "rub": "Kurzy ruské centrální banky"
+      },
+      "rubBase": "Ruská centrální banka — rubly za 1 jednotku",
+      "rubPerUnit": "Rublů za jednotku",
+      "sourceCbr": "Zdroj: Ruská centrální banka"
+    },
+    "passkeyOffer": {
+      "title": "Uložit přístupový klíč?",
+      "body": "Při příštím přihlášení se použijte otisk prstu, obličej nebo PIN zařízení – žádné heslo k zapamatování.",
+      "accept": "Uložit přístupový klíč",
+      "dismiss": "Nyní ne",
+      "close": "Zavřít",
+      "announce": "Uložte přístupový klíč pro rychlejší přihlášení příště.",
+      "busy": "Čekání na vaše zařízení…",
+      "succeeded": "Přístupový klíč uložen. Můžete jej použít při příštím přihlášení.",
+      "retryable": "To se nedokončilo. Můžete to zkusit znovu.",
+      "failed": "Na tomto zařízení se nám nepodařilo uložit přístupový klíč."
+    },
+    "decisionBrief": {
+      "commodityTitle": "Podklad pro rozhodování o komoditách",
+      "commodity": "Komodita / produkt",
+      "blockedChokepoint": "Předpokládaný zablokovaný průchod",
+      "commodityCapture": "Zachytit srovnání komodit",
+      "title": "Rozhodovací přehled",
+      "fuel": "Palivo",
+      "chokepoint": "Úzké hrdlo",
+      "baseline": "Výchozí narušení",
+      "comparison": "Srovnávací narušení",
+      "capture": "Načíst / obnovit oba",
+      "downloadHtml": "Stáhnout přehled v HTML",
+      "downloadJson": "Stáhnout přehled v JSON",
+      "back": "← Zpět na přehled země",
+      "select": "Vyberte narušení dodávek energie a načtěte oba scénáře.",
+      "changed": "Výběr změněn. Před exportem načtěte oba scénáře.",
+      "loading": "Načítání obou scénářů…",
+      "captured": "Načteno. Před stažením zkontrolujte data pozorování a omezení.",
+      "failed": "Scénáře se nepodařilo načíst. Zkontrolujte přístup a zkuste to znovu. Není dostupný žádný výsledek k exportu.",
+      "locked": "Rozhodovací přehled je dostupný s Pro."
+    },
+    "liveMedia": {
+      "idleStatus": "Pozastaveno kvůli nečinnosti",
+      "idleBody": "Živé video se zastavilo po {{duration}} bez aktivity myši, klávesnice nebo dotyku.",
+      "idleResume": "Pokračovat",
+      "idleKeepPlaying": "Pokračovat v přehrávání při nečinnosti",
+      "idleSettingsHint": "Toto můžete kdykoli změnit v Nastavení › Média.",
+      "idleKeepPlayingToast": "Živé video se bude přehrávat při nečinnosti. Toto nastavení můžete změnit v Nastavení › Média."
+    },
+    "corroboration": {
+      "singlePublisher": "Jeden vydavatel",
+      "singlePublisherHint": "Zatím o tom podává zprávu pouze jeden vydavatel. Toto popisuje pokrytí, nikoli přesnost.",
+      "tier4Only": "Pouze nízko-hodnotené zdroje",
+      "tier4OnlyHint": "Všechny portály, které o tom podávají zprávu, jsou zdroje tier-4 (agregátory a blogy). Toto popisuje pokrytí, nikoli přesnost.",
+      "rosterListed": "({{listed}} uvedeno)",
+      "rosterFeeds": "Zobrazené kanály: {{labels}}",
+      "rosterLegend": "Úrovně klasifikují zdroje; nehodnotí toto tvrzení.",
+      "tierDocsLink": "Jak se přiřazují úrovně",
+      "tierChip": "T{{tier}}",
+      "tierChipUndeclared": "T?",
+      "tierTitle1": "Úroveň 1: Tiskové agentury a oficiální orgány",
+      "tierTitle2": "Úroveň 2: Hlavní vydavatelství",
+      "tierTitle3": "Úroveň 3: Specializované, regionální a think-tank zdroje",
+      "tierTitle4": "Úroveň 4: Agregátory a blogy",
+      "tierTitleUndeclared": "Úroveň neuvedena: dosud nekontrolováno",
+      "rosterSummary": "Zprávu přináší {{publishers}}",
+      "rosterSummaryTier1": "Zprávu přináší {{publishers}}, z toho {{tier1}} v úrovni 1",
+      "rosterPublishers_one": "{{count}} vydavatel",
+      "rosterPublishers_few": "{{count}} vydavatelé",
+      "rosterPublishers_many": "{{count}} vydavatelů",
+      "rosterPublishers_other": "{{count}} vydavatelů"
     }
   },
   "popups": {
@@ -2562,14 +3030,18 @@
     "protest": {
       "acledVerified": "ACLED (ověřeno)",
       "gdelt": "GDELT",
+      "records": "záznamů",
+      "mediaSignal": "Neověřený mediální signál",
+      "relatedArticle": "Související článek",
+      "mediaSignalDetail": "Toto místo je zmíněno v článcích o nepokojích. Místní událost není ověřena.",
       "riots": "Výtržnosti",
       "highSeverity": "Vysoká závažnost"
     },
     "gpsJamming": {
-      "title": "Interference GPS/GNSS",
-      "navPerformance": "Nav Performance",
-      "samples": "ADS-B Samples",
-      "aircraft": "Aircraft",
+      "title": "Rušení satelitní navigace",
+      "navPerformance": "Zasažená letadla",
+      "samples": "Počet zasažených letadel",
+      "aircraft": "Pozorovaná letadla",
       "h3Hex": "H3 Hex"
     },
     "flight": {
@@ -2687,7 +3159,7 @@
     "operator": "PROVOZOVATEL",
     "countries": "ZEMĚ",
     "waypoints": "TRASOVÉ BODY",
-    "repairEta": "ODHADOVANÝ ČAS OPRAVY",
+    "repairEta": "Odhadovaný čas opravy",
     "timeUnits": {
       "m": "m",
       "h": "h",
@@ -2698,7 +3170,7 @@
       "baseline": "Základ",
       "components": {
         "news": "Zprávy",
-        "cii": "CII",
+        "cii": "Country Instability Index",
         "geo": "Geo",
         "military": "Vojsko"
       },
@@ -2723,7 +3195,7 @@
     "time": "Čas",
     "area": "Oblast",
     "expires": "Vyprší",
-    "aisGapSpike": "NÁRŮST MEZER V AIS",
+    "aisGapSpike": "Nárůst mezer v sledování lodí",
     "chokepointCongestion": "ZÁCPA V ÚZKÉM HRDLE",
     "darkening": "STMÍVÁNÍ (ZTRÁTA SIGNÁLU)",
     "density": "HUSTOTA",
@@ -2737,6 +3209,7 @@
     "moreEvents": "dalších událostí",
     "monitoring": "Monitorování",
     "viewUSGS": "Zobrazit na USGS",
+    "viewNRCan": "Zobrazit na Earthquakes Canada",
     "expired": "Vypršelo",
     "timeAgo": {
       "s": "před {{count}} s",
@@ -2747,7 +3220,7 @@
     "cableAdvisory": {
       "reported": "OHLÁŠENO",
       "impact": "DOPAD",
-      "eta": "ETA"
+      "eta": "Odhadovaný čas příjezdu"
     },
     "outage": {
       "levels": {
@@ -2842,10 +3315,10 @@
         "bomber": "Bombardér",
         "transport": "Transportní",
         "tanker": "Tanker",
-        "awacs": "AWACS/AEW",
+        "awacs": "Systém raného varování",
         "reconnaissance": "Průzkumné",
         "helicopter": "Vrtulník",
-        "drone": "UAV/Dron",
+        "drone": "Bezpilotní letoun",
         "patrol": "Hlídkové",
         "specialOps": "Speciální operace",
         "vip": "VIP Transport"
@@ -2856,27 +3329,31 @@
       "heading": "SMĚR",
       "hexCode": "HEX KÓD",
       "squawk": "SQUAWK",
-      "attribution": "Zdroj: Síť OpenSky"
+      "attribution": "Zdroj: adsb.lol (ODbL) · OpenSky Network",
+      "climbRate": "RYCHLOST STOUPÁNÍ",
+      "manufacturer": "VÝROBCE",
+      "owner": "MAJITEL",
+      "builtYear": "ROK VÝROBY"
     },
     "militaryVessel": {
-      "aisDark": "AIS VYP",
+      "aisDark": "Ztraceno sledování plavidla",
       "vessel": "Plavidlo",
       "speed": "RYCHLOST",
       "heading": "SMĚR",
-      "mmsi": "MMSI",
+      "mmsi": "Identifikátor Maritime Mobile Service",
       "region": "REGION",
       "strikeGroup": "ÚDERNÁ SKUPINA",
-      "usniIntel": "Zpravodajství USNI",
-      "usniSource": "Zdroj: USNI News Fleet Tracker",
-      "approximatePosition": "Pozice je přibližná — na základě týdenní zprávy USNI, nikoli živého AIS.",
-      "darkDescription": "⚠ Plavidlo přešlo do temného režimu - signál AIS ztracen. Může to znamenat citlivé operace.",
+      "usniIntel": "Rozvědné informace US Naval Institute",
+      "usniSource": "Zdroj: US Naval Institute News Fleet Tracker",
+      "approximatePosition": "Poloha přibližná — na základě týdenní zprávy US Naval Institute, není sledování plavidel v reálném čase.",
+      "darkDescription": "⚠ Plavidlo přestalo vysílat — signál sledování plavidla ztracen. Může indikovat citlivé operace.",
       "recentTracking": "Recent Tracking",
       "lastReport": "LATEST",
       "nearChokepoint": "NEAR CHOKEPOINT",
       "nearBase": "NEAR BASE",
       "lastSeen": "LAST SEEN",
       "estPosition": "ODHADOVANÁ POLOHA",
-      "aisLive": "AIS LIVE"
+      "aisLive": "Sledování plavidel v přímém přenosu"
     },
     "militaryCluster": {
       "flightActivity": {
@@ -2901,7 +3378,8 @@
       "moreVessels": "+{{count}} dalších plavidel",
       "vesselsCount": "{{count}} PLAVIDEL",
       "vessels": "PLAVIDLA",
-      "trackedVessels": "SLEDOVANÁ PLAVIDLA"
+      "trackedVessels": "SLEDOVANÁ PLAVIDLA",
+      "showLess": "Zobrazit méně"
     },
     "naturalEvent": {
       "closed": "ZAVŘENO",
@@ -2920,7 +3398,7 @@
       "types": {
         "container": "KONTEJNEROVÝ",
         "oil": "ROPNÝ TERMINÁL",
-        "lng": "TERMINÁL LNG",
+        "lng": "TERMINÁL ZKAPALNĚNÉHO ZEMNÍHO PLYNU",
         "naval": "NÁMOŘNÍ PŘÍSTAV (VOJENSKÝ)",
         "mixed": "SMÍŠENÝ",
         "bulk": "VOLNĚ LOŽENÉ ZBOŽÍ"
@@ -3001,8 +3479,8 @@
   "signals": {
     "context": {
       "prediction_leads_news": {
-        "whyItMatters": "Predikční trhy často zohledňují informace v ceně dříve, než se stanou zprávami—obchodníci mohou mít brzký přístup k vývoji.",
-        "actionableInsight": "Sledujte bleskové zprávy v následujících 1-6 hodinách, které by mohly vysvětlit pohyb na trhu.",
+        "whyItMatters": "Predikční trh se pohnul, zatímco mediální pokrytí tématu zůstalo nízké – trh může reagovat na informace, které dosud nebyly zveřejněny.",
+        "actionableInsight": "Sledujte zpravodajství, které by mohlo vysvětlit pohyb na trhu.",
         "confidenceNote": "Vyšší spolehlivost, pokud se více predikčních trhů pohybuje stejným směrem."
       },
       "news_leads_markets": {
@@ -3047,7 +3525,7 @@
       },
       "geo_convergence": {
         "whyItMatters": "Shlukování mnoha zpravodajských událostí v jedné geografické lokaci—potenciální eskalace nebo koordinovaná činnost.",
-        "actionableInsight": "Zvyšte prioritu monitorování tohoto regionu; korelovat se satelitními/AIS daty, pokud jsou k dispozici.",
+        "actionableInsight": "Zvyšte prioritu monitorování pro tuto oblast; korelujte se satelitními a námořními daty, jsou-li k dispozici.",
         "confidenceNote": "Vyšší spolehlivost, pokud události zahrnují více typů zdrojů a časových období."
       },
       "explained_market_move": {
@@ -3133,14 +3611,14 @@
     "scanningThermalData": "Skenování tepelných dat",
     "calculatingExposure": "Výpočet expozice",
     "computingSignals": "Výpočet signálů...",
-    "loadingEtfData": "Načítání dat ETF...",
+    "loadingEtfData": "Načítání dat fondů obchodovaných na burzách...",
     "loadingGiving": "Načítání dat o globálním dárcovství",
     "loadingDisplacement": "Načítání dat o vysídlení",
     "loadingClimateData": "Načítání dat o klimatu",
     "failedTechReadiness": "Nepodařilo se načíst data o tech připravenosti",
     "failedRiskOverview": "Nepodařilo se vypočítat přehled rizik",
     "failedPredictions": "Nepodařilo se načíst predikce",
-    "failedCII": "Nepodařilo se vypočítat CII",
+    "failedCII": "Data Country Instability Index jsou dočasně nedostupná",
     "failedDependencyGraph": "Nepodařilo se sestavit graf závislostí",
     "failedIntelFeed": "Nepodařilo se načíst zpravodajský kanál",
     "failedMarketData": "Nepodařilo se načíst tržní data",
@@ -3175,7 +3653,8 @@
     "retry": "Zkusit znovu",
     "refresh": "Obnovit",
     "all": "Vše",
-    "cancel": "Zrušit"
+    "cancel": "Zrušit",
+    "dismiss": "Dismiss"
   },
   "preferences": {
     "display": "Zobrazení",
@@ -3197,7 +3676,9 @@
     "fontFamily": "Typ písma",
     "fontFamilyDesc": "Monospace pro technický vzhled, systémové výchozí pro snazší čtení.",
     "fontMono": "Monospace",
-    "fontSystem": "Systémové výchozí"
+    "fontSystem": "Systémové výchozí",
+    "panelFontScale": "Velikost textu",
+    "followGlobalFontScale": "Použít globální"
   },
   "contextMenu": {
     "openCountryBrief": "Otevřít přehled země",
@@ -3205,7 +3686,7 @@
   },
   "shell": {
     "documentTitle": "World Monitor — Přehled reálných globálních informací",
-    "metaDescription": "Platforma globálních informací v reálném čase. Vyznamenáno v WIRED. Používáno 2M+ lidí v 190 zemích. Konflikty, trhy, armáda, OSINT v jednom pohledu.",
+    "metaDescription": "Platforma globální operační analýzy v reálném čase. Publikováno ve WIRED. Používáno 2M+ lidmi ve 190 zemích. Konflikty, trhy, vojenství a veřejné informace na jednom místě.",
     "offlineTitle": "Jste offline",
     "offlineMessage": "World Monitor vyžaduje internetové připojení pro data zpravodajství v reálném čase.",
     "offlineRetry": "Zkusit znovu"
@@ -3287,14 +3768,17 @@
     "features": {
       "orefSirens1": "Výstrahy na rakety a střely v Izraeli v reálném čase",
       "orefSirens2": "Mapování zón sirén s klasifikací hrozby",
-      "telegramIntel1": "Kurátorované kanály Telegram OSINT",
-      "telegramIntel2": "Aktualizace konfliktů a geopolitických témat téměř v reálném čase"
+      "telegramIntel1": "Kurátorované kanály Telegramu pro otevřené zpravodajství",
+      "telegramIntel2": "Aktualizace konfliktů a geopolitických témat téměř v reálném čase",
+      "xIntel1": "Curated public news accounts on X",
+      "xIntel2": "API-fresh posts with official permalinks"
     }
   },
   "auth": {
     "signIn": "Přihlášení",
     "createAccount": "Vytvořit účet",
-    "settings": "Nastavení"
+    "settings": "Nastavení",
+    "passkeyOffer": {}
   },
   "mcp": {
     "connectPanel": "Připojit MCP",
@@ -3327,16 +3811,42 @@
     "visualizationFailed": "Vizualizace selhala"
   },
   "dashboardTabs": {
-    "ariaLabel": "Dashboard tabs",
-    "defaultName": "Main",
-    "newTabName": "New Tab",
-    "newTabCreated": "New tab created",
-    "tabDeleted": "Tab \"{{name}}\" deleted",
-    "addTab": "Add tab",
-    "addTabTitle": "New tab (starts with the default panels)",
-    "renameHint": "{{name}} — double-click to rename",
-    "deleteTab": "Delete tab",
-    "deleteTabAria": "Delete tab {{name}}",
-    "tabNameAria": "Tab name"
+    "ariaLabel": "Karty řídicího panelu",
+    "defaultName": "Hlavní",
+    "newTabName": "Nová karta",
+    "newTabCreated": "Nová karta vytvořena",
+    "tabDeleted": "Karta \"{{name}}\" smazána",
+    "addTab": "Přidat kartu",
+    "addTabTitle": "Nová karta (začíná s výchozími panely)",
+    "renameHint": "{{name}} — dvojitým kliknutím přejmenujete",
+    "deleteTab": "Smazat kartu",
+    "deleteTabAria": "Smazat kartu {{name}}",
+    "tabNameAria": "Název karty"
+  },
+  "theaterPresets": {
+    "label": "Balíčky pokrytí",
+    "applied": "Balíček {{preset}} použit: povoleno {{count}} zdrojů",
+    "alreadyApplied": "Balíček {{preset}} je již použit",
+    "ukraineWar": {
+      "label": "Válka na Ukrajině",
+      "description": "Povolit hlavní ukrajinská média, nezávislý ruský tisk a zdroje pro hodnocení fronty"
+    },
+    "indoPacific": {
+      "label": "Indo-pacifický region / Tchaj-wan",
+      "description": "Povolit bezpečnostní zdroje z Tchaj-wanu, Pákistánu a jihovýchodní Asie"
+    },
+    "sahelWestAfrica": {
+      "label": "Sahel a západní Afrika",
+      "description": "Povolit místní zdroje ze Sahelu, Nigérie a západní Afriky"
+    },
+    "caucasusCentralAsia": {
+      "label": "Kavkaz a Střední Asie",
+      "description": "Povolit regionální zdroje z Jižního Kavkazu a Střední Asie"
+    },
+    "middleEastFlashpoints": {
+      "label": "Ohniska napětí na Blízkém východě",
+      "description": "Povolit zdroje z Íránu, Izraele, oblasti Perského zálivu a kurdských regionů"
+    },
+    "unavailable": "Balíček {{preset}} není s aktuálními panely dostupný"
   }
 }

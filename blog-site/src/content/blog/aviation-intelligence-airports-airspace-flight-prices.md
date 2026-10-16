@@ -1,21 +1,23 @@
 ---
 title: "Aviation Intelligence: Airports, Airspace, and Flight Prices as Signals"
-description: "WorldMonitor tracks 115 airports, FAA delays, NOTAM closures, military aircraft, GPS jamming, and live Google Flights prices — because aviation reacts to risk first."
+description: "Track global airports, FAA delays, NOTAM closures, military aircraft, GPS jamming, and live flight prices with WorldMonitor."
 metaTitle: "Aviation Intelligence Dashboard | WorldMonitor"
 keywords: "aviation intelligence dashboard, airport delay monitoring, NOTAM airspace closures, military aircraft tracking, flight prices API, GPS jamming map"
 audience: "Airline and ops teams, travel security managers, OSINT analysts, journalists, frequent travelers"
 heroImage: "/blog/images/blog/aviation-intelligence-airports-airspace-flight-prices.jpg"
 pubDate: "2026-07-21"
-modifiedDate: "2026-07-22"
+modifiedDate: "2026-09-20"
 ---
 
 Aviation is the most reactive layer in the global system. Airlines reroute around risk hours before governments issue statements; insurers reprice overflight before analysts publish; evacuation demand hits booking engines before it hits the news. If you can read the aviation layer, you often get the earliest civilian-visible signal that something changed.
 
 WorldMonitor gives that layer a dedicated panel — and wires it into the same map as conflicts, chokepoints, and infrastructure.
 
+For aircraft observations, unusual activity, and the limits of flight history, use the [military flight-tracking guide for OSINT](/blog/posts/military-flight-tracking-osint/).
+
 ## The six-tab Aviation Intelligence panel
 
-The **Aviation Intelligence panel** covers 115 monitored airports worldwide across six tabs:
+The **Aviation Intelligence panel** covers the registered worldwide airport watchlist across six tabs:
 
 - **Ops** — operational status and delay conditions, including FAA delay programs for US hubs.
 - **Flights** — flight activity for the airports you care about.

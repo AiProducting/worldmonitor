@@ -1,4 +1,6 @@
 import { test } from 'node:test';
+import { crawlerDocumentSnapshot } from './_lib/crawler-visible-html.mjs';
+import { guardProBuiltOutput, shouldSkipProBuiltOutput } from './_lib/pro-built-output.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -27,17 +29,23 @@ const catalogEntrySourceFor = (planKey) => {
   const blockStart = catalogSrc.indexOf(`\n  ${planKey}: {`);
   assert.notEqual(blockStart, -1, `productCatalog.ts must contain a "${planKey}" entry`);
   const remainder = catalogSrc.slice(blockStart + 1);
-  const nextEntry = remainder.slice(1).search(/\n  [A-Za-z_][A-Za-z0-9_]*: \{/);
+  const nextEntry = remainder.slice(1).search(/\n {2}[A-Za-z_][A-Za-z0-9_]*: \{/);
   return nextEntry === -1 ? remainder : remainder.slice(0, nextEntry + 1);
 };
 
 // planKey → priceCents for every publicly-priced subscription plan,
 // including the annual API plan the original docs omitted entirely.
-const PLAN_KEYS = ['pro_monthly', 'pro_annual', 'api_starter', 'api_starter_annual', 'api_business'];
+const PLAN_KEYS = ['pro_monthly', 'pro_annual', 'pro_business_monthly', 'pro_business_annual', 'api_starter', 'api_starter_annual', 'api_business'];
 const priceCentsFor = (planKey) => {
   const m = catalogEntrySourceFor(planKey).match(/priceCents:\s*(\d+)/);
   assert.ok(m, `no priceCents found for ${planKey}`);
   return Number(m[1]);
+};
+
+const displayNameFor = (planKey) => {
+  const m = catalogEntrySourceFor(planKey).match(/displayName:\s*"([^"]+)"/);
+  assert.ok(m, `no displayName found for ${planKey}`);
+  return m[1];
 };
 
 const stringArrayPropertyFromSource = (entrySource, property, context, { required = true } = {}) => {
@@ -158,9 +166,12 @@ test('pricing.md machine-readable JSON block matches productCatalog.ts numerical
   const EXPECT = [
     ['Pro', 'price_usd_monthly', 'pro_monthly'],
     ['Pro', 'price_usd_yearly', 'pro_annual'],
+    ['Pro Business', 'price_usd_monthly', 'pro_business_monthly'],
+    ['Pro Business', 'price_usd_yearly', 'pro_business_annual'],
     ['API', 'price_usd_monthly', 'api_starter'],
     ['API', 'price_usd_yearly', 'api_starter_annual'],
     ['API Business', 'price_usd_monthly', 'api_business'],
+    ['API Business', 'price_usd_yearly', 'api_business_annual'],
   ];
   for (const [plan, field, planKey] of EXPECT) {
     assert.ok(planByName[plan], `JSON summary must have a "${plan}" plan`);
@@ -177,13 +188,17 @@ const PRICE_EXPECT = [
   ['Free', 'free'],
   ['Pro Monthly', 'pro_monthly'],
   ['Pro Annual', 'pro_annual'],
+  ['Pro Business Monthly', 'pro_business_monthly'],
+  ['Pro Business Annual', 'pro_business_annual'],
   ['API Starter Monthly', 'api_starter'],
   ['API Starter Annual', 'api_starter_annual'],
   ['API Business', 'api_business'],
+  ['API Business Annual', 'api_business_annual'],
 ];
 const FEATURE_OFFERS = [
   ['free', 'Free'],
   ['pro_monthly', 'Pro Monthly'],
+  ['pro_business_monthly', 'Pro Business Monthly'],
   ['api_starter', 'API Starter Monthly'],
   ['api_business', 'API Business'],
 ];
@@ -230,7 +245,81 @@ const assertJsonLdOffersMatchCatalog = (sourceOffers, deployedOffers) => {
   }
 };
 
-test('/pro JSON-LD offers match productCatalog.ts prices and marketing features', () => {
+// Compares the committed pro-test source against the BUILT public/pro/index.html,
+// which `npm run build:pro` produces rather than git (#6898). The guard suites
+// below run on source fixtures and stay unconditional.
+guardProBuiltOutput();
+
+// AI crawlers often skip JS, and Google discards <noscript> after rendering.
+// Visible USD figures must live in the static body outside noscript (and not
+// only in JSON-LD Offers) so "how much does it cost?" answers remain
+// extractable (#7381, #7458). PLAN_KEYS omits api_business_annual, so a
+// body-wide contains() check can stay green while the API Business annual cell
+// drifts ($2,699.99 → $2,600.00). Parse named rows and compare every monthly
+// and annual cell to productCatalog.ts.
+const VISIBLE_TABLE_EXPECT = [
+  ['Free', { monthly: 'free', annual: 'free' }],
+  ['Pro', { monthly: 'pro_monthly', annual: 'pro_annual' }],
+  ['Pro Business', { monthly: 'pro_business_monthly', annual: 'pro_business_annual' }],
+  ['API Starter', { monthly: 'api_starter', annual: 'api_starter_annual' }],
+  [displayNameFor('api_business'), { monthly: 'api_business', annual: 'api_business_annual' }],
+];
+
+const parseUsdCell = (text, context) => {
+  const normalized = String(text).replace(/[$,]/g, '').trim();
+  assert.match(normalized, /^\d+(?:\.\d{1,2})?$/, `unparseable USD cell for ${context}: ${text}`);
+  return Number(normalized);
+};
+
+const parseVisiblePricingRows = (html) => {
+  const table = html.match(/<table\b[\s\S]*?<\/table>/i)?.[0];
+  assert.ok(table, 'crawler-visible HTML must include a pricing table');
+  const rows = [...table.matchAll(/<tr>\s*<td>([^<]+)<\/td>\s*<td>([^<]+)<\/td>\s*<td>([^<]+)<\/td>\s*<\/tr>/gi)].map(
+    (match) => ({
+      name: match[1].trim(),
+      monthly: match[2].trim(),
+      annual: match[3].trim(),
+    })
+  );
+  assert.ok(rows.length > 0, 'crawler-visible pricing table must include named monthly/annual rows');
+  return Object.fromEntries(rows.map((row) => [row.name, row]));
+};
+
+const assertVisiblePricesMatchCatalog = (html) => {
+  assert.match(html, /How much does World Monitor Pro cost\?/);
+  const rows = parseVisiblePricingRows(html);
+  assert.deepEqual(
+    Object.keys(rows).sort(),
+    VISIBLE_TABLE_EXPECT.map(([name]) => name).sort(),
+    'crawler-visible pricing table rows must match the catalog-backed named plans'
+  );
+  for (const [rowName, fields] of VISIBLE_TABLE_EXPECT) {
+    const row = rows[rowName];
+    for (const [period, planKey] of Object.entries(fields)) {
+      assert.equal(
+        parseUsdCell(row[period], `${rowName} ${period}`),
+        priceCentsFor(planKey) / 100,
+        `visible ${rowName} ${period} is stale vs productCatalog.ts ${planKey}`
+      );
+    }
+  }
+};
+
+const proVisibleBody = () => crawlerDocumentSnapshot(read('pro-test/index.html')).visibleRootMarkup;
+
+test('/pro crawler-visible body exposes catalog USD prices (#7381, #7458)', () => {
+  assertVisiblePricesMatchCatalog(proVisibleBody());
+});
+
+test('/pro visible pricing guard rejects a drifted API Business annual cell', () => {
+  const drifted = proVisibleBody().replace('$2,699.99', '$2,600.00');
+  assert.throws(
+    () => assertVisiblePricesMatchCatalog(drifted),
+    /api_business_annual/
+  );
+});
+
+test('/pro JSON-LD offers match productCatalog.ts prices and marketing features', { skip: shouldSkipProBuiltOutput() }, () => {
   assertJsonLdOffersMatchCatalog(
     jsonLdOffersFor('pro-test/index.html'),
     jsonLdOffersFor('public/pro/index.html')

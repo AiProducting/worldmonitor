@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -7,6 +8,7 @@ import {
   STOCK_ANALYSIS_FREE_LIMIT,
   STOCK_ANALYSIS_PRO_LIMIT,
 } from '../src/services/stock-analysis-targets.ts';
+import { resolveEffectiveMarketWatchlist } from '../src/services/market-watchlist.ts';
 
 const DEFAULTS = [
   { symbol: 'AAPL', name: 'Apple', display: 'AAPL' },
@@ -32,6 +34,19 @@ describe('isAnalyzableSymbol', () => {
 });
 
 describe('selectStockAnalysisTargets', () => {
+  it('deduplicates case variants across picks and default top-ups', () => {
+    const targets = selectStockAnalysisTargets([{ symbol: 'aapl' }, { symbol: 'AAPL' }], DEFAULTS, { isPro: true });
+    assert.deepEqual(symbolsOf(targets), ['aapl', 'MSFT', 'NVDA', 'GOOGL']);
+  });
+
+  it('deduplicates with the same ticker rule the stored snapshots are keyed by', () => {
+    // Stored history/backtests are keyed by normalizeStockSymbol (trim + strip
+    // whitespace + uppercase), so ' aapl ' and 'AAPL' are the same stored row.
+    const picks = [{ symbol: ' aapl ' }, { symbol: 'AAPL' }, ...Array.from({ length: 4 }, (_, i) => ({ symbol: `T${i}` }))];
+    const targets = selectStockAnalysisTargets(picks, DEFAULTS, { isPro: true });
+    assert.deepEqual(symbolsOf(targets), [' aapl ', 'T0', 'T1', 'T2', 'T3']);
+  });
+
   it('free tier with empty watchlist falls back to the first 4 analysable defaults', () => {
     const targets = selectStockAnalysisTargets([], DEFAULTS, { isPro: false });
     assert.deepEqual(symbolsOf(targets), ['AAPL', 'MSFT', 'NVDA', 'GOOGL']);
@@ -117,5 +132,26 @@ describe('selectStockAnalysisTargets', () => {
   it('limitOverride cannot grow past the tier cap', () => {
     const targets = selectStockAnalysisTargets([], DEFAULTS, { isPro: false, limitOverride: 20 });
     assert.equal(targets.length, STOCK_ANALYSIS_FREE_LIMIT);
+  });
+
+  it('follows a catalog subset while searchable custom entries still lead and caps remain tier-aware', () => {
+    const catalog = [...DEFAULTS, { symbol: 'SAP', name: 'SAP', display: 'SAP' }];
+    const resolved = resolveEffectiveMarketWatchlist(
+      catalog,
+      DEFAULTS,
+      ['SAP', 'NVDA', 'MSFT', 'AAPL', 'GOOGL'],
+      [{ symbol: 'PLTR', name: 'Palantir' }],
+    );
+    const userPicks = [...resolved.customEntries, ...resolved.baseSymbols];
+    const pro = selectStockAnalysisTargets(userPicks, resolved.symbols, { isPro: true });
+    const free = selectStockAnalysisTargets(userPicks, resolved.symbols, { isPro: false });
+    assert.deepEqual(symbolsOf(pro), ['PLTR', 'SAP', 'NVDA', 'MSFT', 'AAPL', 'GOOGL']);
+    assert.deepEqual(symbolsOf(free), ['PLTR', 'SAP', 'NVDA', 'MSFT']);
+  });
+
+  it('uses the shared effective-watchlist resolver in the runtime target loader', () => {
+    const source = readFileSync(new URL('../src/services/stock-analysis.ts', import.meta.url), 'utf8');
+    assert.match(source, /resolveEffectiveMarketWatchlist\(\s*STOCK_CATALOG,\s*MARKET_SYMBOLS,\s*getCatalogSelection\(\),\s*getMarketWatchlistEntries\(\),/);
+    assert.match(source, /return selectStockAnalysisTargets\(userPicks, resolved\.symbols,/);
   });
 });

@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { ArrowRight, Check } from 'lucide-react';
 import { t } from '../i18n';
+import depthProofStats from '../generated/depth-stats.json';
 import { DASHBOARD_PATH } from '../routes';
 import { SectionHeading } from './SectionHeading';
 
@@ -14,7 +15,7 @@ export const PricingTeaser = () => (
       />
       <div className="grid md:grid-cols-2 gap-6">
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={false}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-60px' }}
           transition={{ duration: 0.5 }}
@@ -22,7 +23,7 @@ export const PricingTeaser = () => (
         >
           <h3 className="font-display font-bold text-2xl mb-1">{t('welcome.pricing.freeTitle')}</h3>
           <div className="font-mono text-xs uppercase tracking-widest text-wm-green mb-4">$0</div>
-          <p className="text-sm text-wm-muted mb-4">{t('welcome.pricing.freeDesc')}</p>
+          <p className="text-sm text-wm-muted mb-4">{t('welcome.pricing.freeDesc', depthProofStats)}</p>
           <ul className="space-y-2.5 mb-6 flex-1">
             {[1, 2, 3, 4].map(n => (
               <li key={n} className="flex items-start gap-2 text-sm">
@@ -32,7 +33,7 @@ export const PricingTeaser = () => (
             ))}
           </ul>
           <a
-            href={`${DASHBOARD_PATH}?ref=welcome-pricing-free`}
+            href={DASHBOARD_PATH}
             data-umami-event="welcome-cta"
             data-umami-event-target="welcome-pricing-free"
             className="inline-flex items-center justify-center gap-2 bg-wm-green text-wm-bg px-5 py-2.5 rounded-sm font-mono text-xs uppercase tracking-wider font-bold hover:bg-green-400 transition-colors"
@@ -41,7 +42,7 @@ export const PricingTeaser = () => (
           </a>
         </motion.div>
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={false}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-60px' }}
           transition={{ duration: 0.5, delay: 0.1 }}

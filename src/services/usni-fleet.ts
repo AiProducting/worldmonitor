@@ -1,5 +1,6 @@
 import type { MilitaryVessel, MilitaryVesselCluster, USNIFleetReport, USNIVesselEntry } from '@/types';
 import { getRpcBaseUrl } from '@/services/rpc-client';
+import type { BreakerDataState } from '@/utils/circuit-breaker';
 import { createCircuitBreaker } from '@/utils';
 import { getUSNIRegionApproxCoords, getUSNIRegionCoords, HULL_HOMEPORT } from '@/config/military';
 import type { GetUSNIFleetReportResponse } from '@/generated/client/worldmonitor/military/v1/service_client';
@@ -12,13 +13,10 @@ const breaker = createCircuitBreaker<USNIFleetReport | null>({
   maxFailures: 3,
   cooldownMs: 10 * 60 * 1000,
   cacheTtlMs: 60 * 60 * 1000, // 1hr local cache
+  persistCache: true,
 });
 
-let lastReport: USNIFleetReport | null = null;
-let lastFetchTime = 0;
-const LOCAL_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-
-function mapProtoToReport(resp: GetUSNIFleetReportResponse): USNIFleetReport | null {
+export function mapProtoToReport(resp: GetUSNIFleetReportResponse): USNIFleetReport | null {
   const r = resp.report;
   if (!r) return null;
 
@@ -50,23 +48,25 @@ function mapProtoToReport(resp: GetUSNIFleetReportResponse): USNIFleetReport | n
   };
 }
 
-export async function fetchUSNIFleetReport(): Promise<USNIFleetReport | null> {
-  if (lastReport && Date.now() - lastFetchTime < LOCAL_CACHE_TTL) {
-    return lastReport;
-  }
-
+export async function fetchUSNIFleetObservation(): Promise<{ report: USNIFleetReport | null; dataState: BreakerDataState }> {
+  let completed: USNIFleetReport | null | undefined;
+  let completedAt: number | null = null;
   const report = await breaker.execute(async () => {
     const resp = await client.getUSNIFleetReport({ forceRefresh: false });
-    if (resp.error && !resp.report) return null;
-    return mapProtoToReport(resp);
-  }, null);
+    completed = resp.error && !resp.report ? null : mapProtoToReport(resp);
+    completedAt = Date.now();
+    return completed;
+  }, null, { shouldCache: (result) => result !== null });
+  const dataState: BreakerDataState = report === null
+    ? { mode: 'unavailable', timestamp: null, offline: breaker.getDataState().offline }
+    : report === completed
+      ? { mode: 'live', timestamp: completedAt, offline: false }
+      : { mode: 'cached', timestamp: null, offline: breaker.getDataState().offline };
+  return { report, dataState };
+}
 
-  if (report) {
-    lastReport = report;
-    lastFetchTime = Date.now();
-  }
-
-  return report;
+export async function fetchUSNIFleetReport(): Promise<USNIFleetReport | null> {
+  return (await fetchUSNIFleetObservation()).report;
 }
 
 function normalizeHull(hull: string | undefined): string {

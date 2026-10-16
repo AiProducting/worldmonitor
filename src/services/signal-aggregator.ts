@@ -11,7 +11,10 @@ import type {
   SocialUnrestEvent,
   AisDisruptionEvent,
 } from '@/types';
+import type { CountrySanctionsPressure } from './sanctions-pressure';
+import type { RadiationObservation } from './radiation';
 import { getCountryAtCoordinates, getCountryNameByCode, nameToCountryCode, ME_STRIKE_BOUNDS, resolveCountryFromBounds } from './country-geometry';
+import countryNames from '../../shared/country-names.json';
 
 export const SIGNAL_AGGREGATOR_MAX_SIGNALS = 1000;
 
@@ -22,7 +25,9 @@ export type SignalType =
   | 'protest'
   | 'ais_disruption'
   | 'satellite_fire'        // NASA FIRMS thermal anomalies
-  | 'temporal_anomaly'      // Baseline deviation alerts
+  | 'radiation_anomaly'     // Radiation readings meaningfully above local baseline
+  | 'temporal_anomaly'
+  | 'sanctions_pressure'      // Baseline deviation alerts
   | 'active_strike'         // Iran attack / military conflict events
 
 export interface GeoSignal {
@@ -92,9 +97,16 @@ const REGION_DEFINITIONS: Record<string, { countries: string[]; name: string }> 
   },
 };
 
+// Cached feeds are not replayed after geometry loads, so resolve bundled names immediately.
+const fallbackCountryCodes = new Map<string, string>(Object.entries(countryNames));
+
 function normalizeCountryCode(country: string): string {
-  if (country.length === 2) return country.toUpperCase();
-  return nameToCountryCode(country) || country.slice(0, 2).toUpperCase();
+  const trimmed = country.trim();
+  if (!trimmed) return '';
+  const fromCatalog = nameToCountryCode(trimmed) ?? fallbackCountryCodes.get(trimmed.toLowerCase());
+  if (fromCatalog) return fromCatalog;
+  if (/^[a-z]{2}$/i.test(trimmed)) return trimmed.toUpperCase();
+  return '';
 }
 
 function getCountryName(code: string): string {
@@ -137,7 +149,7 @@ class SignalAggregator {
   ingestOutages(outages: InternetOutage[]): void {
     this.clearSignalType('internet_outage');
     for (const o of outages) {
-      const code = normalizeCountryCode(o.country);
+      const code = normalizeCountryCode(o.country) || this.coordsToCountry(o.lat, o.lon);
       this.signals.push({
         type: 'internet_outage',
         country: code,
@@ -271,7 +283,7 @@ class SignalAggregator {
     this.clearSignalType('satellite_fire');
     
     for (const fire of fires) {
-      const code = this.coordsToCountry(fire.lat, fire.lon) || normalizeCountryCode(fire.region);
+      const code = getCountryAtCoordinates(fire.lat, fire.lon)?.code || normalizeCountryCode(fire.region) || 'XX';
       const severity = fire.brightness > 360 ? 'high' : fire.brightness > 320 ? 'medium' : 'low';
       
       this.signals.push({
@@ -283,6 +295,27 @@ class SignalAggregator {
         severity,
         title: `Thermal anomaly detected (${Math.round(fire.brightness)}K, ${fire.frp.toFixed(1)}MW)`,
         timestamp: new Date(fire.acq_date),
+      });
+    }
+    this.pruneOld();
+  }
+
+  ingestRadiationObservations(observations: RadiationObservation[]): void {
+    this.clearSignalType('radiation_anomaly');
+
+    for (const observation of observations) {
+      if (observation.severity === 'normal') continue;
+      const code = normalizeCountryCode(observation.country) || this.coordsToCountry(observation.lat, observation.lon);
+
+      this.signals.push({
+        type: 'radiation_anomaly',
+        country: code,
+        countryName: getCountryName(code),
+        lat: observation.lat,
+        lon: observation.lon,
+        severity: observation.severity === 'spike' ? 'high' : 'medium',
+        title: `${observation.severity === 'spike' ? 'Radiation spike' : 'Elevated radiation'} at ${observation.location} (${observation.delta >= 0 ? '+' : ''}${observation.delta.toFixed(1)} ${observation.unit} vs baseline)`,
+        timestamp: observation.observedAt,
       });
     }
     this.pruneOld();
@@ -329,6 +362,36 @@ class SignalAggregator {
     }
     this.pruneOld();
   }
+
+  ingestSanctionsPressure(countries: CountrySanctionsPressure[]): void {
+    this.clearSignalType('sanctions_pressure');
+
+    for (const country of countries) {
+      const code = normalizeCountryCode(country.countryCode) || normalizeCountryCode(country.countryName) || 'XX';
+      const severity: 'low' | 'medium' | 'high' =
+        country.newEntryCount >= 5 || country.entryCount >= 50
+          ? 'high'
+          : country.newEntryCount >= 1 || country.entryCount >= 20
+            ? 'medium'
+            : 'low';
+      if (country.newEntryCount === 0 && country.entryCount < 20) continue;
+
+      this.signals.push({
+        type: 'sanctions_pressure',
+        country: code,
+        countryName: country.countryName || getCountryName(code),
+        lat: 0,
+        lon: 0,
+        severity,
+        title: country.newEntryCount > 0
+          ? `${country.newEntryCount} new OFAC designation${country.newEntryCount === 1 ? '' : 's'} tied to ${country.countryName}`
+          : `${country.entryCount} OFAC-linked designations tied to ${country.countryName}`,
+        timestamp: new Date(),
+      });
+    }
+    this.pruneOld();
+  }
+
 
   ingestConflictEvents(events: Array<{
     id: string;
@@ -533,7 +596,9 @@ class SignalAggregator {
           protest: 'civil unrest',
           ais_disruption: 'shipping anomalies',
           satellite_fire: 'thermal anomalies',
+          radiation_anomaly: 'radiation anomalies',
           temporal_anomaly: 'baseline anomalies',
+          sanctions_pressure: 'sanctions pressure',
           active_strike: 'active strikes',
         };
 
@@ -589,7 +654,9 @@ class SignalAggregator {
       protest: 0,
       ais_disruption: 0,
       satellite_fire: 0,
+      radiation_anomaly: 0,
       temporal_anomaly: 0,
+      sanctions_pressure: 0,
       active_strike: 0,
     };
 
@@ -619,4 +686,3 @@ class SignalAggregator {
 }
 
 export const signalAggregator = new SignalAggregator();
-

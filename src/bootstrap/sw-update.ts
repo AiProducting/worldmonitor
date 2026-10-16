@@ -1,4 +1,5 @@
 import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
+import { findReloadBlockingModal } from '@/utils/open-modal';
 interface VisibleElementLike {
   checkVisibility?: () => boolean;
   getClientRects?: () => { length: number };
@@ -9,7 +10,7 @@ interface DocumentLike {
   querySelector: (sel: string) => Element | null;
   querySelectorAll: (sel: string) => Iterable<Element & VisibleElementLike>;
   createElement: (tag: string) => HTMLElement;
-  body: { appendChild: (el: Element) => void; contains: (el: Element | null) => boolean };
+  body: { appendChild: (el: Element) => void; contains: (el: Element | null) => boolean } | null;
   addEventListener: (type: string, cb: () => void) => void;
   removeEventListener: (type: string, cb: () => void) => void;
 }
@@ -17,6 +18,30 @@ interface DocumentLike {
 interface ServiceWorkerContainerLike {
   readonly controller: object | null;
   addEventListener: (type: string, cb: () => void) => void;
+}
+
+/**
+ * Read `navigator.serviceWorker` without letting a hostile context abort boot.
+ *
+ * `'serviceWorker' in navigator` is TRUE inside an iframe sandboxed without
+ * `allow-same-origin` — the property exists on `Navigator.prototype` — but the
+ * getter itself throws `SecurityError: Failed to read the 'serviceWorker'
+ * property from 'Navigator': Service worker is disabled because the context is
+ * sandboxed and lacks the 'allow-same-origin' flag.` So an existence check
+ * passes and the first real READ throws, which at module scope takes the rest
+ * of the entry module's top-level statements down with it (WORLDMONITOR-Y5).
+ *
+ * Returns null whenever the container is unreadable or absent, so every caller
+ * can treat "no service worker here" as one ordinary branch.
+ */
+export function readServiceWorkerContainer(
+  nav: Navigator = navigator,
+): ServiceWorkerContainerLike | null {
+  try {
+    return (nav as { serviceWorker?: ServiceWorkerContainerLike }).serviceWorker ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export interface SwUpdateHandlerOptions {
@@ -44,43 +69,10 @@ export interface SwUpdateHandlerOptions {
 export const SW_DEBUG_LOG_KEY = 'wm-sw-debug-log';
 const SW_DEBUG_LOG_MAX = 30;
 
-// Selectors that identify a modal/dialog candidate. Many site modals mount
-// at app startup and stay in the DOM (e.g. UnifiedSettings sets
-// role="dialog" in its constructor), so a raw selector match alone would
-// permanently disable auto-reload. We only treat a match as "open" when
-// the element is actually rendered — see isModalOpen() below.
-export const OPEN_MODAL_SELECTOR =
-  '[aria-modal="true"], [role="dialog"], .cl-modalBackdrop, .modal-overlay, dialog[open]';
-
-/**
- * Any candidate that's actually visible → a real open modal.
- *
- * Preferred: `element.checkVisibility()` (Chrome 105+, Safari 17.4+, FF 125+).
- *
- * Fallback for older engines: `getClientRects().length > 0`. This returns 0
- * when the element has `display: none` (exactly how persistent overlays
- * hide — see main.css `.modal-overlay { display: none }` /
- * `.active { display: flex }`) and non-zero for rendered elements,
- * including `position: fixed` overlays. We cannot use `offsetParent` here:
- * MDN specifies it returns `null` for every `position: fixed` element
- * regardless of visibility, so it would false-negative on the Story overlay
- * (main.css:3442), the active Country Intel overlay (main.css:18415), and
- * `.modal-overlay` itself — all of which are fixed-positioned.
- */
-function isModalOpen(doc: DocumentLike): boolean {
-  for (const el of doc.querySelectorAll(OPEN_MODAL_SELECTOR)) {
-    const checkVisibility = el.checkVisibility;
-    if (typeof checkVisibility === 'function') {
-      if (checkVisibility.call(el)) return true;
-      continue;
-    }
-    const getClientRects = el.getClientRects;
-    if (typeof getClientRects === 'function' && getClientRects.call(el).length > 0) {
-      return true;
-    }
-  }
-  return false;
-}
+// Modal detection moved to src/utils/open-modal.ts so the passkey offer
+// controller shares one predicate with this updater. Re-exported because the
+// selector is part of this module's existing public surface.
+export { RELOAD_BLOCKING_MODAL_SELECTOR } from '@/utils/open-modal';
 
 function appendDebugLog(entry: Record<string, unknown>): void {
   try {
@@ -110,7 +102,13 @@ function appendDebugLog(entry: Record<string, unknown>): void {
  * Dismissing one version never suppresses toasts for future deploys.
  */
 export function installSwUpdateHandler(options: SwUpdateHandlerOptions = {}): void {
-  const swContainer = options.swContainer ?? navigator.serviceWorker;
+  // No readable container (sandboxed iframe, or an engine without SW support)
+  // means there is nothing to install — and reading it eagerly would throw.
+  // Rebound as a non-nullable const so the hoisted helpers below (which TS
+  // treats as callable before this guard) see the narrowed type.
+  const container = options.swContainer ?? readServiceWorkerContainer();
+  if (!container) return;
+  const swContainer: ServiceWorkerContainerLike = container;
   const doc = options.document ?? (document as unknown as DocumentLike);
   const reload = options.reload ?? (() => window.location.reload());
   const raf = options.raf ?? ((cb: () => void) => requestAnimationFrame(() => requestAnimationFrame(cb)));
@@ -155,6 +153,9 @@ export function installSwUpdateHandler(options: SwUpdateHandlerOptions = {}): vo
       currentDwellCancel = null;
     }
     doc.querySelector('.update-toast')?.remove();
+
+    const body = doc.body;
+    if (!body) return;
 
     const toast = doc.createElement('div');
     toast.className = 'update-toast';
@@ -207,13 +208,17 @@ export function installSwUpdateHandler(options: SwUpdateHandlerOptions = {}): vo
         logSw('dwell-timer-cancelled-on-hide');
       }
       logSw('visibility-hidden', { autoReloadAllowed, dismissed });
-      if (!dismissed && autoReloadAllowed && doc.body.contains(toast)) {
+      if (!dismissed && autoReloadAllowed && doc.body?.contains(toast)) {
         // Don't interrupt an in-flight modal flow (Clerk email-code wait,
         // Settings, ⌘K search, etc.). The reload stays armed — next tab-hide
         // after the modal closes will fire it. User can also click Reload
         // in the toast manually at any time.
-        if (isModalOpen(doc)) {
-          logSw('auto-reload-suppressed-modal-open');
+        // An overlay that declared itself reload-safe (the onboarding popover,
+        // the SignalModal) does not count: it holds nothing a reload would
+        // lose. See src/utils/open-modal.ts and WORLDMONITOR-15X.
+        const blocker = findReloadBlockingModal(doc);
+        if (blocker !== null) {
+          logSw('auto-reload-suppressed-modal-open', { blockedBy: blocker.label, reloadPolicy: blocker.policy });
           return;
         }
         logSw('auto-reload-triggered');
@@ -228,6 +233,10 @@ export function installSwUpdateHandler(options: SwUpdateHandlerOptions = {}): vo
         dwellTimerId = null;
         currentDwellCancel = null;
         logSw('reload-clicked');
+        // reload:user-initiated — the user pressed Reload, so the modal guard
+        // does not apply. Deferring a direct instruction would be a bug, not a
+        // protection. The marker is what keeps this exception explicit rather
+        // than implied by the shape of the enclosing installer.
         reload();
       } else if (action === 'dismiss') {
         clearTimer(dwellTimerId);
@@ -245,7 +254,7 @@ export function installSwUpdateHandler(options: SwUpdateHandlerOptions = {}): vo
     currentOnHidden = onHidden;
     currentDwellCancel = () => { clearTimer(dwellTimerId); dwellTimerId = null; };
     doc.addEventListener('visibilitychange', onHidden);
-    doc.body.appendChild(toast);
+    body.appendChild(toast);
     raf(() => toast.classList.add('visible'));
   };
 

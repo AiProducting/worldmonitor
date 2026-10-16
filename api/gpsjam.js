@@ -1,4 +1,6 @@
-import { getCorsHeaders, isDisallowedOrigin } from './_cors.js';
+import { getCorsHeaders, getPublicCorsHeaders, isDisallowedOrigin } from './_cors.js';
+import { jsonResponse } from './_json-response.js';
+import { readJsonFromUpstash } from './_upstash-json.js';
 
 export const config = { runtime: 'edge' };
 
@@ -42,9 +44,11 @@ async function fetchGpsJamData() {
   if (now < negUntil) return null;
 
   let raw;
-  try { raw = await readJsonFromUpstash(REDIS_KEY); } catch { raw = null; }
+  // Seeder-owned keys (#7674): scripts/fetch-gpsjam.mjs publishes these bare —
+  // read them raw in every environment so preview sees the fleet rows.
+  try { raw = await readJsonFromUpstash(REDIS_KEY, 3_000, true); } catch { raw = null; }
   if (!raw) {
-    try { raw = await readJsonFromUpstash(REDIS_KEY_V1); } catch { raw = null; }
+    try { raw = await readJsonFromUpstash(REDIS_KEY_V1, 3_000, true); } catch { raw = null; }
   }
 
   if (!raw?.hexes) {
@@ -66,31 +70,27 @@ export default async function handler(req) {
   }
 
   if (isDisallowedOrigin(req)) {
-    return new Response(JSON.stringify({ error: 'Origin not allowed' }), {
-      status: 403,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
-    });
+    return jsonResponse({ error: 'Origin not allowed' }, 403, corsHeaders);
   }
+
+  const publicCorsHeaders = getPublicCorsHeaders('GET, OPTIONS');
 
   const data = await fetchGpsJamData();
 
   if (!data) {
-    return new Response(JSON.stringify({ error: 'GPS interference data temporarily unavailable' }), {
-      status: 503,
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache, no-store',
-        ...corsHeaders,
-      },
-    });
+    return jsonResponse(
+      { error: 'GPS interference data temporarily unavailable' },
+      503,
+      { 'Cache-Control': 'no-cache, no-store', ...corsHeaders },
+    );
   }
 
-  return new Response(JSON.stringify(data), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/json',
+  return jsonResponse(
+    data,
+    200,
+    {
       'Cache-Control': 's-maxage=3600, stale-while-revalidate=1800, stale-if-error=3600',
-      ...corsHeaders,
+      ...publicCorsHeaders,
     },
-  });
+  );
 }

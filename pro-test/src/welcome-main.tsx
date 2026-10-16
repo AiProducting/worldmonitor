@@ -1,10 +1,10 @@
 import { StrictMode } from 'react';
 import { createRoot, hydrateRoot } from 'react-dom/client';
 import WelcomeApp from './WelcomeApp.tsx';
-import { currentLanguageBase, initI18n } from './i18n';
+import { effectiveWelcomeContentLanguage, initI18n } from './i18n';
 import { initSentry } from './sentry';
 import { initDebugBearRum } from './debugbear-rum';
-import { clearWelcomeRoot } from './welcome-root';
+import { clearWelcomeRoot, prepareWelcomeRoot } from './welcome-root';
 import './index.css';
 
 const WELCOME_HYDRATION_IDLE_TIMEOUT_MS = 2500;
@@ -29,19 +29,22 @@ initSentry();
 initDebugBearRum();
 
 initI18n({ metaPrefix: 'welcome.meta' }).then(() => {
-  const rootElement = document.getElementById('root')!;
+  const mount = prepareWelcomeRoot(
+    document.getElementById('root'),
+    effectiveWelcomeContentLanguage(),
+  );
+  if (!mount) {
+    return;
+  }
   const app = (
     <StrictMode>
       <WelcomeApp />
     </StrictMode>
   );
-  if (
-    rootElement.dataset.wmPrerendered === 'welcome' &&
-    rootElement.dataset.wmPrerenderLang === currentLanguageBase()
-  ) {
-    scheduleWelcomeHydration(() => hydrateRoot(rootElement, app));
+  if (mount.mode === 'hydrate') {
+    scheduleWelcomeHydration(() => hydrateRoot(mount.root, app));
     return;
   }
-  clearWelcomeRoot(rootElement);
-  createRoot(rootElement).render(app);
+  clearWelcomeRoot(mount.root);
+  createRoot(mount.root).render(app);
 });

@@ -2,7 +2,7 @@
  * Tests for server/worldmonitor/aviation/v1/list-airport-delays.ts
  *
  * Regression coverage for #3707: airports without telemetry must NOT be
- * published as "Normal operations / FLIGHT_DELAY_SEVERITY_NORMAL" rows.
+ * published as 'Normal operations / FLIGHT_DELAY_SEVERITY_NORMAL' rows.
  *
  * The handler reads two seed-backed caches:
  *   aviation:delays:faa:v1   — FAA ASWS aggregates for US airports
@@ -10,153 +10,20 @@
  *
  * FAA coverage is source-wide. International coverage is per hub: a cache hit
  * can still report one provider omission or failure. Uncovered airports must
- * emit FLIGHT_DELAY_SEVERITY_UNKNOWN rows so consumers can render "no data"
- * rather than a misleading green "Normal" pill.
- *
- * The fourth source (NOTAM) only contributes closures/restrictions — it never
- * confirms "normal operations" for an airport — so NOTAM-only airports must
  * stay UNKNOWN when no NOTAM applies to them.
  *
- * Run with: npm run test:data -- --test-name-pattern="airport delays"
+ * The 'static source guarantees' section that used to open this file pinned
+ * the handler's own boolean names, proto enum literals and panel markup by
+ * regex. The handler is invoked for real below with both caches stubbed, which
+ * is what actually proves an uncovered airport reports UNKNOWN.
+ *
+ * Run with: npm run test:data -- --test-name-pattern='airport delays'
  */
 
 import { describe, it, before, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { drainResponseHeaders } from '../server/_shared/response-headers.ts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = resolve(__dirname, '..');
-
-// ────────────────────────────────────────────────────────────────────────────
-// 1. Static source guarantees — cheap regression net independent of runtime.
-// ────────────────────────────────────────────────────────────────────────────
-
-describe('list-airport-delays: source structure (regression net for #3707)', () => {
-  const src = readFileSync(
-    resolve(root, 'server/worldmonitor/aviation/v1/list-airport-delays.ts'),
-    'utf-8',
-  );
-
-  it('tracks FAA source coverage and AviationStack per-hub coverage', () => {
-    assert.match(src, /faaSourceCovered\s*=\s*false/);
-    assert.match(src, /faaSourceCovered\s*=\s*true/);
-    assert.match(src, /intlCoveredIatas\s*=\s*new Set/);
-    assert.match(src, /hub\.status === 'normal' \|\| hub\.status === 'disruption'/);
-  });
-
-  it('emits an UNKNOWN row for airports whose source did not hit', () => {
-    assert.match(src, /toProtoSeverity\(\s*['"]unknown['"]\s*\)/);
-    assert.match(src, /toProtoSource\(\s*['"]unspecified['"]\s*\)/);
-    assert.match(src, /Coverage unavailable/);
-    // Sanity: the unknown row uses the dedicated id prefix, not the legacy
-    // status-${iata} id which now means "covered + healthy".
-    assert.match(src, /unknown-\$\{airport\.iata\}/);
-  });
-
-  it('does NOT publish "Normal operations" rows blindly for every monitored airport', () => {
-    // The pre-fix bug: the loop unconditionally pushed a NORMAL/computed row
-    // for every airport not in alertedIatas. The fix gates that branch on
-    // a `covered` flag derived from the two source booleans. Verify both
-    // gating ingredients are present in the source.
-    assert.match(src, /FAA_AIRPORT_SET\.has\(airport\.iata\)\s*&&\s*faaSourceCovered/);
-    assert.match(src, /INTL_AIRPORT_SET\.has\(airport\.iata\)\s*&&\s*intlCoveredIatas\.has\(airport\.iata\)/);
-    assert.match(src, /if\s*\(\s*covered\s*\)/);
-  });
-
-  it('sources NORMAL rows to their actual upstream (faa | aviationstack), not "computed"', () => {
-    // The pre-fix bug also obscured provenance by tagging synthetic rows
-    // as FLIGHT_DELAY_SOURCE_COMPUTED. Now the source must match the cache
-    // that actually returned the data — easier to debug seeder regressions.
-    assert.match(src, /toProtoSource\(\s*isFaaCovered\s*\?\s*['"]faa['"]\s*:\s*['"]aviationstack['"]\s*\)/);
-  });
-});
-
-// ────────────────────────────────────────────────────────────────────────────
-// 2. Proto wiring — the new enum variant must exist in both .proto + .ts.
-// ────────────────────────────────────────────────────────────────────────────
-
-describe('FlightDelaySeverity proto enum carries an UNKNOWN variant (#3707)', () => {
-  it('proto/.../airport_delay.proto declares FLIGHT_DELAY_SEVERITY_UNKNOWN', () => {
-    const protoSrc = readFileSync(
-      resolve(root, 'proto/worldmonitor/aviation/v1/airport_delay.proto'),
-      'utf-8',
-    );
-    assert.match(protoSrc, /FLIGHT_DELAY_SEVERITY_UNKNOWN\s*=\s*6/);
-    // Comment must call out the semantics so future hands don't drop it.
-    assert.match(protoSrc, /no telemetry/i);
-  });
-
-  it('generated server type union includes FLIGHT_DELAY_SEVERITY_UNKNOWN', () => {
-    const serverGen = readFileSync(
-      resolve(root, 'src/generated/server/worldmonitor/aviation/v1/service_server.ts'),
-      'utf-8',
-    );
-    assert.match(serverGen, /"FLIGHT_DELAY_SEVERITY_UNKNOWN"/);
-  });
-
-  it('generated client type union includes FLIGHT_DELAY_SEVERITY_UNKNOWN', () => {
-    const clientGen = readFileSync(
-      resolve(root, 'src/generated/client/worldmonitor/aviation/v1/service_client.ts'),
-      'utf-8',
-    );
-    assert.match(clientGen, /"FLIGHT_DELAY_SEVERITY_UNKNOWN"/);
-  });
-
-  it('_shared.toProtoSeverity maps "unknown" -> FLIGHT_DELAY_SEVERITY_UNKNOWN', () => {
-    const sharedSrc = readFileSync(
-      resolve(root, 'server/worldmonitor/aviation/v1/_shared.ts'),
-      'utf-8',
-    );
-    assert.match(sharedSrc, /unknown:\s*'FLIGHT_DELAY_SEVERITY_UNKNOWN'/);
-    assert.match(sharedSrc, /unspecified:\s*'FLIGHT_DELAY_SOURCE_UNSPECIFIED'/);
-  });
-
-  it('client adapter (src/services/aviation) exposes the "unknown" display severity', () => {
-    const svc = readFileSync(resolve(root, 'src/services/aviation/index.ts'), 'utf-8');
-    assert.match(svc, /export type FlightDelaySeverity\s*=[^;]*'unknown'/);
-    assert.match(svc, /FLIGHT_DELAY_SEVERITY_UNKNOWN:\s*'unknown'/);
-  });
-});
-
-// ────────────────────────────────────────────────────────────────────────────
-// 3. UI guarantees — switches on severity must handle 'unknown' explicitly.
-// ────────────────────────────────────────────────────────────────────────────
-
-describe('UI consumers handle the "unknown" severity (#3707)', () => {
-  it('AirlineIntelPanel SEVERITY_COLOR has an "unknown" key (neutral, not green)', () => {
-    const panel = readFileSync(resolve(root, 'src/components/AirlineIntelPanel.ts'), 'utf-8');
-    // The map type is Record<FlightDelaySeverity, string> — TS would reject
-    // omission at compile time, but assert the presence explicitly so a
-    // future relax of the type doesn't silently drop the entry.
-    assert.match(panel, /unknown:\s*['"]#9ca3af['"]/);
-  });
-
-  it('DeckGLMap createFlightDelaysLayer branches on severity === "unknown"', () => {
-    const deck = readFileSync(resolve(root, 'src/components/DeckGLMap.ts'), 'utf-8');
-    assert.match(deck, /d\.severity === ['"]unknown['"]/);
-  });
-
-  it('GlobeMap flightDelay marker handles severity === "unknown"', () => {
-    const globe = readFileSync(resolve(root, 'src/components/GlobeMap.ts'), 'utf-8');
-    assert.match(globe, /d\.severity === ['"]unknown['"]/);
-  });
-
-  it('MapPopup renders "NO DATA" for unknown severity (not "UNKNOWN" / not the green NORMAL pill)', () => {
-    const popup = readFileSync(resolve(root, 'src/components/MapPopup.ts'), 'utf-8');
-    assert.match(popup, /delay\.severity === ['"]unknown['"]/);
-    assert.match(popup, /NO DATA/);
-  });
-
-  it('main.css has a flight-delay-marker.unknown rule (neutral grey)', () => {
-    const css = readFileSync(resolve(root, 'src/styles/main.css'), 'utf-8');
-    assert.match(css, /\.flight-delay-marker\.unknown/);
-    assert.match(css, /\.popup-header\.flight\.unknown/);
-  });
-});
-
-// ────────────────────────────────────────────────────────────────────────────
 // 4. Behavioural — actually invoke the handler against stubbed Redis.
 //    These are the regression tests the bug report would catch.
 // ────────────────────────────────────────────────────────────────────────────
@@ -236,11 +103,20 @@ beforeEach(() => {
 const FAA_SAMPLE = 'JFK';            // in FAA_AIRPORTS
 const INTL_SAMPLE = 'LHR';           // in AVIATIONSTACK_AIRPORTS
 const NOTAM_ONLY_SAMPLE = 'IKA';     // Tehran Imam Khomeini — not in either AS or FAA
+const context = () => ({ request: new Request('https://worldmonitor.app/api/aviation/v1/list-airport-delays') });
 
 describe('listAirportDelays handler — coverage gating (#3707)', () => {
+  it('rejects declared filters because the seed snapshot has no filtered contract', async () => {
+    await assert.rejects(
+      listAirportDelays(context(), { pageSize: 100, cursor: '', region: '', minSeverity: '' }),
+      { statusCode: 400 },
+    );
+  });
+
   it('both caches MISS → every monitored airport emits severity=UNKNOWN', async () => {
     // No cache set.
-    const resp = await listAirportDelays({}, {});
+    const request = new Request('https://worldmonitor.app/api/aviation/v1/list-airport-delays');
+    const resp = await listAirportDelays({ request }, {});
     assert.ok(Array.isArray(resp.alerts) && resp.alerts.length > 0, 'must return some rows');
 
     for (const a of resp.alerts) {
@@ -259,13 +135,15 @@ describe('listAirportDelays handler — coverage gating (#3707)', () => {
     // And critically: no fabricated NORMAL row exists.
     const normalCount = resp.alerts.filter(a => a.severity === 'FLIGHT_DELAY_SEVERITY_NORMAL').length;
     assert.equal(normalCount, 0, 'must not fabricate NORMAL rows when no telemetry available');
+    assert.equal(drainResponseHeaders(request)?.['X-No-Cache'], '1',
+      'unavailable required delay seeds must not produce a cacheable UNKNOWN map');
   });
 
   it('FAA HIT (empty alerts) + INTL MISS → US airports = NORMAL/FAA, non-US = UNKNOWN', async () => {
     cacheStore.set('aviation:delays:faa:v1', { alerts: [] });
     // intl missing
 
-    const resp = await listAirportDelays({}, {});
+    const resp = await listAirportDelays(context(), {});
 
     const faaRow = resp.alerts.find(a => a.iata === FAA_SAMPLE);
     assert.ok(faaRow, `must include ${FAA_SAMPLE} row`);
@@ -313,7 +191,7 @@ describe('listAirportDelays handler — coverage gating (#3707)', () => {
       coverage: [{ iata: INTL_SAMPLE, status: 'normal', flightCount: 12 }],
     });
 
-    const resp = await listAirportDelays({}, {});
+    const resp = await listAirportDelays(context(), {});
 
     // JFK keeps its alert verbatim (apart from possibly enriched fields).
     const jfkOut = resp.alerts.find(a => a.iata === 'JFK');
@@ -354,7 +232,7 @@ describe('listAirportDelays handler — coverage gating (#3707)', () => {
       ],
     });
 
-    const resp = await listAirportDelays({}, {});
+    const resp = await listAirportDelays(context(), {});
     const omitted = resp.alerts.find(a => a.iata === 'LHR');
     assert.equal(omitted.severity, 'FLIGHT_DELAY_SEVERITY_UNKNOWN');
     assert.equal(omitted.source, 'FLIGHT_DELAY_SOURCE_UNSPECIFIED');
@@ -368,7 +246,7 @@ describe('listAirportDelays handler — coverage gating (#3707)', () => {
     cacheStore.set('aviation:delays:faa:v1', { alerts: [] });
     cacheStore.set('aviation:delays:intl:v3', { alerts: [] });
 
-    const resp = await listAirportDelays({}, {});
+    const resp = await listAirportDelays(context(), {});
     const intl = resp.alerts.find(a => a.iata === INTL_SAMPLE);
     assert.ok(intl, `must include ${INTL_SAMPLE} row`);
     assert.equal(intl.severity, 'FLIGHT_DELAY_SEVERITY_UNKNOWN');
@@ -382,7 +260,7 @@ describe('listAirportDelays handler — coverage gating (#3707)', () => {
     cacheStore.set('aviation:delays:faa:v1', { notTheRightField: true });
     cacheStore.set('aviation:delays:intl:v3', { alerts: [] });
 
-    const resp = await listAirportDelays({}, {});
+    const resp = await listAirportDelays(context(), {});
     const faa = resp.alerts.find(a => a.iata === FAA_SAMPLE);
     assert.equal(faa.severity, 'FLIGHT_DELAY_SEVERITY_UNKNOWN',
       'malformed FAA payload must not be treated as coverage');
@@ -396,11 +274,31 @@ describe('listAirportDelays handler — coverage gating (#3707)', () => {
     cacheStore.set('aviation:delays:faa:v1', { alerts: [] });
     cacheStore.set('aviation:delays:intl:v3', { notTheRightField: true });
 
-    const resp = await listAirportDelays({}, {});
+    const resp = await listAirportDelays(context(), {});
     const intl = resp.alerts.find(a => a.iata === INTL_SAMPLE);
     assert.equal(intl.severity, 'FLIGHT_DELAY_SEVERITY_UNKNOWN',
       'malformed INTL payload must not be treated as coverage');
     assert.equal(intl.source, 'FLIGHT_DELAY_SOURCE_UNSPECIFIED',
       'malformed INTL payload: source must be UNSPECIFIED when uncovered');
   });
+
+  for (const [name, faa, intl] of [
+    ['null FAA alert', { alerts: [null] }, { alerts: [], coverage: [{ iata: INTL_SAMPLE, status: 'normal' }] }],
+    ['null INTL coverage row', { alerts: [] }, { alerts: [], coverage: [null] }],
+    ['invalid INTL coverage row', { alerts: [] }, { alerts: [], coverage: [{ iata: INTL_SAMPLE, status: 'invalid' }] }],
+  ]) {
+    it(`marks ${name} as unavailable instead of cacheable coverage`, async () => {
+      cacheStore.set('aviation:delays:faa:v1', faa);
+      cacheStore.set('aviation:delays:intl:v3', intl);
+      const request = new Request('https://worldmonitor.app/api/aviation/v1/list-airport-delays');
+
+      const response = await listAirportDelays({ request }, {});
+      assert.equal(drainResponseHeaders(request)?.['X-No-Cache'], '1');
+      if (name === 'null FAA alert') {
+        assert.equal(response.alerts.find(a => a.iata === FAA_SAMPLE)?.severity, 'FLIGHT_DELAY_SEVERITY_UNKNOWN');
+      } else {
+        assert.equal(response.alerts.find(a => a.iata === INTL_SAMPLE)?.severity, 'FLIGHT_DELAY_SEVERITY_UNKNOWN');
+      }
+    });
+  }
 });

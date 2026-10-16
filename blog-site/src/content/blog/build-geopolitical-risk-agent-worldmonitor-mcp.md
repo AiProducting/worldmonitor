@@ -43,7 +43,7 @@ The current WorldMonitor MCP server exposes:
 
 | Surface | What it gives the agent |
 |---|---|
-| 41 tools | Live or cache-backed calls across conflicts, markets, aviation, maritime, cyber, energy, forecasts, health, and country risk |
+| Live tools | Live or cache-backed calls across conflicts, markets, aviation, maritime, cyber, energy, forecasts, health, country risk, and China decision signals |
 | 6 prompts | Pre-built workflows such as country briefing, conflict pulse, route risk check, and market-open prep |
 | 4 resources | Stable read-only URIs for country risk, chokepoint status, seed freshness, and market quotes |
 | OAuth and API-key auth | OAuth for supported MCP clients; `X-WorldMonitor-Key` for server-side scripts |
@@ -95,7 +95,7 @@ For a route-risk check, use:
 
 ## Ask for compact payloads
 
-WorldMonitor tools support JMESPath projection where useful. That matters because intelligence payloads can get large, and agents perform better when they receive the exact fields needed for the task.
+WorldMonitor tools support [JMESPath projection](https://www.worldmonitor.app/docs/mcp-jmespath) where useful. That matters because intelligence payloads can get large, and agents perform better when they receive the exact fields needed for the task.
 
 Example: ask for only the country score, advisory state, component breakdown, and freshness fields:
 

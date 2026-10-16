@@ -105,7 +105,7 @@ ollama pull llama3.1
 
 ### Step 2: Open World Monitor
 
-Navigate to worldmonitor.app or install the desktop app from GitHub releases.
+Navigate to worldmonitor.app or install the [desktop app](https://www.worldmonitor.app/docs/desktop-app) from GitHub releases.
 
 ### Step 3: Configure AI
 
@@ -138,7 +138,7 @@ Material non-public information (MNPI) requirements mean certain geopolitical an
 
 You don't have to take our word for the privacy claims. World Monitor is fully open source under AGPL-3.0. Every network call, every data flow, every AI prompt is in the codebase for you to audit.
 
-The proto-first API architecture (281 proto files, 35 typed services) means even the API contracts are transparent. You can see exactly what data each endpoint expects and returns.
+The proto-first API architecture (Protocol Buffer definitions and typed services) means even the API contracts are transparent. You can see exactly what data each endpoint expects and returns.
 
 ---
 

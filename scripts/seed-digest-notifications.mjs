@@ -19,6 +19,8 @@ import {
   markdownToTelegramHtml,
   markdownToSlackMrkdwn,
   markdownToDiscord,
+  escapeDiscordText,
+  truncateDiscordContent,
 } from './_digest-markdown.mjs';
 
 const require = createRequire(import.meta.url);
@@ -33,6 +35,10 @@ const {
   assertNotificationWebhookDeliveryUrlSafe,
   postJsonWithPinnedAddress,
 } = require('./lib/notification-webhook-ssrf.cjs');
+const {
+  buildWebhookDeliveryHeaders,
+  resolveWebhookSigningSecret,
+} = require('./lib/notification-webhook-signing.cjs');
 const { callLLM } = require('./lib/llm-chain.cjs');
 const { flushPendingLlmEvents } = require('./lib/llm-telemetry.cjs');
 const { fetchUserPreferences, extractUserContext, formatUserProfile } = require('./lib/user-context.cjs');
@@ -42,6 +48,10 @@ const { normalizeResendSender } = require('./lib/resend-from.cjs');
 import { readRawJsonFromUpstash, redisPipeline } from '../api/_upstash-json.js';
 import { classifyFeelGood } from '../server/_shared/feelgood-classifier.js';
 import { classifyEphemeralLiveCoverage } from '../shared/ephemeral-live-classifier.js';
+import {
+  deriveNotificationStoryPhase,
+  formatStoryPhaseBadge,
+} from '../shared/story-phase.js';
 import { shouldDropOpinionTrack } from './lib/digest-opinion-track-filter.mjs';
 import {
   composeBriefFromDigestStories,
@@ -54,7 +64,11 @@ import {
   shouldExitNonZero as shouldExitOnBriefFailures,
 } from './lib/brief-compose.mjs';
 import {
+  applyDigestScoreFloor,
+  carouselUrlsFrom,
   digestWindowStartMs,
+  getDigestScoreMin,
+  isDigestDeliveryTier,
   pickWinningCandidateWithPool,
   readTimeAgeCutoffMs,
   runSynthesisWithFallback,
@@ -64,6 +78,10 @@ import {
 } from './lib/digest-orchestration-helpers.mjs';
 import { injectEmailSummary } from './lib/email-summary-html.mjs';
 import { issueSlotInTz } from '../shared/brief-filter.js';
+import {
+  MIN_CORROBORATING_PUBLISHERS,
+  countPublisherFamilies,
+} from '../shared/publisher-families.js';
 import {
   enrichBriefEnvelopeWithLLM,
   generateDigestProse,
@@ -93,6 +111,7 @@ import {
 import { readCooldownConfig } from './lib/digest-cooldown-config.mjs';
 import { evaluateCooldown } from './lib/digest-cooldown-decision.mjs';
 import { emitCooldownShadowLog } from './lib/digest-cooldown-shadow-log.mjs';
+import { buildDigestDeliveryPlan } from './lib/digest-delivery-plan.mjs';
 import { buildTickerDictionary } from '../shared/ticker-extract.js';
 import { scanAndEnqueueWatchlistStoryEvents as scanWatchlistStoryEvents } from './lib/watchlist-story-scan.mjs';
 
@@ -114,7 +133,8 @@ const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN ?? '';
 const CONVEX_SITE_URL =
   process.env.CONVEX_SITE_URL ??
   (process.env.CONVEX_URL ?? '').replace('.convex.cloud', '.convex.site');
-const RELAY_SECRET = process.env.RELAY_SHARED_SECRET ?? '';
+const RELAY_SECRET = process.env.CONVEX_NOTIFICATION_RELAY_SECRET ?? '';
+const ANALYST_RELAY_SECRET = process.env.RELAY_SHARED_SECRET ?? '';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? '';
 const RESEND_API_KEY = process.env.RESEND_API_KEY ?? '';
 // Brief/digest is an editorial daily read, not an incident alarm — route it
@@ -143,7 +163,7 @@ if (!UPSTASH_URL || !UPSTASH_TOKEN) {
   process.exit(1);
 }
 if (!CONVEX_SITE_URL || !RELAY_SECRET) {
-  console.error('[digest] CONVEX_SITE_URL / RELAY_SHARED_SECRET not set');
+  console.error('[digest] CONVEX_SITE_URL / CONVEX_NOTIFICATION_RELAY_SECRET not set');
   process.exit(1);
 }
 
@@ -156,19 +176,6 @@ const DIGEST_HIGH_LIMIT = 15;
 const DIGEST_MEDIUM_LIMIT = 10;
 const AI_DIGEST_ENABLED = process.env.AI_DIGEST_ENABLED !== '0';
 const ENTITLEMENT_CACHE_TTL = 900; // 15 min
-
-// Absolute importance-score floor applied to the digest AFTER dedup.
-// Mirrors the realtime notification-relay gate (IMPORTANCE_SCORE_MIN)
-// but lives on the brief/digest side so operators can tune them
-// independently — e.g. let realtime page at score>=63 while the brief
-// digest drops anything <50. Default 0 = no filtering; ship disabled
-// so this PR is a no-op until Railway flips the env. Setting the var
-// to any positive integer drops every cluster whose representative
-// currentScore is below it.
-function getDigestScoreMin() {
-  const raw = Number.parseInt(process.env.DIGEST_SCORE_MIN ?? '0', 10);
-  return Number.isInteger(raw) && raw >= 0 ? raw : 0;
-}
 
 // ── Brief composer (consolidation of the retired seed-brief-composer) ──────
 
@@ -255,7 +262,7 @@ function normalizeForDescriptionEquality(s) {
  * (See feedback_gate_on_ground_truth_not_configured_state.md.)
  */
 async function callAnalystWhyMatters(story) {
-  if (!RELAY_SECRET) return null;
+  if (!ANALYST_RELAY_SECRET) return null;
   // Forward a trimmed story payload so the endpoint only sees the
   // fields it validates. `description` is NEW for prompt-v2 — when
   // upstream has a real one (falls back to headline via
@@ -284,7 +291,7 @@ async function callAnalystWhyMatters(story) {
     const resp = await fetch(BRIEF_WHY_MATTERS_ENDPOINT_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${RELAY_SECRET}`,
+        Authorization: `Bearer ${ANALYST_RELAY_SECRET}`,
         'Content-Type': 'application/json',
         // Explicit UA — Node undici's default is short/empty enough to
         // trip middleware.ts's "No user-agent or suspiciously short"
@@ -537,18 +544,12 @@ function flatArrayToObject(flat) {
   return obj;
 }
 
-function derivePhase(track) {
-  const mentionCount = parseInt(track.mentionCount ?? '1', 10);
-  const firstSeen = parseInt(track.firstSeen ?? '0', 10);
-  const lastSeen = parseInt(track.lastSeen ?? String(Date.now()), 10);
-  const now = Date.now();
-  const ageH = (now - firstSeen) / 3600000;
-  const silenceH = (now - lastSeen) / 3600000;
-  if (silenceH > 24) return 'fading';
-  if (mentionCount >= 3 && ageH >= 12) return 'sustained';
-  if (mentionCount >= 2) return 'developing';
-  if (ageH < 2) return 'breaking';
-  return 'unknown';
+function derivePhase(track, nowMs = Date.now()) {
+  return deriveNotificationStoryPhase({
+    mentionCount: parseInt(track.mentionCount ?? '1', 10),
+    firstSeen: parseInt(track.firstSeen ?? '0', 10),
+    lastSeen: parseInt(track.lastSeen ?? String(nowMs), 10),
+  }, nowMs);
 }
 
 function matchesSensitivity(ruleSensitivity, severity) {
@@ -643,8 +644,11 @@ function logDigestImportanceObservability(stories, { variant, lang, sensitivity 
     .map((s) => Array.isArray(s.mergedHashes) && s.mergedHashes.length > 0 ? s.mergedHashes.length : 1)
     .sort((a, b) => a - b);
   const diplomacyHits = stories.filter((s) => digestHasDiplomacyFlashpointSignal(s.title)).length;
+  // #6428: a metric named corroboration must count publishers, or the number
+  // an operator reads while diagnosing a quiet notification run overstates
+  // independence exactly like the gates used to.
   const corroborationHits = stories.filter((s) =>
-    (Array.isArray(s.sources) && s.sources.length >= 2) ||
+    countPublisherFamilies(s.sources) >= MIN_CORROBORATING_PUBLISHERS ||
     (Array.isArray(s.mergedHashes) && s.mergedHashes.length >= 2)
   ).length;
   if (diplomacyHits === 0 && corroborationHits === 0) return;
@@ -939,9 +943,7 @@ async function buildDigest(rule, windowStartMs) {
   // score field; the rep is the highest-scoring member of its
   // cluster). At DIGEST_SCORE_MIN=0 this is a no-op.
   const scoreFloor = getDigestScoreMin();
-  const deduped = scoreFloor > 0
-    ? dedupedAll.filter((s) => Number(s.currentScore ?? 0) >= scoreFloor)
-    : dedupedAll;
+  const deduped = applyDigestScoreFloor(dedupedAll, scoreFloor);
   if (scoreFloor > 0 && dedupedAll.length !== deduped.length) {
     console.log(
       `[digest] score floor dropped ${dedupedAll.length - deduped.length} ` +
@@ -1075,12 +1077,12 @@ function formatDigestHtml(stories, nowMs) {
   const highCount = buckets.high.length;
 
   const SEVERITY_BORDER = { critical: '#ef4444', high: '#f97316', medium: '#eab308' };
-  const PHASE_COLOR = { breaking: '#ef4444', developing: '#f97316', sustained: '#60a5fa', fading: '#555' };
 
   function storyCard(s) {
     const borderColor = SEVERITY_BORDER[s.severity] ?? '#4ade80';
-    const phaseColor = PHASE_COLOR[s.phase] ?? '#888';
-    const phaseCap = s.phase ? s.phase.charAt(0).toUpperCase() + s.phase.slice(1) : '';
+    const phaseBadge = formatStoryPhaseBadge(s.phase);
+    const phaseColor = phaseBadge?.color;
+    const phaseCap = phaseBadge?.label ?? '';
     const srcText = s.sources.length > 0
       ? s.sources.slice(0, 3).join(', ') + (s.sources.length > 3 ? ` +${s.sources.length - 3}` : '')
       : '';
@@ -1098,7 +1100,7 @@ function formatDigestHtml(stories, nowMs) {
       snippetEl = `<div style="margin-top: 6px; font-size: 12px; color: #999; line-height: 1.45;">${escapeHtml(trimmed)}</div>`;
     }
     const meta = [
-      phaseCap ? `<span style="font-size: 10px; color: ${phaseColor}; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">${phaseCap}</span>` : '',
+      phaseBadge ? `<span style="font-size: 10px; color: ${phaseColor}; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">${phaseCap}</span>` : '',
       srcText ? `<span style="font-size: 11px; color: #555;">${escapeHtml(srcText)}</span>` : '',
     ].filter(Boolean).join('<span style="color: #333; margin: 0 6px;">&bull;</span>');
     return `<div style="background: #111; border: 1px solid #1a1a1a; border-left: 3px solid ${borderColor}; padding: 12px 16px; margin-bottom: 8px;">${titleEl}${snippetEl}${meta ? `<div style="margin-top: 6px;">${meta}</div>` : ''}</div>`;
@@ -1174,7 +1176,6 @@ function formatDigestHtml(stories, nowMs) {
       <div style="margin-bottom: 12px;">
         <a href="https://x.com/worldmonitorapp" style="color: #555; text-decoration: none; font-size: 11px; margin: 0 10px;">X / Twitter</a>
         <a href="https://github.com/koala73/worldmonitor" style="color: #555; text-decoration: none; font-size: 11px; margin: 0 10px;">GitHub</a>
-        <a href="https://discord.gg/re63kWKxaz" style="color: #555; text-decoration: none; font-size: 11px; margin: 0 10px;">Discord</a>
       </div>
       <p style="font-size: 10px; color: #444; margin: 0; line-height: 1.5;">
         <a href="https://worldmonitor.app" style="color: #4ade80; text-decoration: none;">worldmonitor.app</a>
@@ -1182,75 +1183,6 @@ function formatDigestHtml(stories, nowMs) {
     </div>
   </div>
 </div>`;
-}
-
-// ── Sprint 1 / U7 production-gap shim: BriefStory → formatter shape ──
-//
-// The U7 invariant `digest.cards ⊆ brief.cards` only holds in
-// production if `formatDigest`/`formatDigestHtml` consume the brief
-// envelope's filtered slice (capped at MAX_STORIES_PER_USER=12, post-
-// compose, post-filter), NOT the raw `stories` pool from `buildDigest`
-// (capped at DIGEST_MAX_ITEMS=30).
-//
-// The two formatters above were written when there was no envelope —
-// they expect raw-shape stories with `{title, severity, sources, link,
-// description, phase}`. The brief envelope's `BriefStory` carries a
-// different field set: `{headline, threatLevel, source, sourceUrl,
-// description, clusterId, ...}`. This shim maps the envelope shape to
-// the formatter shape without touching the formatters themselves,
-// keeping the U7 invariant holdable on the live send path with the
-// minimum surgical change.
-//
-// Compatibility decisions:
-//   - `headline` → `title`. Direct rename.
-//   - `threatLevel` → `severity`. The values overlap (`critical`,
-//     `high`, `medium`); a `BriefStory` `low` falls into the formatter's
-//     `high` bucket fallback (line ~651 / ~692). That's a benign
-//     mis-bucket — the brief composer's filter already drops `low` from
-//     the pool today, so the production occurrence is zero.
-//   - `source` (single string) → `sources` (array). Wrap into a
-//     1-element array; empty when missing. Multi-source fan-out for the
-//     formatter's "+N" suffix is lost here — acceptable trade-off
-//     because the BriefStory schema only carries the primary source by
-//     design (per shared/brief-envelope.d.ts:112).
-//   - `sourceUrl` → `link`. Direct rename. Empty string when absent
-//     (the formatter renders unlinked text in that case).
-//   - `description` → `description`. Direct passthrough.
-//   - `clusterId` → `hash`. THIS IS THE U7-LOAD-BEARING MAPPING. The
-//     formatter doesn't consume `hash` for rendering, but the U7
-//     invariant projection (`projectDigestEmitClusterId` in the
-//     companion test) reads it as the per-card identity. Setting
-//     `hash = clusterId` makes the runtime emit set provably equal to
-//     the brief envelope's clusterId set.
-//   - `phase` is not on `BriefStory`. Default to `'sustained'` — a
-//     valid phase value with a dedicated PHASE_COLOR entry, no
-//     filtering effect (the only phase that filters is `'fading'`,
-//     and that filter lives in `buildDigest`, not the formatters).
-//
-// Why an inline shim and not a shared helper: this transformation is
-// load-bearing only for the cron's send loop. Any other consumer that
-// wants the formatter shape would convert via this function would couple
-// itself to the BriefStory→raw mapping that is not load-bearing
-// anywhere else. Keep it local until a second consumer appears.
-function briefStoriesToFormatterShape(briefStories) {
-  if (!Array.isArray(briefStories)) return [];
-  return briefStories.map((s) => {
-    const sources = typeof s?.source === 'string' && s.source.length > 0 ? [s.source] : [];
-    return {
-      title: typeof s?.headline === 'string' ? s.headline : '',
-      severity: typeof s?.threatLevel === 'string' ? s.threatLevel : 'high',
-      sources,
-      link: typeof s?.sourceUrl === 'string' ? s.sourceUrl : '',
-      description: typeof s?.description === 'string' ? s.description : '',
-      // 'sustained' has a defined PHASE_COLOR entry in the formatter
-      // and is NOT 'fading' (the only phase value that drops in
-      // buildDigest). The formatter only uses phase for cosmetic
-      // colour/label, never for filtering.
-      phase: 'sustained',
-      // Load-bearing for the U7 invariant — see header above.
-      hash: typeof s?.clusterId === 'string' ? s.clusterId : '',
-    };
-  });
 }
 
 // ── (Removed) standalone generateAISummary ───────────────────────────────────
@@ -1316,31 +1248,6 @@ function truncateTelegramHtml(html, limit = TELEGRAM_MAX_LEN) {
   const lastNewline = truncated.lastIndexOf('\n');
   const cutPoint = lastNewline > limit * 0.6 ? lastNewline : truncated.length;
   return sanitizeTelegramHtml(truncated.slice(0, cutPoint) + '\n\n[truncated]');
-}
-
-/**
- * Phase 8: derive the 3 carousel image URLs from a signed magazine
- * URL. The HMAC token binds (userId, issueSlot), not the path — so
- * the same token verifies against /api/brief/{u}/{slot}?t=T AND against
- * /api/brief/carousel/{u}/{slot}/{0|1|2}?t=T.
- *
- * Returns null when the magazine URL doesn't match the expected shape
- * — caller falls back to text-only delivery.
- */
-function carouselUrlsFrom(magazineUrl) {
-  try {
-    const u = new URL(magazineUrl);
-    const m = u.pathname.match(/^\/api\/brief\/([^/]+)\/(\d{4}-\d{2}-\d{2}-\d{4})\/?$/);
-    if (!m) return null;
-    const [, userId, issueSlot] = m;
-    const token = u.searchParams.get('t');
-    if (!token) return null;
-    return [0, 1, 2].map(
-      (p) => `${u.origin}/api/brief/carousel/${userId}/${issueSlot}/${p}?t=${token}`,
-    );
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -1476,11 +1383,13 @@ async function sendDiscord(userId, webhookEnvelope, text) {
     console.warn(`[digest] Discord URL rejected for ${userId}:`, err.message);
     return false;
   }
-  const content = text.length > 2000 ? text.slice(0, 1999) + '\u2026' : text;
+  const content = truncateDiscordContent(text);
   try {
     const res = await postJsonWithPinnedAddress(
       safeUrl,
-      JSON.stringify({ content }),
+      // Headlines can carry @everyone/@here or role mentions; never let a
+      // digest ping anyone. Matches the real-time relay's payload.
+      JSON.stringify({ content, allowed_mentions: { parse: [] } }),
       { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
       resolvedAddresses,
     );
@@ -1514,9 +1423,13 @@ async function sendEmail(email, subject, text, html) {
   }
 }
 
-async function sendWebhook(userId, webhookEnvelope, stories, aiSummary) {
+async function sendWebhook(userId, webhookEnvelope, stories, aiSummary, webhookSecretEnvelope) {
   let url;
-  try { url = decrypt(webhookEnvelope); } catch (err) {
+  let signingSecret;
+  try {
+    url = decrypt(webhookEnvelope);
+    signingSecret = resolveWebhookSigningSecret(decrypt, webhookSecretEnvelope);
+  } catch (err) {
     console.warn(`[digest] Webhook decrypt failed for ${userId}:`, err.message);
     return false;
   }
@@ -1539,7 +1452,11 @@ async function sendWebhook(userId, webhookEnvelope, stories, aiSummary) {
     const resp = await postJsonWithPinnedAddress(
       safeUrl,
       payload,
-      { 'Content-Type': 'application/json', 'User-Agent': 'worldmonitor-digest/1.0' },
+      {
+        'Content-Type': 'application/json',
+        'User-Agent': 'worldmonitor-digest/1.0',
+        ...buildWebhookDeliveryHeaders({ body: payload, eventType: 'digest', secret: signingSecret }),
+      },
       resolvedAddresses,
     );
     if (resp.status === 404 || resp.status === 410 || resp.status === 403) {
@@ -1567,10 +1484,11 @@ async function sendWebhook(userId, webhookEnvelope, stories, aiSummary) {
  * usable number. Callers MUST treat null as "unknown" — never "free"
  * — so a transient relay outage doesn't accidentally clamp legitimate
  * paying users out of paywalled affordances. The digest cron's
- * `isUserPro` uses null → fail-open (true); the followed-country
- * composer clamp uses null → "skip clamp" (treat as Pro for the
- * duration of the outage). Same fail-open polarity in both call
- * sites, but explicit so future readers can audit the choice.
+ * `isUserPro` treats null as not-Pro and skips the rule until a later
+ * run can resolve the tier (fail-closed, see isDigestDeliveryTier).
+ * The followed-country composer clamp uses null → "skip clamp": it only
+ * widens a ranking bias, so a transient outage must not demote a
+ * paying user's brief.
  */
 async function getUserTier(userId) {
   const cacheKey = `relay:entitlement:${userId}`;
@@ -1599,9 +1517,7 @@ async function getUserTier(userId) {
 }
 
 async function isUserPro(userId) {
-  const tier = await getUserTier(userId);
-  if (tier === null) return true; // fail-open — preserve historic polarity
-  return tier >= 1;
+  return isDigestDeliveryTier(await getUserTier(userId));
 }
 
 // ── Per-channel body composition ─────────────────────────────────────────────
@@ -1645,14 +1561,14 @@ function buildChannelBodies(storyListPlain, aiSummary, magazineUrl) {
       text: `${storyListPlain}${briefFooterPlain}`,
       telegramText: `${escapeTelegramHtml(storyListPlain)}${briefFooterTelegram}`,
       slackText: `${escapeSlackMrkdwn(storyListPlain)}${briefFooterSlack}`,
-      discordText: `${storyListPlain}${briefFooterDiscord}`,
+      discordText: `${escapeDiscordText(storyListPlain)}${briefFooterDiscord}`,
     };
   }
   return {
     text: `EXECUTIVE SUMMARY\n\n${aiSummary}\n\n${DIVIDER}\n\n${storyListPlain}${briefFooterPlain}`,
     telegramText: `<b>EXECUTIVE SUMMARY</b>\n\n${markdownToTelegramHtml(aiSummary)}\n\n${DIVIDER}\n\n${escapeTelegramHtml(storyListPlain)}${briefFooterTelegram}`,
     slackText: `*EXECUTIVE SUMMARY*\n\n${markdownToSlackMrkdwn(aiSummary)}\n\n${DIVIDER}\n\n${escapeSlackMrkdwn(storyListPlain)}${briefFooterSlack}`,
-    discordText: `**EXECUTIVE SUMMARY**\n\n${markdownToDiscord(aiSummary)}\n\n${DIVIDER}\n\n${storyListPlain}${briefFooterDiscord}`,
+    discordText: `**EXECUTIVE SUMMARY**\n\n${markdownToDiscord(aiSummary)}\n\n${DIVIDER}\n\n${escapeDiscordText(storyListPlain)}${briefFooterDiscord}`,
   };
 }
 
@@ -1726,7 +1642,11 @@ async function composeBriefsForRun(rules, nowMs) {
   // was far worse than a brief with dashes on the stats page.)
   let insightsNumbers = { clusters: 0, multiSource: 0 };
   try {
-    const insightsRaw = await readRawJsonFromUpstash(INSIGHTS_KEY);
+    // raw = true pins the bare-key read (#7674): the seeder fleet publishes
+    // bare rows and must keep doing so even if VERCEL_ENV ever leaks into
+    // this container's runtime. The api readers of this key are hard-locked
+    // raw too (api/latest-brief.ts and the brief routes).
+    const insightsRaw = await readRawJsonFromUpstash(INSIGHTS_KEY, 3_000, true);
     if (insightsRaw) insightsNumbers = extractInsights(insightsRaw).numbers;
   } catch (err) {
     console.warn('[digest] brief: insights read failed, using zeroed stats:', err.message);
@@ -2200,10 +2120,13 @@ async function composeAndStoreBriefForUser(userId, annotated, insightsNumbers, d
   // One SET per compose is cheap and always current.
   const latestPointerKey = `brief:latest:${userId}`;
   const latestPointerValue = JSON.stringify({ issueSlot });
+  // raw = true pins the bare-key write (#7674): the digest composer publishes
+  // the envelopes every api/brief reader resolves raw; see the insights read
+  // above for the VERCEL_ENV-leak rationale.
   const pipelineResult = await redisPipeline([
     ['SETEX', key, String(BRIEF_TTL_SECONDS), JSON.stringify(finalEnvelope)],
     ['SETEX', latestPointerKey, String(BRIEF_TTL_SECONDS), latestPointerValue],
-  ]);
+  ], 5_000, true);
   if (!pipelineResult || !Array.isArray(pipelineResult) || pipelineResult.length < 2) {
     throw new Error('null pipeline response from Upstash');
   }
@@ -2471,7 +2394,10 @@ async function main() {
     }
 
     const ruleChannelSet = new Set(rule.channels ?? []);
-    const deliverableChannels = channels.filter(ch => ruleChannelSet.has(ch.channelType) && ch.verified);
+    const deliverableChannels = channels.filter(ch =>
+      ruleChannelSet.has(ch.channelType) && ch.verified &&
+      (ch.channelType !== 'email' || ch.emailOwnership === 'verified_account') &&
+      (ch.channelType !== 'telegram' || ch.telegramOwnership === 'verified_callback'));
     if (deliverableChannels.length === 0) {
       console.log(`[digest] No deliverable channels for ${rule.userId} — skipping`);
       continue;
@@ -2521,76 +2447,15 @@ async function main() {
       briefLead = briefSynthesis?.lead ?? null;
     }
 
-    // Sprint 1 / U7 production-gap fix.
-    //
-    // Pre-fix the formatters consumed the raw `stories` pool (capped
-    // at DIGEST_MAX_ITEMS=30 by buildDigest). Post-fix they consume
-    // the brief envelope's `data.stories` (capped at MAX_STORIES_PER_USER
-    // =12 by filterTopStories). This is what makes the U7 invariant
-    // `digest.cards ⊆ brief.cards` HOLD ON THE LIVE SEND PATH — without
-    // this swap the email body could surface clusterIds the brief
-    // envelope omitted (the 18-30 stories the cap dropped), which
-    // would orphan their delivered-log keys from the magazine side.
-    //
-    // briefForUser is guaranteed non-null in this branch (the
-    // canonical-rule filter at the top of the loop returned only when
-    // briefForUser was present). The compose-miss fallback path
-    // (briefForUser === undefined) does NOT reach here — that branch
-    // either skips the user or falls through with magazineUrl=null;
-    // the formatters in that fallback continue to consume the raw
-    // stories pool, accepting U7-invariant degradation as the cost of
-    // delivering SOMETHING for that one tick.
-    //
-    // Compatibility shim: briefStoriesToFormatterShape maps the
-    // BriefStory schema to the formatter's expected raw-shape fields.
-    // See the function header for field-by-field rationale + the
-    // load-bearing `clusterId → hash` mapping that makes the U7
-    // invariant projection work at runtime.
-    const briefEnvelopeStories = brief?.envelope?.data?.stories;
-    const formatterStories = Array.isArray(briefEnvelopeStories) && briefEnvelopeStories.length > 0
-      ? briefStoriesToFormatterShape(briefEnvelopeStories)
-      : stories; // fallback: brief envelope absent (compose-miss branch above)
-
-    // Codex PR #3617 round-4 P2 — unified iterable for U4/U5 coverage in
-    // both branches.
-    //
-    // Pre-fix the cooldown loop (U5) and delivered-log writer (U4) were
-    // both gated on `briefEnvelopeStories.length > 0`, so under
-    // compose-miss (brief absent) the digest cards were SENT to the
-    // user but the U4/U5 substrate skipped them entirely. Multi-tick
-    // compose outages (e.g. signing secret unset for 6h) accumulated
-    // un-tracked deliveries; when compose recovered, the cooldown
-    // saw "no prior delivery" and re-aired everything the user had
-    // received during the outage.
-    //
-    // Fix: build a unified `cooldownIterableStories` array that both
-    // branches feed. Under brief-success it's the v4 BriefStory shape
-    // directly (already has clusterId, threatLevel, source, sourceUrl,
-    // headline). Under compose-miss it's a normalized projection of
-    // the raw `stories` pool — fields mapped by hand from the
-    // post-buildDigest shape (severity → threatLevel, link → sourceUrl,
-    // title → headline, mergedHashes[0] || hash → clusterId).
-    //
-    // Same downstream iteration in both U4 and U5 loops; same
-    // sourceCountByClusterId Map (already keyed on repHash, which
-    // matches both branches' clusterId semantics).
-    const cooldownIterableStories = Array.isArray(briefEnvelopeStories) && briefEnvelopeStories.length > 0
-      ? briefEnvelopeStories
-      : (Array.isArray(stories) ? stories.map((rawStory) => {
-          const repHash = Array.isArray(rawStory?.mergedHashes)
-            && rawStory.mergedHashes.length > 0
-            && typeof rawStory.mergedHashes[0] === 'string'
-            ? rawStory.mergedHashes[0]
-            : (typeof rawStory?.hash === 'string' ? rawStory.hash : '');
-          const sources = Array.isArray(rawStory?.sources) ? rawStory.sources : [];
-          return {
-            clusterId: repHash,
-            threatLevel: typeof rawStory?.severity === 'string' ? rawStory.severity : 'unknown',
-            source: typeof sources[0] === 'string' ? sources[0] : '',
-            sourceUrl: typeof rawStory?.link === 'string' ? rawStory.link : '',
-            headline: typeof rawStory?.title === 'string' ? rawStory.title : '',
-          };
-        }) : []);
+    const deliveryPlan = buildDigestDeliveryPlan({
+      briefStories: brief?.envelope?.data?.stories,
+      rawStories: stories,
+    });
+    const {
+      formatterStories,
+      cooldownIterableStories,
+      sourceCountByClusterId,
+    } = deliveryPlan;
 
     const storyListPlain = formatDigest(formatterStories, nowMs);
     if (!storyListPlain) continue;
@@ -2637,42 +2502,6 @@ async function main() {
     // next tick spends zero on cooldown.
     const cooldownDecisions = [];
     const ruleIdComposite = `${rule.variant ?? 'full'}:${rule.lang ?? 'en'}:${rule.sensitivity ?? 'high'}`;
-    // Codex PR #3617 P1 — real per-cluster source count for U4 writes
-    // and U5 cooldown evaluation.
-    //
-    // The brief envelope's BriefStory schema only carries a single
-    // `source` string (the primary wire) — the original cluster's full
-    // sources[] array is not preserved. Reading 0/1 off briefStory.source
-    // collapses real source counts (5, 10, 37+) and breaks U5's "+5
-    // sources within floor" evolution bypass: the delta from N to 0/1
-    // is always 0 or 1, never ≥5. Without this, today's shadow rows
-    // seed bad history that Sprint 2's enforce mode would inherit.
-    //
-    // Fix: derive sourceCount from the raw clustered `stories` pool
-    // (post-buildDigest, pre-filterTopStories) where the original
-    // sources[] is still attached. Match by cluster identity:
-    // mergedHashes[0] when present (rep's own hash by U3's contract),
-    // else the story's own hash (singletons). One Map build per send,
-    // O(1) lookup per cluster iteration.
-    const sourceCountByClusterId = new Map();
-    if (Array.isArray(stories)) {
-      for (const rawStory of stories) {
-        const repHash = Array.isArray(rawStory?.mergedHashes)
-          && rawStory.mergedHashes.length > 0
-          && typeof rawStory.mergedHashes[0] === 'string'
-          ? rawStory.mergedHashes[0]
-          : (typeof rawStory?.hash === 'string' ? rawStory.hash : '');
-        if (!repHash) continue;
-        const sources = Array.isArray(rawStory?.sources) ? rawStory.sources : [];
-        // Existing entry wins (first-rep-by-iteration order). Raw
-        // stories shouldn't duplicate clusterIds post-dedup, but the
-        // defensive first-write semantics protect against a future
-        // dedup bug double-counting sources.
-        if (!sourceCountByClusterId.has(repHash)) {
-          sourceCountByClusterId.set(repHash, sources.length);
-        }
-      }
-    }
     // Slot string mirrors the brief composer: `issueSlotInTz(nowMs, tz)`.
     // We use the same tz the composer used (rule.digestTimezone, default
     // 'UTC') so the slot naming aligns 1:1 with the brief envelope's
@@ -2834,7 +2663,7 @@ async function main() {
         // closes the channel-coverage gap so the webhook payload
         // exactly matches what U4 stamped + U5 evaluated for that
         // (user, rule, tick).
-        ok = await sendWebhook(rule.userId, ch.webhookEnvelope, formatterStories, briefLead);
+        ok = await sendWebhook(rule.userId, ch.webhookEnvelope, formatterStories, briefLead, ch.webhookSecret);
       }
       if (ok) {
         anyDelivered = true;

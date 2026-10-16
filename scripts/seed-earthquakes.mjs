@@ -1,58 +1,30 @@
 #!/usr/bin/env node
 
-import { loadEnvFile, CHROME_UA, runSeed } from './_seed-utils.mjs';
+// Railway service config (set up manually via Railway dashboard or `railway service`):
+//   - Service name: seed-earthquakes
+//   - Builder: NIXPACKS (root Dockerfile not used for this seed)
+//   - rootDirectory: scripts
+//   - startCommand: node seed-earthquakes.mjs
+//   - Cron schedule: "*/5 * * * *" (every 5min UTC)
+
+import { loadEnvFile, CHROME_UA, httpRetryError, readSeedSnapshot, runSeed, writeExtraKey } from './_seed-utils.mjs';
+import {
+  EARTHQUAKES_MAX_CONTENT_AGE_MIN,
+  EARTHQUAKE_PROVIDERS_KEY,
+  NRCAN_ATOM_URL,
+  earthquakesAfterPublish,
+  earthquakesContentMeta,
+  earthquakesPublishTransform,
+  fetchMergedEarthquakes,
+  fetchNrcanAtom,
+  parseUsgsGeojson,
+} from './seismology/nrcan-atom.mjs';
 
 loadEnvFile(import.meta.url);
 
 const USGS_FEED_URL = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_week.geojson';
 const CANONICAL_KEY = 'seismology:earthquakes:v1';
-const CACHE_TTL = 3600; // 1 hour
-
-const TEST_SITES = [
-  { name: 'Punggye-ri',    lat: 41.28, lon: 129.08 },
-  { name: 'Lop Nur',       lat: 41.39, lon: 89.03  },
-  { name: 'Novaya Zemlya', lat: 73.37, lon: 54.78  },
-  { name: 'Nevada NTS',    lat: 37.07, lon: -116.05 },
-  { name: 'Semipalatinsk', lat: 50.07, lon: 78.43  },
-];
-const TEST_SITE_RADIUS_KM = 100;
-
-function haversineKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function enrichWithTestSite(eq) {
-  const lat = eq.location?.latitude ?? 0;
-  const lon = eq.location?.longitude ?? 0;
-  let nearest = null;
-  let nearestKm = Infinity;
-  for (const site of TEST_SITES) {
-    const km = haversineKm(lat, lon, site.lat, site.lon);
-    if (km < nearestKm) { nearestKm = km; nearest = site; }
-  }
-  if (nearest && nearestKm <= TEST_SITE_RADIUS_KM) {
-    const mag = eq.magnitude ?? 0;
-    const depthFactor = Math.max(0, 1 - (eq.depthKm ?? 0) / 100);
-    const raw =
-      (mag / 9) * 0.6 +
-      ((TEST_SITE_RADIUS_KM - nearestKm) / TEST_SITE_RADIUS_KM) * 0.25 +
-      depthFactor * 0.15;
-    const concernScore = Math.min(100, Math.round(raw * 100));
-    const concernLevel =
-      concernScore >= 75 ? 'critical'
-      : concernScore >= 50 ? 'elevated'
-      : concernScore >= 25 ? 'moderate'
-      : 'low';
-    return { ...eq, nearTestSite: true, testSiteName: nearest.name, concernScore, concernLevel };
-  }
-  return eq;
-}
+const CACHE_TTL = 21600; // 6h storage; provider reuse and health remain bounded to 30 minutes.
 
 // Seismic scoring intentionally uses only high-signal nuclear-test centroids.
 // Broader registry entries such as missile ranges, exercises, or one-off low-signal
@@ -109,33 +81,32 @@ function enrichWithTestSite(eq) {
   return eq;
 }
 
-async function fetchEarthquakes() {
-  const resp = await fetch(USGS_FEED_URL, {
+async function fetchUsgs(fetchFn) {
+  const resp = await fetchFn(USGS_FEED_URL, {
     headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
     signal: AbortSignal.timeout(15_000),
   });
-  if (!resp.ok) throw new Error(`USGS API error: ${resp.status}`);
-
-  const geojson = await resp.json();
-  const features = geojson.features || [];
-
-  const earthquakes = features
-    .filter((f) => f?.properties && f?.geometry?.coordinates)
-    .map((f) => ({
-      id: String(f.id || ''),
-      place: String(f.properties?.place || ''),
-      magnitude: f.properties?.mag ?? 0,
-      depthKm: f.geometry?.coordinates?.[2] ?? 0,
-      location: {
-        latitude: f.geometry?.coordinates?.[1] ?? 0,
-        longitude: f.geometry?.coordinates?.[0] ?? 0,
-      },
-      occurredAt: f.properties?.time ?? 0,
-      sourceUrl: String(f.properties?.url || ''),
-    }));
-
-  return { earthquakes: earthquakes.map(enrichWithTestSite) };
+  if (!resp.ok) {
+    await resp.body?.cancel?.();
+    throw httpRetryError(resp, { remainingBudgetMs: 2_000 });
+  }
+  return parseUsgsGeojson(await resp.json());
 }
+
+async function fetchEarthquakes() {
+  const cache = new Map();
+  const previousSources = await readSeedSnapshot(EARTHQUAKE_PROVIDERS_KEY);
+  const merged = await fetchMergedEarthquakes({
+    previousSources,
+    fetchUsgs: () => fetchUsgs(globalThis.fetch),
+    fetchNrcan: () => fetchNrcanAtom({ fetchFn: globalThis.fetch, cache, url: NRCAN_ATOM_URL }),
+  });
+  return {
+    ...merged,
+    earthquakes: merged.earthquakes.map(enrichWithTestSite),
+  };
+}
+
 
 function validate(data) {
   return Array.isArray(data?.earthquakes) && data.earthquakes.length >= 1;
@@ -148,11 +119,20 @@ export function declareRecords(data) {
 runSeed('seismology', 'earthquakes', CANONICAL_KEY, fetchEarthquakes, {
   validateFn: validate,
   ttlSeconds: CACHE_TTL,
-  sourceVersion: 'usgs-4.5-week-nuclear-v1',
+  sourceVersion: 'usgs-4.5-week-nrcan-atom-v1',
   declareRecords,
   schemaVersion: 1,
   maxStaleMin: 30,
+  contentMeta: earthquakesContentMeta,
+  maxContentAgeMin: EARTHQUAKES_MAX_CONTENT_AGE_MIN,
+  publishTransform: earthquakesPublishTransform,
+  // Persist recovery state before replacing the canonical payload. A failed
+  // state write must not leave a partial publication under old success metadata.
+  beforePublish: async (data) => {
+    await writeExtraKey(EARTHQUAKE_PROVIDERS_KEY, data._providerSnapshots, CACHE_TTL);
+  },
+  afterPublish: earthquakesAfterPublish,
 }).catch((err) => {
-  console.error('FATAL:', err.message || err);
+  const _cause = err.cause ? ` (cause: ${err.cause.message || err.cause.code || err.cause})` : ''; console.error('FATAL:', (err.message || err) + _cause);
   process.exit(1);
 });

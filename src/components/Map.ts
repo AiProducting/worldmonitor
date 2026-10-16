@@ -4,7 +4,7 @@ import { escapeHtml } from '@/utils/sanitize';
 import { getCSSColor } from '@/utils';
 import type { Topology, GeometryCollection } from 'topojson-specification';
 import type { Feature, Geometry } from 'geojson';
-import type { MapLayers, Hotspot, NewsItem, InternetOutage, RelatedAsset, AssetType, AisDisruptionEvent, AisDensityZone, CableAdvisory, RepairShip, SocialUnrestEvent, MilitaryFlight, MilitaryVessel, MilitaryFlightCluster, MilitaryVesselCluster, NaturalEvent, CyberThreat, CableHealthRecord, MilitaryBase } from '@/types';
+import type { MapLayers, Hotspot, NewsItem, NewsLocationMarker, InternetOutage, RelatedAsset, AssetType, AisDisruptionEvent, AisDensityZone, CableAdvisory, RepairShip, SocialUnrestEvent, MilitaryFlight, MilitaryVessel, MilitaryFlightCluster, MilitaryVesselCluster, NaturalEvent, CyberThreat, CableHealthRecord, MilitaryBase } from '@/types';
 import type { AirportDelayAlert, PositionSample } from '@/services/aviation';
 import type { Earthquake } from '@/services/earthquakes';
 import { type IranEvent, getIranEventCssColor, getIranEventSize } from '@/services/conflict';
@@ -12,7 +12,9 @@ import type { TechHubActivity } from '@/services/tech-activity';
 import type { GeoHubActivity } from '@/services/geo-activity';
 import { getNaturalEventIcon } from '@/services/eonet';
 import type { WeatherAlert } from '@/services/weather';
+import type { RadiationObservation } from '@/services/radiation';
 import { getSeverityColor } from '@/services/weather';
+import { getThreatColor } from '@/services/threat-classifier';
 import { startSmartPollLoop, type SmartPollLoopHandle } from '@/services/smart-poll-loop';
 import { scheduleAfterFirstPaint, yieldToMain } from '@/utils/after-paint';
 import { measure, mutate } from '@/utils/layout-batch';
@@ -57,12 +59,27 @@ import type { CountryClickPayload } from './DeckGLMap';
 import { t } from '@/services/i18n';
 import type { ScenarioVisualState } from '@/config/scenario-templates';
 import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
+import { renderLayerTruncationBadges } from '@/utils/layer-truncation-badge';
+import {
+  overlayMarkerPosition,
+  projectionPointAtScreenCentre,
+} from '@/utils/overlay-marker-geometry';
+import {
+  MAP_OVERLAY_MARKER_BUDGET_DESKTOP,
+  MAP_OVERLAY_MARKER_BUDGET_MOBILE,
+  proximityRank,
+  selectGlobeMarkers,
+  type GlobeLayerTruncation,
+  type GlobeMarkerGroup,
+  type LatLng,
+} from '@/utils/globe-marker-budget';
 import {
   getLayerExplanation,
-  getLayersForVariant,
   hasCuratedLayerExplanation,
+  isLayerExecutable,
+  isSunsetLayer,
+  LAYER_REGISTRY,
   resolveLayerLabel,
-  type MapVariant,
 } from '@/config/map-layer-definitions';
 import { renderLayerExplanationCard } from '@/utils/layer-explanation-card';
 import {
@@ -72,6 +89,7 @@ import {
   startCountryClickGesture,
   updateCountryClickGestureDrag,
 } from './map-interaction-guard';
+import { resolveClusterGlContext } from './map-cluster-gl';
 
 
 export type TimeRange = '1h' | '6h' | '24h' | '48h' | '7d' | 'all';
@@ -88,6 +106,8 @@ export interface MapState {
 export interface MapComponentOptions {
   chrome?: boolean;
   isMobile?: boolean;
+  /** App-owned entitlement guard; omitted for the public embed renderer. */
+  canToggleLayer?: (layer: keyof MapLayers, currentlyEnabled: boolean | undefined) => boolean;
 }
 
 interface HotspotWithBreaking extends Hotspot {
@@ -113,6 +133,17 @@ interface WorldTopology extends Topology {
   };
 }
 
+/**
+ * The AI data centres the SVG overlay actually draws (>=10k GPUs). Hoisted to
+ * module scope so the overlay marker budget (#7112) plans on exactly the list
+ * the render loop iterates, rather than on a superset that would spend fair
+ * share on markers that were never going to appear.
+ */
+const MIN_AI_DATA_CENTER_GPU_COUNT = 10000;
+const RENDERABLE_AI_DATA_CENTERS = AI_DATA_CENTERS.filter(
+  (dc) => (dc.chipCount || 0) >= MIN_AI_DATA_CENTER_GPU_COUNT,
+);
+
 export class MapComponent {
   private static readonly MOBILE_MIN_EARTHQUAKE_MAGNITUDE = 5;
   private static readonly MOBILE_MAX_IRAN_EVENTS = 50;
@@ -122,6 +153,15 @@ export class MapComponent {
   // the count), so after the attention window the pulses are switched off via
   // the .markers-settled class. Any overlay re-render re-arms the window.
   private static readonly MARKER_SETTLE_MS = 6000;
+  // #7112: how long the view must be still before the overlay marker budget is
+  // re-planned for the new centre. Longer than a frame so a drag or an inertia
+  // fling coalesces into ONE rebuild; short enough that the badge's "pan or zoom
+  // to bring others in" is true promptly once the user stops.
+  private static readonly OVERLAY_BUDGET_REPLAN_SETTLE_MS = 200;
+  // #7112: ceiling on concurrent news flashes. They are `#mapOverlays` children
+  // created outside the marker budget, so this is what keeps the overlay's total
+  // node count bounded rather than "bounded plus however much news arrived".
+  private static readonly MAX_CONCURRENT_MAP_FLASHES = 12;
   private static readonly LAYER_ZOOM_THRESHOLDS: Partial<
     Record<keyof MapLayers, { minZoom: number; showLabels?: number }>
   > = {
@@ -153,7 +193,9 @@ export class MapComponent {
   private baseHeight = 0;
   private hotspots: HotspotWithBreaking[];
   private earthquakes: Earthquake[] = [];
+  private newsLocations: NewsLocationMarker[] = [];
   private weatherAlerts: WeatherAlert[] = [];
+  private radiationObservations: RadiationObservation[] = [];
   private outages: InternetOutage[] = [];
   private aisDisruptions: AisDisruptionEvent[] = [];
   private aisDensity: AisDensityZone[] = [];
@@ -165,6 +207,7 @@ export class MapComponent {
   private flightDelays: AirportDelayAlert[] = [];
   private aircraftPositions: PositionSample[] = [];
   private militaryFlights: MilitaryFlight[] = [];
+  private emergencyMarkers: import('../../shared/aircraft-emergencies').EmergencyMapMarker[] = [];
   private militaryFlightClusters: MilitaryFlightCluster[] = [];
   private militaryVessels: MilitaryVessel[] = [];
   private militaryVesselClusters: MilitaryVesselCluster[] = [];
@@ -174,11 +217,14 @@ export class MapComponent {
   private techActivities: TechHubActivity[] = [];
   private geoActivities: GeoHubActivity[] = [];
   private iranEvents: IranEvent[] = [];
+  private aptGroups: import('@/types').APTGroup[] = [];
+  private aptGroupsLoaded = false;
   private webcamData: Array<WebcamEntry | WebcamCluster> = [];
   private news: NewsItem[] = [];
   private onTechHubClick?: (hub: TechHubActivity) => void;
   private onGeoHubClick?: (hub: GeoHubActivity) => void;
   private popup: MapPopup;
+  private onNewsClick?: (item: Pick<NewsLocationMarker, 'article' | 'title'>) => void;
   private onHotspotClick?: (hotspot: Hotspot) => void;
   private onTimeRangeChange?: (range: TimeRange) => void;
   private onLayerChange?: (layer: keyof MapLayers, enabled: boolean, source: 'user' | 'programmatic') => void;
@@ -213,7 +259,29 @@ export class MapComponent {
   private destroyed = false;
   // Mobile loads the lighter 110m country topology (U6); passed in from MapContainer.
   private readonly isMobile: boolean;
+  private readonly canToggleLayer: NonNullable<MapComponentOptions['canToggleLayer']>;
   private overlayAppendTarget: ParentNode | null = null;
+  // #7112 overlay marker budget. `overlayMarkerCut` holds the marker objects
+  // this render pass withheld; it is consulted by identity, so a feed that is
+  // NOT in the plan simply never appears here and renders in full. That makes a
+  // plan/render mismatch fail safe (an unbudgeted layer, not a blank one).
+  private overlayMarkerCut: Set<unknown> = new Set();
+  // Pending settle-debounced budget re-plan; see scheduleOverlayBudgetReplan().
+  private overlayBudgetReplanTimer: ReturnType<typeof setTimeout> | null = null;
+  // Live news-flash nodes -> their expiry timer, insertion-ordered so the oldest
+  // can be evicted when MAX_CONCURRENT_MAP_FLASHES is reached. Also lets destroy()
+  // clear timers that would otherwise fire against a torn-down instance.
+  private readonly activeFlashes = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
+  private overlayMarkerTruncation: Record<string, GlobeLayerTruncation> = {};
+  // Truncated layer keys with no toggle row to disclose them on; see
+  // updateLayerTruncationLabels().
+  private overlayUndisclosedTruncation: string[] = [];
+  private renderedOverlayMarkerCount = 0;
+  // #7112: how many times renderOverlays() has rebuilt the overlay, surfaced
+  // through getOverlayMarkerBudgetState() so a test can assert that a view
+  // another render already re-planned is not rebuilt again.
+  private overlayRenderCount = 0;
+  private lastTruncationLabelKey = '';
   private labelVisibilityScheduled = false;
   private pendingLabelVisibilityZoom = 1;
   private lastContainerSize = { width: 0, height: 0 };
@@ -221,6 +289,16 @@ export class MapComponent {
   // written — lets applyTransform() skip same-value setProperty calls that
   // would restyle every marker on every render pass.
   private lastOverlayVarZoom = '';
+  // The overlay budget is planned for the transformed viewport. Keep the last
+  // planned transform so pan/zoom can request one coalesced rebuild instead of
+  // leaving the previous view's nearest markers on screen.
+  private lastOverlayBudgetViewport = {
+    width: Number.NaN,
+    height: Number.NaN,
+    zoom: Number.NaN,
+    panX: Number.NaN,
+    panY: Number.NaN,
+  };
   // Desktop measures label overlap from the start; mobile defers until the first
   // interaction. The effective value is set in the constructor (= !this.isMobile);
   // false here documents the mobile-off default.
@@ -237,6 +315,7 @@ export class MapComponent {
     this.hotspots = [...INTEL_HOTSPOTS];
     const chrome = options.chrome ?? true;
     this.isMobile = options.isMobile ?? false;
+    this.canToggleLayer = options.canToggleLayer ?? (() => true);
     this.mobileLabelVisibilityArmed = !this.isMobile;
 
     this.wrapper = document.createElement('div');
@@ -288,6 +367,11 @@ export class MapComponent {
       this.render();
     };
     window.addEventListener('theme-changed', this.handleThemeChange);
+
+    // Kick off lazy APT load if cyberThreats is already on at init (e.g. from URL/localStorage)
+    if (this.state.layers.cyberThreats && SITE_VARIANT !== 'tech' && SITE_VARIANT !== 'happy') {
+      this.loadAptGroups();
+    }
   }
 
   private getMilitaryBasesForRender(): MilitaryBase[] {
@@ -359,6 +443,15 @@ export class MapComponent {
       clearTimeout(this.markerSettleTimer);
       this.markerSettleTimer = null;
     }
+    if (this.overlayBudgetReplanTimer !== null) {
+      clearTimeout(this.overlayBudgetReplanTimer);
+      this.overlayBudgetReplanTimer = null;
+    }
+    for (const [flash, timer] of this.activeFlashes) {
+      clearTimeout(timer);
+      flash.remove();
+    }
+    this.activeFlashes.clear();
     window.removeEventListener('theme-changed', this.handleThemeChange);
     document.removeEventListener('visibilitychange', this.boundVisibilityHandler);
     if (this.resizeObserver) {
@@ -463,7 +556,10 @@ export class MapComponent {
   private getLayerControlLabel(layer: keyof MapLayers): string {
     if (layer === 'sanctions') return t('components.deckgl.layerHelp.labels.sanctions');
 
-    const def = getLayersForVariant((SITE_VARIANT || 'full') as MapVariant, 'flat').find(item => item.key === layer);
+    // Labels are renderer-independent, so resolve straight from the registry.
+    // (The old `getLayersForVariant(v, 'flat')` lookup dropped ciiChoropleth
+    // once it stopped being an SVG layer, regressing its label to the raw key.)
+    const def = LAYER_REGISTRY[layer];
     return def ? resolveLayerLabel(def, t) : String(layer);
   }
 
@@ -483,12 +579,13 @@ export class MapComponent {
       // storageFacilities + fuelShortages are also DeckGL-only — this file has no
       // SVG render path for them (see grep for existing 'pipelines' render at :1100).
       // Adding them here would surface a toggle that produces zero output. They're
-      // already restricted to ['flat'] in LAYER_REGISTRY to hide from globe mode too.
-      'ais', 'flights', 'gpsJamming',                      // transport/interference
+      // already restricted to renderers: ['deck'] in LAYER_REGISTRY, which keeps
+      // them out of the globe picker too.
+      'ais', 'flights', 'aircraftEmergencies', 'gpsJamming',
       'natural', 'weather',                               // natural
       'economic',                                         // economic
       'waterways',                                        // labels
-      'ciiChoropleth',                                    // CII heat-map (DeckGL only, shown as disabled toggle)
+      'ciiChoropleth',                                    // Candidate only; SVG capability filter below omits it.
     ];
     const techLayers: (keyof MapLayers)[] = [
       'cables', 'datacenters', 'outages',                // tech infrastructure
@@ -521,11 +618,31 @@ export class MapComponent {
       'weather', 'fires',                     // operational risk
       'economic',                             // infrastructure context
     ];
-    const layers = SITE_VARIANT === 'tech' ? techLayers
+    // Commodity variant — SVG/mobile fallback. Only include keys that actually
+    // render in this file (miningSites/processingPlants/commodityPorts/climate/
+    // tradeRoutes/resilienceScore/dayNight do not, so they're omitted). Mirrors
+    // VARIANT_LAYER_ORDER.commodity in src/config/map-layer-definitions.ts but
+    // filtered to the SVG-capable subset. COMMODITY_MAP_LAYERS turns all eleven
+    // on; MAX_SVG_LAYERS = 9 then disables the last two active buttons on first
+    // load (outages, sanctions in this order). They stay in the picker so a
+    // later trim still discloses, instead of spending overlay fair-share with
+    // no row (#7144). fires is unbounded (toMapFires caps nothing) and must
+    // keep a row — it is the feed #7112 exists to bound.
+    const commodityLayers: (keyof MapLayers)[] = [
+      'commodityHubs', 'minerals',                    // commodity identity
+      'pipelines', 'waterways', 'ais',                // logistics
+      'economic', 'fires',                            // markets + FIRMS
+      'natural', 'weather',                           // operational risk
+      'outages', 'sanctions',                         // disruption context
+    ];
+    // Filter sunset and renderer-incompatible layers so the SVG/mobile picker
+    // cannot expose a toggle whose layer has no SVG paint path.
+    const layers = (SITE_VARIANT === 'tech' ? techLayers
                  : SITE_VARIANT === 'finance' ? financeLayers
                  : SITE_VARIANT === 'happy' ? happyLayers
                  : SITE_VARIANT === 'energy' ? energyLayers
-                 : fullLayers;
+                 : SITE_VARIANT === 'commodity' ? commodityLayers
+                 : fullLayers).filter((key) => !isSunsetLayer(key) && isLayerExecutable(key, 'svg'));
     const MAX_SVG_LAYERS = 9;
     const enforceLayerLimit = () => {
       const allBtns = Array.from(toggles.querySelectorAll<HTMLButtonElement>('.layer-toggle'));
@@ -723,6 +840,8 @@ export class MapComponent {
       helpItem(label('economicCenters'), 'economicCenters'),
       helpItem(label('strategicWaterways'), 'macroWaterways'),
       helpItem(label('weatherAlerts'), 'weatherAlertsMarket'),
+      helpItem(label('canadaRoads'), 'canadaRoads'),
+      helpItem(label('canadaAlerts'), 'canadaAlerts'),
       helpItem(label('naturalEvents'), 'naturalEventsMacro'),
     ])}
       </div>
@@ -765,6 +884,8 @@ export class MapComponent {
       helpItem(label('naturalEvents'), 'naturalEventsFull'),
       helpItem(label('fires'), 'firesFull'),
       helpItem(label('weatherAlerts'), 'weatherAlerts'),
+      helpItem(label('canadaRoads'), 'canadaRoads'),
+      helpItem(label('canadaAlerts'), 'canadaAlerts'),
       helpItem(label('climateAnomalies'), 'climateAnomalies'),
       helpItem(label('economicCenters'), 'economicCenters'),
       helpItem(label('criticalMinerals'), 'mineralsFull'),
@@ -1111,10 +1232,11 @@ export class MapComponent {
   }
 
   private initClusterRenderer(): void {
-    // WebGL clustering disabled - just get context for clearing canvas
-    const gl = this.clusterCanvas.getContext('webgl');
-    if (!gl) return;
-    this.clusterGl = gl;
+    // WebGL clustering disabled - just get context for clearing canvas.
+    // resolveClusterGlContext() rejects the truthy-but-method-less stub that
+    // canvas fingerprint blockers return, which used to crash the whole
+    // dynamic-layer render pass from clearClusterCanvas() (WORLDMONITOR-YG/YH).
+    this.clusterGl = resolveClusterGlContext(this.clusterCanvas);
   }
 
   private clearClusterCanvas(): void {
@@ -1578,7 +1700,9 @@ export class MapComponent {
   // Generic marker clustering - groups markers within pixelRadius into clusters
   // groupKey function ensures only items with same key can cluster (e.g., same city)
   private clusterMarkers<T extends { lat: number; lon: number }>(
-    items: T[],
+    // readonly so a budget-filtered feed (#7112) can be passed straight in
+    // without a defensive copy; the body only reads from it.
+    items: readonly T[],
     projection: d3.GeoProjection,
     pixelRadius: number,
     getGroupKey?: (item: T) => string
@@ -1649,14 +1773,445 @@ export class MapComponent {
     return Boolean(this.layerZoomOverrides[layer]) || this.state.zoom >= thresholds.minZoom;
   }
 
+  /**
+   * Chooses which overlay markers this render pass is allowed to create (#7112).
+   *
+   * `renderOverlays` rebuilds every HTML marker from scratch on every render, and
+   * each marker is a `<div>` with its own `click` listener. With an uncapped feed
+   * that makes both the live DOM size and the renderer's detached-node count a
+   * function of upstream traffic: production measured 2,088 overlay markers on a
+   * desktop cold load (1,502 of them military vessels), 17.4k renderer nodes and
+   * 2.8k listeners at rest, spiking to 49.7k / 21.5k while a rebuild's previous
+   * generation waited for GC. Desktop reaches this path whenever the client has
+   * no hardware WebGL2 context, which is the normal state of a lab runner.
+   *
+   * The selection is the globe's (#5368) — same module, same ceilings, so a
+   * client that falls back from Deck to SVG does not silently change how much of
+   * a layer it can see. The plan is stored as the set of markers to WITHHOLD, so
+   * a feed absent from the plan renders in full rather than disappearing.
+   */
+  /**
+   * The exact slice of each filtered feed that `renderOverlays` will draw.
+   *
+   * The budget plan and the render loops MUST agree on these (#7112). Planning
+   * on the unfiltered field instead would let the budget spend its fair share
+   * on markers the loop then filters away: a 24-hour time filter over a
+   * 2,000-event earthquake feed would keep the 300 largest of all time, most of
+   * them outside the window, and render a fraction of what the ceiling allows.
+   */
+  private overlayFeedSlices(): {
+    quakes: readonly Earthquake[];
+    iranEvents: readonly IranEvent[];
+    aircraft: readonly PositionSample[];
+    protests: readonly SocialUnrestEvent[];
+    conflictEvents: readonly AcledConflictEvent[];
+    weather: readonly WeatherAlert[];
+    news: readonly MapComponent['newsLocations'][number][];
+    naturalEvents: readonly NaturalEvent[];
+    radiationObservations: readonly RadiationObservation[];
+    outages: readonly InternetOutage[];
+    cableAdvisories: readonly CableAdvisory[];
+    flightDelays: readonly AirportDelayAlert[];
+    militaryFlights: readonly MilitaryFlight[];
+    militaryFlightClusters: readonly MilitaryFlightCluster[];
+    militaryVessels: readonly MilitaryVessel[];
+    militaryVesselClusters: readonly MilitaryVesselCluster[];
+    fires: readonly MapComponent['firmsFireData'][number][];
+  } {
+    const withinTimeRange = <T extends { occurredAt: number }>(items: readonly T[]): readonly T[] => (
+      this.state.timeRange === 'all'
+        ? items
+        : items.filter((item) => item.occurredAt >= Date.now() - this.getTimeRangeMs())
+    );
+    // Each feed is emptied when its layer is off before any filtering runs, so
+    // this method costs no more per render than the guarded blocks it replaced.
+    // renderOverlays is on the pan/zoom path.
+    const layers = this.state.layers;
+    const activeQuakes = layers.natural ? this.earthquakes : [];
+    const activeIranEvents = layers.iranAttacks ? this.filterByTime(this.iranEvents, (event) => event.timestamp) : [];
+    const filteredQuakes = withinTimeRange(activeQuakes);
+    return {
+      quakes: this.isMobile
+        ? filteredQuakes.filter((eq) => eq.magnitude >= MapComponent.MOBILE_MIN_EARTHQUAKE_MAGNITUDE)
+        : filteredQuakes,
+      iranEvents: this.isMobile
+        ? activeIranEvents.slice(0, MapComponent.MOBILE_MAX_IRAN_EVENTS)
+        : activeIranEvents,
+      // Already capped at 200 by the render loop; planned on the same slice so
+      // the budget cannot spend share on the 201st position onwards.
+      aircraft: layers.flights ? this.aircraftPositions.slice(0, 200) : [],
+      // Media mentions stay visible without borrowing incident severity.
+      protests: layers.protests
+        ? this.filterByTime(this.protests, (event) => event.time)
+          .filter((event) => event.sourceType === 'gdelt' || event.eventType === 'riot' || event.severity === 'high')
+        : [],
+      conflictEvents: withinTimeRange(layers.conflicts ? this.conflictEvents : []),
+      // `centroid` is optional on WeatherAlert and the render loop skips an alert
+      // without one, so an alert that can never become a marker must not be
+      // budgeted: it would inflate the `weather` group that fairShareCap sizes
+      // every other layer against, and overstate `total` in the shown/total badge
+      // with markers that were never renderable. Same plan/loop agreement rule as
+      // the earthquake slice (3356f19c8) — this is the only other feed with a
+      // per-marker data precondition; the `newsCount === 0` skips sit on exempt
+      // groups, which are outside the budget entirely.
+      weather: layers.weather
+        ? this.filterByTime(this.weatherAlerts, (alert) => alert.onset).filter((alert) => alert.centroid)
+        : [],
+      news: this.newsLocations.filter((item) => {
+        if (!Number.isFinite(item.lat) || !Number.isFinite(item.lon)) return false;
+        if (this.state.timeRange === 'all') return true;
+        const timestamp = item.timestamp?.getTime();
+        return timestamp == null || !Number.isFinite(timestamp) || timestamp >= Date.now() - this.getTimeRangeMs();
+      }),
+      // Same fields DeckGLMap.buildLayers filters on, so both renderers show the
+      // same records for a given TIME RANGE.
+      naturalEvents: layers.natural ? this.filterByTime(this.naturalEvents, (event) => event.date) : [],
+      radiationObservations: layers.radiationWatch
+        ? this.filterByTime(this.radiationObservations, (observation) => observation.observedAt)
+        : [],
+      outages: layers.outages ? this.filterByTime(this.outages, (outage) => outage.pubDate) : [],
+      cableAdvisories: layers.cables ? this.filterByTime(this.cableAdvisories, (advisory) => advisory.reported) : [],
+      flightDelays: layers.flights ? this.filterByTime(this.flightDelays, (delay) => delay.updatedAt) : [],
+      militaryFlights: layers.military ? this.filterByTime(this.militaryFlights, (flight) => flight.lastSeen) : [],
+      militaryFlightClusters: layers.military
+        ? this.militaryFlightClusters.flatMap((cluster) => {
+          const flights = this.filterByTime(cluster.flights ?? [], (flight) => flight.lastSeen);
+          return flights.length === 0 ? [] : [{ ...cluster, flights: [...flights], flightCount: flights.length }];
+        })
+        : [],
+      militaryVessels: layers.military ? this.filterByTime(this.militaryVessels, (vessel) => vessel.lastAisUpdate) : [],
+      militaryVesselClusters: layers.military
+        ? this.militaryVesselClusters.flatMap((cluster) => {
+          const vessels = this.filterByTime(cluster.vessels ?? [], (vessel) => vessel.lastAisUpdate);
+          return vessels.length === 0 ? [] : [{ ...cluster, vessels: [...vessels], vesselCount: vessels.length }];
+        })
+        : [],
+      fires: layers.fires ? this.filterByTime(this.firmsFireData, (fire) => fire.acq_date) : [],
+    };
+  }
+
+  /** Mirrors DeckGLMap.filterByTime: a record without a parseable date stays visible. */
+  private filterByTime<T>(
+    items: readonly T[],
+    getTime: (item: T) => Date | string | number | null | undefined,
+  ): readonly T[] {
+    if (this.state.timeRange === 'all') return items;
+    const cutoff = Date.now() - this.getTimeRangeMs();
+    return items.filter((item) => {
+      const value = getTime(item);
+      if (value == null) return true;
+      const timestamp = value instanceof Date ? value.getTime() : new Date(value).getTime();
+      return !Number.isFinite(timestamp) || timestamp >= cutoff;
+    });
+  }
+
+  private planOverlayMarkerBudget(
+    projection: d3.GeoProjection,
+    slices: ReturnType<MapComponent['overlayFeedSlices']>,
+  ): void {
+    const groups: GlobeMarkerGroup<unknown>[] = [];
+    const add = (
+      layer: string,
+      markers: readonly unknown[],
+      // Only the tuning knobs, mirroring GlobeMap.flushMarkers: spreading a full
+      // Partial would let a caller overwrite the layer/markers just set.
+      extra: Pick<Partial<GlobeMarkerGroup<unknown>>, 'rank' | 'exempt'> = {},
+    ): void => { if (markers.length) groups.push({ layer, markers, ...extra }); };
+
+    const layers = this.state.layers;
+    add('news', slices.news);
+    if (layers.waterways) add('waterways', STRATEGIC_WATERWAYS);
+    if (layers.ais) {
+      add('ais', this.aisDisruptions);
+      add('ais', PORTS);
+    }
+    if (layers.cyberThreats && SITE_VARIANT !== 'tech') add('cyberThreats', this.aptGroups);
+    // The zoom gates below mirror the render conditions exactly: a group that
+    // is planned but not rendered would spend fair share it never uses, and
+    // tighten the cap on the layers that do render.
+    if (this.isLayerZoomVisible('nuclear')) add('nuclear', NUCLEAR_FACILITIES);
+    if (layers.irradiators) add('irradiators', GAMMA_IRRADIATORS);
+    if (layers.conflicts) {
+      add('conflicts', CONFLICT_ZONES);
+      add('conflicts', slices.conflictEvents, { rank: (m) => (m as AcledConflictEvent).fatalities ?? 0 });
+    }
+    // The mobile-trimmed slice, i.e. exactly what the loop iterates. Planning the
+    // untrimmed field here would spend this layer's fair share on events the
+    // MOBILE_MAX_IRAN_EVENTS cut then discards — the same slice/loop mismatch
+    // that 3356f19c8 fixed for earthquakes.
+    if (layers.iranAttacks) add('iranAttacks', slices.iranEvents);
+    if (layers.hotspots) add('hotspots', this.hotspots);
+    if (this.isLayerZoomVisible('bases')) add('bases', this.getMilitaryBasesForRender());
+    if (layers.natural) {
+      add('natural', slices.quakes, { rank: (m) => (m as Earthquake).magnitude ?? 0 });
+      add('natural', slices.naturalEvents);
+    }
+    if (layers.economic) add('economic', ECONOMIC_CENTERS);
+    if (layers.weather) add('weather', slices.weather);
+    if (layers.radiationWatch) add('radiationWatch', slices.radiationObservations);
+    if (layers.outages) add('outages', slices.outages);
+    if (layers.cables) {
+      add('cables', slices.cableAdvisories);
+      add('cables', this.repairShips);
+    }
+    if (layers.datacenters) add('datacenters', RENDERABLE_AI_DATA_CENTERS);
+    if (layers.spaceports) add('spaceports', SPACEPORTS);
+    if (layers.minerals) add('minerals', CRITICAL_MINERALS);
+    if (layers.startupHubs) add('startupHubs', STARTUP_HUBS);
+    if (layers.cloudRegions) add('cloudRegions', CLOUD_REGIONS);
+    if (layers.techHQs) add('techHQs', TECH_HQS);
+    if (layers.accelerators) add('accelerators', ACCELERATORS);
+    if (layers.techEvents) add('techEvents', this.techEvents);
+    if (layers.stockExchanges) add('stockExchanges', STOCK_EXCHANGES);
+    if (layers.financialCenters) add('financialCenters', FINANCIAL_CENTERS);
+    if (layers.centralBanks) add('centralBanks', CENTRAL_BANKS);
+    if (layers.commodityHubs) add('commodityHubs', COMMODITY_HUBS);
+    if (layers.protests) add('protests', slices.protests);
+    if (layers.flights) {
+      add('flights', slices.flightDelays);
+      add('flights', slices.aircraft);
+    }
+    if (layers.military) {
+      add('military', slices.militaryFlights);
+      add('military', slices.militaryFlightClusters);
+      // Carriers first: AIS is the largest feed on the page and the one the
+      // ceiling actually bites on (1,502 of 2,088 markers measured).
+      add('military', slices.militaryVessels, {
+        rank: (m) => ((m as MilitaryVessel).vesselType === 'carrier' ? 1 : 0),
+      });
+      add('military', slices.militaryVesselClusters);
+    }
+    if (layers.fires) {
+      add('fires', slices.fires, { rank: (m) => (m as { brightness?: number }).brightness ?? 0 });
+    }
+    if (layers.webcams && this.state.zoom >= 2) add('webcams', this.webcamData);
+    // Variant hub overlays have no layer-toggle row, so a truncation here would
+    // have nowhere to be disclosed — exempt like the globe's `news` group. Both
+    // are bounded by the hub registry, not by an upstream feed.
+    if (SITE_VARIANT === 'tech') add('techHubs', this.techActivities, { exempt: true });
+    if (SITE_VARIANT === 'full') add('geoHubs', this.geoActivities, { exempt: true });
+
+    // Layers with no severity signal rank by nearness to the centre of the
+    // current view rather than by raw feed order, so a capped reference layer
+    // drops whatever is furthest from what the user is looking at instead of
+    // whatever happens to sort last. See proximityRank.
+    const { width, height } = this.getKnownContainerSize();
+    const centre = this.getOverlayBudgetCentre(projection, width, height);
+    const nearestFirst = proximityRank<unknown>(
+      centre,
+      overlayMarkerPosition,
+    );
+    for (const group of groups) {
+      if (group.exempt) continue;
+      if (group.rank) group.tieBreak = nearestFirst;
+      else group.rank = nearestFirst;
+    }
+
+    const budget = this.isMobile
+      ? MAP_OVERLAY_MARKER_BUDGET_MOBILE
+      : MAP_OVERLAY_MARKER_BUDGET_DESKTOP;
+    const { markers, truncated } = selectGlobeMarkers(groups, budget);
+
+    const kept = new Set(markers);
+    const cut = new Set<unknown>();
+    for (const group of groups) {
+      if (group.exempt) continue;
+      for (const marker of group.markers) {
+        if (!kept.has(marker)) cut.add(marker);
+      }
+    }
+    this.overlayMarkerCut = cut;
+    this.overlayMarkerTruncation = truncated;
+    this.renderedOverlayMarkerCount = markers.length;
+    this.lastOverlayBudgetViewport = {
+      width,
+      height,
+      zoom: this.state.zoom,
+      panX: this.state.pan.x,
+      panY: this.state.pan.y,
+    };
+    this.updateLayerTruncationLabels();
+  }
+
+  /**
+   * Return the geographic point currently at the screen centre.
+   *
+   * The SVG projection is transformed by CSS after it produces marker
+   * coordinates. Inverting the untransformed screen centre therefore ranks the
+   * old map centre after a pan or zoom. Undo the same translate/scale that
+   * applyTransform() applies before asking d3 for the geographic coordinate.
+   */
+  private getOverlayBudgetCentre(
+    projection: d3.GeoProjection,
+    width: number,
+    height: number,
+  ): LatLng {
+    const centre = projection.invert?.(projectionPointAtScreenCentre(width, height, this.state.pan));
+    return { lat: centre?.[1] ?? 0, lng: centre?.[0] ?? 0 };
+  }
+
+  /** True when this render pass withheld `marker` under the overlay budget (#7112). */
+  private isOverlayMarkerCut(marker: unknown): boolean {
+    return this.overlayMarkerCut.size > 0 && this.overlayMarkerCut.has(marker);
+  }
+
+  /**
+   * The same decision applied to a whole feed, for the paths that cluster their
+   * input before producing markers — clustering is many-to-one, so the cut has
+   * to happen on the way in or it cannot bound the markers on the way out.
+   */
+  private keepBudgetedMarkers<T>(markers: readonly T[]): readonly T[] {
+    if (this.overlayMarkerCut.size === 0) return markers;
+    return markers.filter((marker) => !this.overlayMarkerCut.has(marker));
+  }
+
+  /**
+   * Discloses a capped layer as `shown/total` on its toggle row, the way the
+   * globe does — a ceiling the user cannot see is indistinguishable from missing
+   * data. Skipped when nothing changed: this runs on every render pass, and the
+   * writes would restyle the toggle rows each time (#5080).
+   *
+   * A layer the budget trimmed that has no toggle row in this variant's picker
+   * (`fires` outside the energy/commodity variants, `webcams`, `radiationWatch`,
+   * `spaceports`) has nowhere to show a badge. Those stay budgeted — an
+   * unbounded feed is what #7112 is about, and `toMapFires` caps nothing — but
+   * the cut is recorded on `overlayUndisclosedTruncation` and surfaced through
+   * getOverlayMarkerBudgetState() rather than vanishing, so it is assertable and
+   * a newly-added rowless layer trips the guard test instead of going quiet.
+   */
+  private updateLayerTruncationLabels(): void {
+    const root = this.container.querySelector<HTMLElement>('#layerToggles');
+
+    if (!root) {
+      // No toggle rail exists at all. `chrome: false` builds one of these on
+      // purpose (src/embed/panels/map.ts) — an embed has no controls — so there
+      // is nowhere for any `shown/total` badge to go and EVERY trimmed layer is
+      // undisclosed. Recording the honest set matters more here than anywhere
+      // else: returning early without touching it left
+      // getOverlayMarkerBudgetState().undisclosed reading `[]`, i.e. reporting
+      // full disclosure while the embed silently withheld markers, and any test
+      // asserting `undisclosed` is empty passed for that reason rather than
+      // because the cut was shown.
+      //
+      // Recomputed on every pass rather than latched: the key latch below only
+      // advances when badges were actually written, so a map that never has a
+      // rail would otherwise keep a stale set once truncation changed or cleared.
+      this.overlayUndisclosedTruncation = Object.keys(this.overlayMarkerTruncation);
+      this.renderCompactTruncationSummary();
+      return;
+    }
+
+    const key = Object.entries(this.overlayMarkerTruncation)
+      .map(([layer, counts]) => `${layer}:${counts.shown}/${counts.total}`)
+      .sort()
+      .join(',');
+    // Same key means the same truncation, so the badges and the undisclosed set
+    // are both already correct. Latching only after the write above is what lets
+    // a render that ran before the rail existed be redone once it appears.
+    if (key === this.lastTruncationLabelKey) return;
+    this.lastTruncationLabelKey = key;
+    const { undisclosed } = renderLayerTruncationBadges(root, this.overlayMarkerTruncation, 'pan');
+    this.overlayUndisclosedTruncation = undisclosed;
+    this.renderCompactTruncationSummary(this.overlayMarkerTruncation.news ? [this.overlayMarkerTruncation.news] : []);
+  }
+
+  /**
+   * The one disclosure a chrome-less map can still make (#7112).
+   *
+   * `chrome: false` (src/embed/panels/map.ts) deliberately builds no controls, so
+   * there is no toggle row to hang a per-layer `shown/total` badge on. Recording
+   * the undisclosed set above makes the state honest, but the person looking at
+   * the embed still sees a partial map and no reason for it — and "a ceiling the
+   * user cannot see is indistinguishable from missing data" is the whole argument
+   * the per-layer badge rests on.
+   *
+   * So state the total, compactly, inside the map itself. Deliberately NOT a
+   * control: no click target, no toggle, nothing that reintroduces the chrome the
+   * embed opted out of — just the count and a `title` carrying the explanation.
+   * Idempotent (one node, updated in place) and removed the moment nothing is
+   * being withheld, so it cannot accumulate across renders or outlive the cut.
+   */
+  private renderCompactTruncationSummary(entries = Object.values(this.overlayMarkerTruncation)): void {
+    const existing = this.container.querySelector<HTMLElement>('.map-truncation-summary');
+
+    if (entries.length === 0) {
+      existing?.remove();
+      return;
+    }
+
+    const shown = entries.reduce((sum, counts) => sum + counts.shown, 0);
+    const total = entries.reduce((sum, counts) => sum + counts.total, 0);
+    const summary = existing ?? document.createElement('div');
+    if (!existing) {
+      summary.className = 'map-truncation-summary';
+      // The summary is absolutely positioned, and MapComponent does not own the
+      // container's CSS — an embed host supplies it. `.map-container` happens to
+      // be `position: relative`, but a static container would let the summary
+      // escape to some ancestor and land anywhere on the host page. Establish the
+      // containing block once, on creation only, so this costs a style resolution
+      // the first time a chrome-less map is over budget and never again.
+      if (getComputedStyle(this.container).position === 'static') {
+        this.container.style.position = 'relative';
+      }
+      this.container.appendChild(summary);
+    }
+    summary.textContent = `${shown}/${total} markers`;
+    // Untranslated literal, matching the per-layer badge and its existing i18n
+    // follow-up.
+    summary.title = `Showing ${shown} of ${total} markers — the most significant, and those nearest the current view. The map caps markers per layer to keep interaction responsive; pan or zoom to bring others in.`;
+  }
+
+  /** Markers this render pass drew, and what the budget withheld (#7112). */
+  public getOverlayMarkerBudgetState(): {
+    rendered: number;
+    renders: number;
+    truncated: Record<string, GlobeLayerTruncation>;
+    undisclosed: string[];
+  } {
+    return {
+      rendered: this.renderedOverlayMarkerCount,
+      // Overlay rebuild count. Lets a test assert that a view which another
+      // render already re-planned does not get rebuilt a second time.
+      renders: this.overlayRenderCount,
+      truncated: this.overlayMarkerTruncation,
+      // Layers trimmed with no toggle row to show a `shown/total` badge on.
+      // Should be empty for any layer this variant's picker exposes.
+      undisclosed: this.overlayUndisclosedTruncation,
+    };
+  }
+
   private renderOverlays(projection: d3.GeoProjection): void {
+    this.overlayRenderCount += 1;
     setTrustedHtml(this.overlays, trustedHtml('', "legacy direct innerHTML migration"));
     this.labelVisibilityScheduled = false;
+    const slices = this.overlayFeedSlices();
+    this.planOverlayMarkerBudget(projection, slices);
     const fragment = document.createDocumentFragment();
     const previousTarget = this.overlayAppendTarget;
     this.overlayAppendTarget = fragment;
 
     try {
+    for (const item of slices.news) {
+      if (this.isOverlayMarkerCut(item)) continue;
+      const pos = projection([item.lon, item.lat]);
+      if (!pos) continue;
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.className = 'news-location-marker';
+      marker.style.cssText = 'position:absolute;width:24px;height:24px;border:0;padding:0;border-radius:50%;transform:translate(-50%,-50%) scale(var(--marker-scale,1));transform-origin:center;z-index:53;pointer-events:auto;cursor:pointer';
+      marker.style.left = `${pos[0]}px`;
+      marker.style.top = `${pos[1]}px`;
+      marker.style.background = `radial-gradient(circle, ${getThreatColor(item.threatLevel)} 4px, transparent 4px)`;
+      marker.title = item.title;
+      marker.setAttribute('aria-label', item.title);
+      marker.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const rect = this.container.getBoundingClientRect();
+        this.popup.show({ type: 'news', data: item, x: event.clientX - rect.left, y: event.clientY - rect.top });
+        this.onNewsClick?.(item);
+      });
+      this.appendOverlay(marker);
+    }
     // Strategic waterways
     if (this.state.layers.waterways) {
       this.renderWaterways(projection);
@@ -1667,14 +2222,15 @@ export class MapComponent {
       this.renderPorts(projection);
     }
 
-    // APT groups (geopolitical variant only)
-    if (SITE_VARIANT !== 'tech') {
+    // APT groups — rendered only when cyberThreats layer is active, loaded lazily
+    if (this.state.layers.cyberThreats && SITE_VARIANT !== 'tech' && this.aptGroups.length > 0) {
       this.renderAPTMarkers(projection);
     }
 
     // Nuclear facilities (always HTML - shapes convey status)
     if (this.state.layers.nuclear && this.isLayerZoomVisible('nuclear')) {
       NUCLEAR_FACILITIES.forEach((facility) => {
+        if (this.isOverlayMarkerCut(facility)) return;
         const pos = projection([facility.lon, facility.lat]);
         if (!pos) return;
 
@@ -1703,6 +2259,7 @@ export class MapComponent {
     // Gamma irradiators (IAEA DIIF) - no labels, click to see details
     if (this.state.layers.irradiators) {
       GAMMA_IRRADIATORS.forEach((irradiator) => {
+        if (this.isOverlayMarkerCut(irradiator)) return;
         const pos = projection([irradiator.lon, irradiator.lat]);
         if (!pos) return;
 
@@ -1730,6 +2287,7 @@ export class MapComponent {
     // Conflict zone click areas
     if (this.state.layers.conflicts) {
       CONFLICT_ZONES.forEach((zone) => {
+        if (this.isOverlayMarkerCut(zone)) return;
         const centerPos = projection(zone.center as [number, number]);
         if (!centerPos) return;
 
@@ -1755,15 +2313,13 @@ export class MapComponent {
 
         this.appendOverlay(clickArea);
       });
-      this.renderConflictEventMarkers(projection);
+      this.renderConflictEventMarkers(projection, slices.conflictEvents);
     }
 
     // Iran events (severity-colored circles matching DeckGL layer)
-    if (this.state.layers.iranAttacks && this.iranEvents.length > 0) {
-      const iranEventsForRender = this.isMobile
-        ? this.iranEvents.slice(0, MapComponent.MOBILE_MAX_IRAN_EVENTS)
-        : this.iranEvents;
-      iranEventsForRender.forEach((ev) => {
+    if (this.state.layers.iranAttacks && slices.iranEvents.length > 0) {
+      slices.iranEvents.forEach((ev) => {
+        if (this.isOverlayMarkerCut(ev)) return;
         const pos = projection([ev.longitude, ev.latitude]);
         if (!pos || !Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) return;
 
@@ -1797,6 +2353,7 @@ export class MapComponent {
     // Hotspots (always HTML - level colors and BREAKING badges)
     if (this.state.layers.hotspots) {
       this.hotspots.forEach((spot) => {
+        if (this.isOverlayMarkerCut(spot)) return;
         const pos = projection([spot.lon, spot.lat]);
         if (!pos) return;
 
@@ -1831,6 +2388,7 @@ export class MapComponent {
     // Military bases (always HTML - nation colors matter)
     if (this.state.layers.bases && this.isLayerZoomVisible('bases')) {
       this.getMilitaryBasesForRender().forEach((base) => {
+        if (this.isOverlayMarkerCut(base)) return;
         const pos = projection([base.lon, base.lat]);
         if (!pos) return;
 
@@ -1863,15 +2421,11 @@ export class MapComponent {
     // Earthquakes (magnitude-based sizing) - part of NATURAL layer
     if (this.state.layers.natural) {
       console.log('[Map] Rendering earthquakes. Total:', this.earthquakes.length, 'Layer enabled:', this.state.layers.natural);
-      const filteredQuakes = this.state.timeRange === 'all'
-        ? this.earthquakes
-        : this.earthquakes.filter((eq) => eq.occurredAt >= Date.now() - this.getTimeRangeMs());
-      const quakesForRender = this.isMobile
-        ? filteredQuakes.filter((eq) => eq.magnitude >= MapComponent.MOBILE_MIN_EARTHQUAKE_MAGNITUDE)
-        : filteredQuakes;
+      const quakesForRender = slices.quakes;
       console.log('[Map] After time/mobile filter:', quakesForRender.length, 'earthquakes. TimeRange:', this.state.timeRange);
       let rendered = 0;
       quakesForRender.forEach((eq) => {
+        if (this.isOverlayMarkerCut(eq)) return;
         const pos = projection([eq.location?.longitude ?? 0, eq.location?.latitude ?? 0]);
         if (!pos) {
           console.log('[Map] Earthquake position null for:', eq.place, eq.location?.longitude, eq.location?.latitude);
@@ -1912,6 +2466,7 @@ export class MapComponent {
     // Economic Centers (always HTML - emoji icons for type distinction)
     if (this.state.layers.economic) {
       ECONOMIC_CENTERS.forEach((center) => {
+        if (this.isOverlayMarkerCut(center)) return;
         const pos = projection([center.lon, center.lat]);
         if (!pos) return;
 
@@ -1943,9 +2498,9 @@ export class MapComponent {
 
     // Weather Alerts (severity icons)
     if (this.state.layers.weather) {
-      this.weatherAlerts.forEach((alert) => {
-        if (!alert.centroid) return;
-        const pos = projection(alert.centroid);
+      slices.weather.forEach((alert) => {
+        if (this.isOverlayMarkerCut(alert)) return;
+        const pos = projection(alert.centroid as [number, number]);
         if (!pos) return;
 
         const div = document.createElement('div');
@@ -1975,7 +2530,8 @@ export class MapComponent {
     }
 
     if (this.state.layers.radiationWatch) {
-      this.radiationObservations.forEach((observation) => {
+      slices.radiationObservations.forEach((observation) => {
+        if (this.isOverlayMarkerCut(observation)) return;
         const pos = projection([observation.lon, observation.lat]);
         if (!pos) return;
 
@@ -2009,7 +2565,8 @@ export class MapComponent {
 
     // Internet Outages (severity colors)
     if (this.state.layers.outages) {
-      this.outages.forEach((outage) => {
+      slices.outages.forEach((outage) => {
+        if (this.isOverlayMarkerCut(outage)) return;
         const pos = projection([outage.lon, outage.lat]);
         if (!pos) return;
 
@@ -2045,7 +2602,8 @@ export class MapComponent {
 
     // Cable advisories & repair ships
     if (this.state.layers.cables) {
-      this.cableAdvisories.forEach((advisory) => {
+      slices.cableAdvisories.forEach((advisory) => {
+        if (this.isOverlayMarkerCut(advisory)) return;
         const pos = projection([advisory.lon, advisory.lat]);
         if (!pos) return;
 
@@ -2079,6 +2637,7 @@ export class MapComponent {
       });
 
       this.repairShips.forEach((ship) => {
+        if (this.isOverlayMarkerCut(ship)) return;
         const pos = projection([ship.lon, ship.lat]);
         if (!pos) return;
 
@@ -2112,10 +2671,11 @@ export class MapComponent {
       });
     }
 
-    // AI Data Centers (always HTML - 🖥️ icons, filter to ≥10k GPUs)
-    const MIN_GPU_COUNT = 10000;
+    // AI Data Centers (always HTML - icons; RENDERABLE_AI_DATA_CENTERS is the
+    // >=10k-GPU list, shared with the overlay budget plan)
     if (this.state.layers.datacenters) {
-      AI_DATA_CENTERS.filter(dc => (dc.chipCount || 0) >= MIN_GPU_COUNT).forEach((dc) => {
+      RENDERABLE_AI_DATA_CENTERS.forEach((dc) => {
+        if (this.isOverlayMarkerCut(dc)) return;
         const pos = projection([dc.lon, dc.lat]);
         if (!pos) return;
 
@@ -2148,6 +2708,7 @@ export class MapComponent {
     // Spaceports (🚀 icon)
     if (this.state.layers.spaceports) {
       SPACEPORTS.forEach((port) => {
+        if (this.isOverlayMarkerCut(port)) return;
         const pos = projection([port.lon, port.lat]);
         if (!pos) return;
 
@@ -2184,6 +2745,7 @@ export class MapComponent {
     // Critical Minerals (💎 icon)
     if (this.state.layers.minerals) {
       CRITICAL_MINERALS.forEach((mine) => {
+        if (this.isOverlayMarkerCut(mine)) return;
         const pos = projection([mine.lon, mine.lat]);
         if (!pos) return;
 
@@ -2223,6 +2785,7 @@ export class MapComponent {
     // Startup Hubs (🚀 icon by tier)
     if (this.state.layers.startupHubs) {
       STARTUP_HUBS.forEach((hub) => {
+        if (this.isOverlayMarkerCut(hub)) return;
         const pos = projection([hub.lon, hub.lat]);
         if (!pos) return;
 
@@ -2261,6 +2824,7 @@ export class MapComponent {
     // Cloud Regions (☁️ icons by provider)
     if (this.state.layers.cloudRegions) {
       CLOUD_REGIONS.forEach((region) => {
+        if (this.isOverlayMarkerCut(region)) return;
         const pos = projection([region.lon, region.lat]);
         if (!pos) return;
 
@@ -2303,7 +2867,7 @@ export class MapComponent {
       // Cluster radius depends on zoom - tighter clustering when zoomed out
       const clusterRadius = this.state.zoom >= 4 ? 15 : this.state.zoom >= 3 ? 25 : 40;
       // Group by city to prevent clustering companies from different cities
-      const clusters = this.clusterMarkers(TECH_HQS, projection, clusterRadius, hq => hq.city);
+      const clusters = this.clusterMarkers(this.keepBudgetedMarkers(TECH_HQS), projection, clusterRadius, hq => hq.city);
 
       clusters.forEach((cluster) => {
         if (cluster.items.length === 0) return;
@@ -2371,6 +2935,7 @@ export class MapComponent {
     // Accelerators (🎯 icons)
     if (this.state.layers.accelerators) {
       ACCELERATORS.forEach((acc) => {
+        if (this.isOverlayMarkerCut(acc)) return;
         const pos = projection([acc.lon, acc.lat]);
         if (!pos) return;
 
@@ -2411,7 +2976,7 @@ export class MapComponent {
       const { width: mapWidth, height: mapHeight } = this.getKnownContainerSize();
 
       // Map events to have lon property for clustering, filter visible
-      const visibleEvents = this.techEvents
+      const visibleEvents = this.keepBudgetedMarkers(this.techEvents)
         .map(e => ({ ...e, lon: e.lng }))
         .filter(e => {
           const pos = projection([e.lon, e.lat]);
@@ -2468,6 +3033,7 @@ export class MapComponent {
     // Stock Exchanges (🏛️ icon by tier)
     if (this.state.layers.stockExchanges) {
       STOCK_EXCHANGES.forEach((exchange) => {
+        if (this.isOverlayMarkerCut(exchange)) return;
         const pos = projection([exchange.lon, exchange.lat]);
         if (!pos || !Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) return;
 
@@ -2505,6 +3071,7 @@ export class MapComponent {
     // Financial Centers (💰 icon by type)
     if (this.state.layers.financialCenters) {
       FINANCIAL_CENTERS.forEach((center) => {
+        if (this.isOverlayMarkerCut(center)) return;
         const pos = projection([center.lon, center.lat]);
         if (!pos || !Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) return;
 
@@ -2542,6 +3109,7 @@ export class MapComponent {
     // Central Banks (🏛️ icon by type)
     if (this.state.layers.centralBanks) {
       CENTRAL_BANKS.forEach((bank) => {
+        if (this.isOverlayMarkerCut(bank)) return;
         const pos = projection([bank.lon, bank.lat]);
         if (!pos || !Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) return;
 
@@ -2579,6 +3147,7 @@ export class MapComponent {
     // Commodity Hubs (⛽ icon by type)
     if (this.state.layers.commodityHubs) {
       COMMODITY_HUBS.forEach((hub) => {
+        if (this.isOverlayMarkerCut(hub)) return;
         const pos = projection([hub.lon, hub.lat]);
         if (!pos || !Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) return;
 
@@ -2688,13 +3257,8 @@ export class MapComponent {
     }
 
     // Protests / Social Unrest Events (severity colors + icons) - with clustering
-    // Filter to show only significant events on map (all events still used for CII analysis)
     if (this.state.layers.protests) {
-      const significantProtests = this.protests.filter((event) => {
-        // Only show riots and high severity (red markers)
-        // All protests still counted in CII analysis
-        return event.eventType === 'riot' || event.severity === 'high';
-      });
+      const significantProtests = this.keepBudgetedMarkers(slices.protests);
 
       const clusterRadius = this.state.zoom >= 4 ? 12 : this.state.zoom >= 3 ? 20 : 35;
       const clusters = this.clusterMarkers(significantProtests, projection, clusterRadius, p => p.country);
@@ -2721,9 +3285,11 @@ export class MapComponent {
           badge.className = 'cluster-badge';
           badge.textContent = String(cluster.items.length);
           div.appendChild(badge);
-          div.title = `${primaryEvent.country}: ${cluster.items.length} ${t('popups.events')}`;
+          div.title = `${primaryEvent.country}: ${cluster.items.length} ${t('popups.protest.records')}`;
         } else {
-          div.title = `${primaryEvent.city || primaryEvent.country} - ${primaryEvent.eventType} (${primaryEvent.severity})`;
+          div.title = primaryEvent.sourceType === 'gdelt'
+            ? `${primaryEvent.city || primaryEvent.country} - ${t('popups.protest.mediaSignal')}`
+            : `${primaryEvent.city || primaryEvent.country} - ${primaryEvent.eventType} (${primaryEvent.severity})`;
           if (primaryEvent.validated) {
             div.classList.add('validated');
           }
@@ -2755,7 +3321,8 @@ export class MapComponent {
 
     // Flight Delays (delay severity colors + ✈️ icons)
     if (this.state.layers.flights) {
-      this.flightDelays.forEach((delay) => {
+      slices.flightDelays.forEach((delay) => {
+        if (this.isOverlayMarkerCut(delay)) return;
         const pos = projection([delay.lon, delay.lat]);
         if (!pos) return;
 
@@ -2798,7 +3365,8 @@ export class MapComponent {
 
     // Aircraft positions (simplified dots in SVG fallback, limited to 200)
     if (this.state.layers.flights) {
-      this.aircraftPositions.slice(0, 200).forEach((ac) => {
+      slices.aircraft.forEach((ac) => {
+        if (this.isOverlayMarkerCut(ac)) return;
         const pt = projection([ac.lon, ac.lat]);
         if (!pt) return;
 
@@ -2833,7 +3401,8 @@ export class MapComponent {
     // Military Tracking (flights and vessels)
     if (this.state.layers.military) {
       // Render individual flights
-      this.militaryFlights.forEach((flight) => {
+      slices.militaryFlights.forEach((flight) => {
+        if (this.isOverlayMarkerCut(flight)) return;
         const pos = projection([flight.lon, flight.lat]);
         if (!pos) return;
 
@@ -2901,7 +3470,8 @@ export class MapComponent {
       });
 
       // Render flight clusters
-      this.militaryFlightClusters.forEach((cluster) => {
+      slices.militaryFlightClusters.forEach((cluster) => {
+        if (this.isOverlayMarkerCut(cluster)) return;
         const pos = projection([cluster.lon, cluster.lat]);
         if (!pos) return;
 
@@ -2936,7 +3506,8 @@ export class MapComponent {
 
       // Military Vessels (warships, carriers, submarines)
       // Render individual vessels
-      this.militaryVessels.forEach((vessel) => {
+      slices.militaryVessels.forEach((vessel) => {
+        if (this.isOverlayMarkerCut(vessel)) return;
         const pos = projection([vessel.lon, vessel.lat]);
         if (!pos) return;
 
@@ -3003,7 +3574,8 @@ export class MapComponent {
       });
 
       // Render vessel clusters
-      this.militaryVesselClusters.forEach((cluster) => {
+      slices.militaryVesselClusters.forEach((cluster) => {
+        if (this.isOverlayMarkerCut(cluster)) return;
         const pos = projection([cluster.lon, cluster.lat]);
         if (!pos) return;
 
@@ -3037,9 +3609,31 @@ export class MapComponent {
       });
     }
 
+    // After military markers so an emergency-squawking military aircraft keeps
+    // its emergency marker on top and clickable.
+    if (this.state.layers.aircraftEmergencies) {
+      for (const aircraft of this.emergencyMarkers) {
+        const point = projection([aircraft.lon, aircraft.lat]);
+        if (!point) continue;
+        const marker = document.createElement('button');
+        marker.type = 'button';
+        marker.className = 'aircraft-emergency-marker';
+        marker.textContent = `✈ ${aircraft.squawk}`;
+        marker.setAttribute('aria-label', `Reported squawk ${aircraft.squawk}, aircraft ${aircraft.address}`);
+        marker.style.left = `${point[0]}px`;
+        marker.style.top = `${point[1]}px`;
+        marker.onclick = event => {
+          event.stopPropagation();
+          this.container.dispatchEvent(new CustomEvent('aircraft-emergency-select', { detail: aircraft.address }));
+        };
+        this.appendOverlay(marker);
+      }
+    }
+
     // Natural Events (NASA EONET) - part of NATURAL layer
     if (this.state.layers.natural) {
-      this.naturalEvents.forEach((event) => {
+      slices.naturalEvents.forEach((event) => {
+        if (this.isOverlayMarkerCut(event)) return;
         const pos = projection([event.lon, event.lat]);
         if (!pos) return;
 
@@ -3084,7 +3678,8 @@ export class MapComponent {
 
     // Satellite Fires (NASA FIRMS) - separate fires layer
     if (this.state.layers.fires) {
-      this.firmsFireData.forEach((fire) => {
+      slices.fires.forEach((fire) => {
+        if (this.isOverlayMarkerCut(fire)) return;
         const pos = projection([fire.lon, fire.lat]);
         if (!pos) return;
 
@@ -3111,6 +3706,7 @@ export class MapComponent {
         nature: '#96ceb4', beach: '#f4a460', water: '#4169e1', other: '#888888',
       };
       this.webcamData.forEach((cam) => {
+        if (this.isOverlayMarkerCut(cam)) return;
         const pos = projection([cam.lng, cam.lat]);
         if (!pos || !Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) return;
         const isCluster = 'count' in cam;
@@ -3161,10 +3757,11 @@ export class MapComponent {
     }, MapComponent.MARKER_SETTLE_MS);
   }
 
-  private renderConflictEventMarkers(projection: d3.GeoProjection): void {
-    const visibleEvents = this.state.timeRange === 'all'
-      ? this.conflictEvents
-      : this.conflictEvents.filter((event) => event.occurredAt >= Date.now() - this.getTimeRangeMs());
+  private renderConflictEventMarkers(
+    projection: d3.GeoProjection,
+    conflictEvents: readonly AcledConflictEvent[],
+  ): void {
+    const visibleEvents = this.keepBudgetedMarkers(conflictEvents);
     const clusters = this.clusterMarkers(
       visibleEvents
         .map((event) => ({
@@ -3212,8 +3809,8 @@ export class MapComponent {
       'border:1px solid rgba(60,120,60,0.6)',
       'padding:8px 12px',
       'border-radius:3px',
-      'font-size:11px',
-      'font-family:monospace',
+      'font-size:calc(11px * var(--wm-panel-effective-scale, 1))',
+      'font-family:var(--font-mono)',
       'color:#d4d4d4',
       'max-width:240px',
       'z-index:1000',
@@ -3221,7 +3818,7 @@ export class MapComponent {
       'line-height:1.5',
     ].join(';');
     const closeBtn = document.createElement('button');
-    closeBtn.style.cssText = 'position:absolute;top:4px;right:4px;background:none;border:none;color:#888;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;';
+    closeBtn.style.cssText = 'position:absolute;top:4px;right:4px;background:none;border:none;color:#888;cursor:pointer;font-size:calc(14px * var(--wm-panel-effective-scale, 1));line-height:1;padding:2px 4px;';
     closeBtn.setAttribute('aria-label', 'Close');
     closeBtn.textContent = '×';
     closeBtn.addEventListener('click', () => tooltip.remove());
@@ -3250,14 +3847,14 @@ export class MapComponent {
     tooltip.appendChild(title);
 
     const meta = document.createElement('div');
-    meta.style.cssText = 'opacity:0.7;font-size:10px;margin-top:2px;';
+    meta.style.cssText = 'opacity:0.7;font-size:calc(10px * var(--wm-panel-effective-scale, 1));margin-top:2px;';
     meta.textContent = [cam.country, cam.category].filter(Boolean).join(' \u00B7 ');
     if (meta.textContent) tooltip.appendChild(meta);
 
     const previewDiv = document.createElement('div');
     previewDiv.style.marginTop = '6px';
     const loadingSpan = document.createElement('span');
-    loadingSpan.style.cssText = 'opacity:0.5;font-size:10px;';
+    loadingSpan.style.cssText = 'opacity:0.5;font-size:calc(10px * var(--wm-panel-effective-scale, 1));';
     loadingSpan.textContent = 'Loading preview...';
     previewDiv.appendChild(loadingSpan);
     tooltip.appendChild(previewDiv);
@@ -3267,7 +3864,7 @@ export class MapComponent {
       link.href = `https://www.windy.com/webcams/${cam.webcamId}`;
       link.target = '_blank';
       link.rel = 'noopener';
-      link.style.cssText = 'display:block;margin-top:4px;color:#00d4ff;font-size:11px;text-decoration:none;';
+      link.style.cssText = 'display:block;margin-top:4px;color:#00d4ff;font-size:calc(11px * var(--wm-panel-effective-scale, 1));text-decoration:none;';
       link.textContent = 'Open on Windy \u2197';
       tooltip.appendChild(link);
     }
@@ -3287,7 +3884,7 @@ export class MapComponent {
             previewDiv.appendChild(imgEl);
           } else {
             const span = document.createElement('span');
-            span.style.cssText = 'opacity:0.5;font-size:10px;';
+            span.style.cssText = 'opacity:0.5;font-size:calc(10px * var(--wm-panel-effective-scale, 1));';
             span.textContent = 'Preview unavailable';
             previewDiv.appendChild(span);
           }
@@ -3356,7 +3953,7 @@ export class MapComponent {
           item.appendChild(nameSpan);
           if (webcam.country) {
             const cc = document.createElement('span');
-            cc.style.cssText = 'float:right;opacity:0.4;font-size:10px;margin-left:6px;';
+            cc.style.cssText = 'float:right;opacity:0.4;font-size:calc(10px * var(--wm-panel-effective-scale, 1));margin-left:6px;';
             cc.textContent = webcam.country;
             item.appendChild(cc);
           }
@@ -3378,6 +3975,7 @@ export class MapComponent {
 
   private renderWaterways(projection: d3.GeoProjection): void {
     STRATEGIC_WATERWAYS.forEach((waterway) => {
+      if (this.isOverlayMarkerCut(waterway)) return;
       const pos = projection([waterway.lon, waterway.lat]);
       if (!pos) return;
 
@@ -3408,6 +4006,7 @@ export class MapComponent {
 
   private renderAisDisruptions(projection: d3.GeoProjection): void {
     this.aisDisruptions.forEach((event) => {
+      if (this.isOverlayMarkerCut(event)) return;
       const pos = projection([event.lon, event.lat]);
       if (!pos) return;
 
@@ -3469,6 +4068,7 @@ export class MapComponent {
 
   private renderPorts(projection: d3.GeoProjection): void {
     PORTS.forEach((port) => {
+      if (this.isOverlayMarkerCut(port)) return;
       const pos = projection([port.lon, port.lat]);
       if (!pos) return;
 
@@ -3502,8 +4102,16 @@ export class MapComponent {
     });
   }
 
+  private async loadAptGroups(): Promise<void> {
+    const { APT_GROUPS } = await import('@/config/apt-groups');
+    this.aptGroups = APT_GROUPS;
+    this.aptGroupsLoaded = true;
+    this.render();
+  }
+
   private renderAPTMarkers(projection: d3.GeoProjection): void {
-    APT_GROUPS.forEach((apt) => {
+    this.aptGroups.forEach((apt) => {
+      if (this.isOverlayMarkerCut(apt)) return;
       const pos = projection([apt.lon, apt.lat]);
       if (!pos) return;
 
@@ -3647,10 +4255,48 @@ export class MapComponent {
     flash.style.top = `${pos[1]}px`;
     flash.style.setProperty('--flash-duration', `${durationMs}ms`);
     this.appendOverlay(flash);
+    this.trackFlash(flash, durationMs);
+  }
 
-    window.setTimeout(() => {
+  /**
+   * Holds concurrent news flashes to a fixed ceiling (#7112).
+   *
+   * A flash is a `#mapOverlays` child like every budgeted marker, but it is
+   * created outside planOverlayMarkerBudget() — so without a bound of its own it
+   * is simply unbounded DOM on the overlay the budget exists to cap. The comment
+   * above records the real volume: flashMapForNews() fires "in bursts across load
+   * passes (hundreds of calls shortly after load)", and each node lives
+   * `durationMs`, so hundreds can coexist with a full 800-marker overlay and the
+   * stated whole-overlay ceiling stops being true.
+   *
+   * A separate bounded exemption rather than a budget group, because a flash is
+   * transient decoration on a news item, not a feed the fair-share cap should be
+   * sized against: making it compete would let a news burst evict real markers.
+   * Newest wins — an old flash is nearly expired anyway, and dropping the newest
+   * would hide the item that just arrived.
+   */
+  private trackFlash(flash: HTMLElement, durationMs: number): void {
+    const expire = setTimeout(() => {
+      this.activeFlashes.delete(flash);
       flash.remove();
     }, durationMs);
+    this.activeFlashes.set(flash, expire);
+
+    while (this.activeFlashes.size > MapComponent.MAX_CONCURRENT_MAP_FLASHES) {
+      // Map iteration is insertion-ordered, so this is the oldest live flash.
+      const [oldest, oldestTimer] = this.activeFlashes.entries().next().value as [
+        HTMLElement,
+        ReturnType<typeof setTimeout>,
+      ];
+      clearTimeout(oldestTimer);
+      this.activeFlashes.delete(oldest);
+      oldest.remove();
+    }
+  }
+
+  /** Live news flashes, so a test can prove the ceiling holds. */
+  public getActiveFlashCount(): number {
+    return this.activeFlashes.size;
   }
 
   public initEscalationGetters(): void {
@@ -3694,6 +4340,7 @@ export class MapComponent {
   ]);
 
   public toggleLayer(layer: keyof MapLayers, source: 'user' | 'programmatic' = 'user'): void {
+    if (!this.canToggleLayer(layer, this.state.layers[layer])) return;
     console.log(`[Map.toggleLayer] ${layer}: ${this.state.layers[layer]} -> ${!this.state.layers[layer]}`);
     this.state.layers[layer] = !this.state.layers[layer];
     if (this.state.layers[layer]) {
@@ -3707,7 +4354,11 @@ export class MapComponent {
       delete this.layerZoomOverrides[layer];
     }
 
-    const btn = this.container.querySelector(`[data-layer="${layer}"]`);
+    // Qualify with .layer-toggle: the chip is a button inside a
+    // `.layer-toggle-row` that carries the SAME data-layer, and an ancestor
+    // precedes its descendant in document order — so a bare [data-layer]
+    // query returns the row and the chip never leaves its initial state.
+    const btn = this.container.querySelector(`.layer-toggle[data-layer="${layer}"]`);
     const isEnabled = this.state.layers[layer];
     const isAsyncLayer = MapComponent.ASYNC_DATA_LAYERS.has(layer);
 
@@ -3960,6 +4611,7 @@ export class MapComponent {
   }
 
   public enableLayer(layer: keyof MapLayers): void {
+    if (!this.canToggleLayer(layer, this.state.layers[layer])) return;
     if (!this.state.layers[layer]) {
       this.state.layers[layer] = true;
       const thresholds = MapComponent.LAYER_ZOOM_THRESHOLDS[layer];
@@ -4007,6 +4659,7 @@ export class MapComponent {
     const { width, height } = this.getKnownContainerSize();
     this.clampPan(width, height);
     const zoom = this.state.zoom;
+    const overlayBudgetViewportChanged = this.overlayBudgetPlanIsStale(width, height);
 
     // With transform-origin: 0 0, we need to offset to keep center in view
     // Formula: translate first to re-center, then scale
@@ -4041,7 +4694,67 @@ export class MapComponent {
     if (this.shouldUpdateLabelVisibility()) this.updateLabelVisibility(zoom);
     const zoomVisibilityChanged = this.updateZoomLayerVisibility();
     this.emitStateChange();
-    if (rebuildOnZoomVisibilityChange && zoomVisibilityChanged) this.scheduleRender();
+    if (rebuildOnZoomVisibilityChange && zoomVisibilityChanged) {
+      this.scheduleRender();
+    } else if (overlayBudgetViewportChanged) {
+      this.scheduleOverlayBudgetReplan();
+    }
+  }
+
+  /**
+   * Re-plan the overlay budget once the view stops moving (#7112).
+   *
+   * applyTransform() runs on every mousemove/touchmove/wheel and on each frame
+   * of the touch-inertia loop. Re-planning from there directly would put a full
+   * renderDynamicLayers() pass — which wipes and rebuilds cables, pipelines,
+   * conflicts, AIS density, clusters AND every overlay marker with a fresh
+   * click listener — on the interaction path at up to 1000/MIN_RENDER_INTERVAL_MS
+   * per second, where a pan used to be a pure CSS transform with no DOM work at
+   * all. It would also re-arm armMarkerSettle() continuously, holding every
+   * marker in the infinite-pulse state (and its compositing layer, #4669) for
+   * the whole gesture.
+   *
+   * So coalesce to the settle instead, which is what GlobeMap does by re-selecting
+   * on the controls 'end' event rather than during the drag. The markers on
+   * screen stay correct for the pre-gesture POV while the finger is down and
+   * are re-ranked once, when the user stops.
+   */
+  private scheduleOverlayBudgetReplan(): void {
+    if (this.overlayBudgetReplanTimer !== null) clearTimeout(this.overlayBudgetReplanTimer);
+    this.overlayBudgetReplanTimer = setTimeout(() => {
+      this.overlayBudgetReplanTimer = null;
+      if (this.destroyed) return;
+      // Re-test rather than firing unconditionally. A render triggered by
+      // anything else during the settle window — every setX() data setter calls
+      // render(), and feeds stream continuously — has already re-planned for the
+      // current viewport, so the plan is no longer stale and this timer would
+      // schedule a second full renderDynamicLayers() pass that cannot change a
+      // marker. That duplicate is the exact churn this debounce exists to remove.
+      const { width, height } = this.getKnownContainerSize();
+      if (!this.overlayBudgetPlanIsStale(width, height)) return;
+      this.scheduleRender();
+    }, MapComponent.OVERLAY_BUDGET_REPLAN_SETTLE_MS);
+  }
+
+  /**
+   * True when the stored budget plan was computed for a different viewport than
+   * the current one, AND re-planning could actually change what is drawn.
+   *
+   * The truncation test is the load-bearing half: with nothing withheld the
+   * selection is view-independent, so a rebuild cannot change a single marker and
+   * would be pure churn on the very path this feature exists to make cheaper.
+   * Same guard, and same reason, as GlobeMap.reselectMarkersForViewport.
+   */
+  private overlayBudgetPlanIsStale(width: number, height: number): boolean {
+    return (
+      this.initialDynamicRendered &&
+      Object.keys(this.overlayMarkerTruncation).length > 0 &&
+      (this.lastOverlayBudgetViewport.width !== width ||
+        this.lastOverlayBudgetViewport.height !== height ||
+        this.lastOverlayBudgetViewport.zoom !== this.state.zoom ||
+        this.lastOverlayBudgetViewport.panX !== this.state.pan.x ||
+        this.lastOverlayBudgetViewport.panY !== this.state.pan.y)
+    );
   }
 
   private shouldUpdateLabelVisibility(): boolean {
@@ -4164,6 +4877,10 @@ export class MapComponent {
     });
   }
 
+  public setOnNewsClick(callback: (item: Pick<NewsLocationMarker, 'article' | 'title'>) => void): void {
+    this.onNewsClick = callback;
+  }
+
   public onHotspotClicked(callback: (hotspot: Hotspot) => void): void {
     this.onHotspotClick = callback;
   }
@@ -4210,11 +4927,12 @@ export class MapComponent {
     const { width, height } = this.readContainerSize();
     const projection = this.getProjection(width, height);
     if (!projection.invert) return null;
-    const zoom = this.state.zoom;
-    const centerX = width / (2 * zoom) - this.state.pan.x;
-    const centerY = height / (2 * zoom) - this.state.pan.y;
-    const coords = projection.invert([centerX, centerY]);
-    if (!coords) return null;
+    const coords = projection.invert(
+      projectionPointAtScreenCentre(width, height, this.state.pan),
+    );
+    // A 0x0 container (hidden or not yet laid out) makes getProjection scale 0,
+    // and d3 then inverts to [NaN, NaN] rather than null (#7660).
+    if (!coords || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) return null;
     return { lon: coords[0], lat: coords[1] };
   }
 
@@ -4274,14 +4992,16 @@ export class MapComponent {
   }
 
   public setLayers(layers: MapLayers): void {
+    const prevCyber = this.state.layers.cyberThreats;
     this.state.layers = { ...layers };
+    if (this.state.layers.cyberThreats && !prevCyber && !this.aptGroupsLoaded) this.loadAptGroups();
     this.syncLayerButtons();
     this.render();
   }
 
-  public setEarthquakes(earthquakes: Earthquake[]): void {
+  public setEarthquakes(earthquakes: Earthquake[], options: { replaceEmpty?: boolean } = {}): void {
     console.log('[Map] setEarthquakes called with', earthquakes.length, 'earthquakes');
-    if (earthquakes.length > 0 || this.earthquakes.length === 0) {
+    if (options.replaceEmpty || earthquakes.length > 0 || this.earthquakes.length === 0) {
       this.earthquakes = earthquakes;
     } else {
       console.log('[Map] Keeping existing', this.earthquakes.length, 'earthquakes (new data was empty)');
@@ -4291,6 +5011,11 @@ export class MapComponent {
 
   public setWeatherAlerts(alerts: WeatherAlert[]): void {
     this.weatherAlerts = alerts;
+    this.render();
+  }
+
+  public setRadiationObservations(observations: RadiationObservation[]): void {
+    this.radiationObservations = observations;
     this.render();
   }
 
@@ -4343,6 +5068,11 @@ export class MapComponent {
     this.render();
   }
 
+  public setAircraftEmergencies(markers: import('../../shared/aircraft-emergencies').EmergencyMapMarker[]): void {
+    this.emergencyMarkers = markers;
+    this.render();
+  }
+
   public setMilitaryVessels(vessels: MilitaryVessel[], clusters: MilitaryVesselCluster[] = []): void {
     this.militaryVessels = vessels;
     this.militaryVesselClusters = clusters;
@@ -4378,9 +5108,9 @@ export class MapComponent {
     this.render();
   }
 
-  public setNewsLocations(_data: Array<{ lat: number; lon: number; title: string; threatLevel: string; timestamp?: Date }>): void {
-    // SVG fallback: news locations rendered as simple circles
-    // For now, skip on SVG map to keep mobile lightweight
+  public setNewsLocations(data: NewsLocationMarker[]): void {
+    this.newsLocations = data;
+    this.render();
   }
 
   public setTechActivity(activities: TechHubActivity[]): void {
