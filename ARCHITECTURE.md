@@ -388,6 +388,13 @@ Runs before every `git push`:
 
 | Workflow | Trigger | Checks |
 |----------|---------|--------|
+| `ci-docker.yml` | PR, push to main | iAiFy fork overlay: calls the shared enterprise Docker CI (`Ai-road-4-You/enterprise-ci-cd`) |
+| `copilot-setup-steps.yml` | Manual | iAiFy fork overlay: Copilot agent environment setup |
+| `dev-version.yml` | Push to non-main branches | iAiFy fork overlay: pre-release dev version tags via the shared enterprise workflow |
+| `ghcr-cleanup.yml` | Weekly cron, manual | iAiFy fork overlay: prunes old GHCR image versions via the shared enterprise workflow |
+| `release.yml` | Tag push | iAiFy fork overlay: release workflow |
+| `sbom.yml` | Push to main, weekly cron | iAiFy fork overlay: SBOM generation via the shared enterprise workflow |
+| `security-scan.yml` | PR, push to main, weekly cron | iAiFy fork overlay: shared enterprise Security Scan (secrets, SAST, dependency audit) |
 | `typecheck.yml` | PR, push to main | `tsc --noEmit` for src and API tsconfigs |
 | `lint-code.yml` | PR, push to main | Biome lint + sebuf API-contract enforcement; markdownlint-cli2 in a `markdown` job that runs on every push to main and, on PRs, only when markdown, its config, or package.json changes |
 | `test.yml` | PR, push to main | Unit/integration suite, docs-stats guardrail, plus conditional digest-image and resilience-validation smoke gates |
