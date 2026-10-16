@@ -44,6 +44,7 @@ export interface CryptoQuote {
   price: number;
   change: number;
   sparkline: number[];
+  change7d: number;
 }
 
 export interface ListCommodityQuotesRequest {
@@ -1532,3 +1533,4 @@ export class MarketServiceClient {
     throw new ApiError(resp.status, `Request failed with status ${resp.status}`, body);
   }
 }
+

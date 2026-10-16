@@ -938,6 +938,7 @@
 .disp-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .disp-table th {
@@ -969,11 +970,13 @@
 }
 
 .disp-name {
-  white-space: nowrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .disp-status {
   width: 70px;
+  min-width: 70px;
 }
 
 .disp-badge {
@@ -1000,6 +1003,8 @@
 }
 
 .disp-count {
+  width: 52px;
+  min-width: 52px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }

@@ -112,6 +112,13 @@ export const COUNTRY_BBOX: Record<string, { minLat: number; maxLat: number; minL
   MX: { minLat: 14.5, maxLat: 32.7, minLon: -118.4, maxLon: -86.7 },
   BR: { minLat: -33.7, maxLat: 5.3, minLon: -73.9, maxLon: -34.8 },
   AE: { minLat: 22.6, maxLat: 26.1, minLon: 51.6, maxLon: 56.4 },
+  KR: { minLat: 33.1, maxLat: 38.6, minLon: 125.1, maxLon: 131.9 },
+  IQ: { minLat: 29.1, maxLat: 37.4, minLon: 38.8, maxLon: 48.6 },
+  AF: { minLat: 29.4, maxLat: 38.5, minLon: 60.5, maxLon: 75.0 },
+  LB: { minLat: 33.1, maxLat: 34.7, minLon: 35.1, maxLon: 36.6 },
+  EG: { minLat: 22.0, maxLat: 31.7, minLon: 24.7, maxLon: 36.9 },
+  JP: { minLat: 24.4, maxLat: 45.5, minLon: 122.9, maxLon: 153.0 },
+  QA: { minLat: 24.5, maxLat: 26.2, minLon: 50.7, maxLon: 51.7 },
 };
 
 const ADVISORY_LEVELS_FALLBACK: Record<string, 'do-not-travel' | 'reconsider' | 'caution'> = {
@@ -119,7 +126,7 @@ const ADVISORY_LEVELS_FALLBACK: Record<string, 'do-not-travel' | 'reconsider' | 
   // must go through a formula-version/docs changelog batch.
   UA: 'do-not-travel', SY: 'do-not-travel', YE: 'do-not-travel', MM: 'do-not-travel',
   IL: 'reconsider', IR: 'reconsider', PK: 'reconsider', VE: 'reconsider', CU: 'reconsider', MX: 'reconsider',
-  RU: 'caution', TR: 'caution',
+  RU: 'caution', TR: 'caution', IQ: 'reconsider', AF: 'do-not-travel', LB: 'reconsider',
 };
 
 type AdvisoryLevel = 'do-not-travel' | 'reconsider' | 'caution';
@@ -863,7 +870,7 @@ async function fetchAuxiliarySources(): Promise<AuxiliarySources> {
 }
 
 export function computeCIIScores(
-  acled: Array<{ country: string; event_type: string; fatalities: number }>,
+  acled: Array<{ country: string; event_type: string; fatalities: number; daysAgo?: number }>,
   aux: AuxiliarySources,
   trendOptions: CiiTrendComparisonOptions = {},
 ): CiiScore[] {
@@ -880,7 +887,17 @@ export function computeCIIScores(
     data[code].advisoryProvenance = liveLevel ? 'live' : fallbackLevel ? 'fallback' : 'absent';
   }
 
-  // --- ACLED ingestion with fatality split ---
+  // --- Displacement ingestion (UNHCR — persists after ceasefires) ---
+  for (const [iso3, totalDisplaced] of Object.entries(aux.displacedByIso3 ?? {})) {
+    const iso2 = ISO3_TO_ISO2[iso3];
+    if (iso2 && data[iso2]) {
+      data[iso2].totalDisplaced = Math.max(data[iso2].totalDisplaced, totalDisplaced);
+    }
+  }
+
+  // --- ACLED ingestion with fatality split and time decay ---
+  // Events 0-7 days old: weight 1.0 (full impact)
+  // Events 8-30 days old: weight 0.4 (partial — captures post-ceasefire/post-conflict tail)
   for (const ev of acled) {
     const code = normalizeCountryName(ev.country);
     if (!code || !data[code]) continue;
@@ -889,23 +906,23 @@ export function computeCIIScores(
     const fatalities = safeNonNegativeNum(ev.fatalities);
     const fat = fatalities * weight;
     if (type.includes('protest')) {
-      data[code].protests++;
+      data[code].protests += weight;
       data[code].protestFatalities += fat;
       // High-severity = the event killed someone (classifySeverity rule).
       if (fatalities > 0) data[code].highSeverityUnrest += weight;
     } else if (type.includes('riot')) {
-      data[code].riots++;
+      data[code].riots += weight;
       data[code].protestFatalities += fat;
       // A riot is always high-severity (classifySeverity rule).
       data[code].highSeverityUnrest += weight;
     } else if (type.includes('battle')) {
-      data[code].battles++;
+      data[code].battles += weight;
       data[code].conflictFatalities += fat;
     } else if (type.includes('explosion') || type.includes('remote')) {
-      data[code].explosions++;
+      data[code].explosions += weight;
       data[code].conflictFatalities += fat;
     } else if (type.includes('violence')) {
-      data[code].civilianViolence++;
+      data[code].civilianViolence += weight;
       data[code].conflictFatalities += fat;
     }
     data[code].fatalities += fat;
@@ -1061,9 +1078,9 @@ export function computeCIIScores(
   }
 
   // --- OREF (IL only) ---
-  if (aux.orefData && data['IL']) {
-    data['IL'].orefAlertCount = aux.orefData.activeAlertCount;
-    data['IL'].orefHistoryCount24h = aux.orefData.historyCount24h;
+  if (aux.orefData && data.IL) {
+    data.IL.orefAlertCount = aux.orefData.activeAlertCount;
+    data.IL.orefHistoryCount24h = aux.orefData.historyCount24h;
   }
 
   // --- News insights threat scoring ---

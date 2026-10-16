@@ -12,7 +12,7 @@ Most cyber threat intelligence platforms show you indicators of compromise in is
 
 When a wave of phishing campaigns targets European energy companies, is it financially motivated or state-sponsored? When a country's internet goes dark, is it an infrastructure failure or a government-ordered shutdown? When botnet command-and-control servers cluster in a specific region, does it correlate with the geopolitical situation there?
 
-World Monitor answers these questions by putting cyber threat data on the same map as military movements, political instability scores, and infrastructure networks.
+World Monitor answers these questions by putting cyber threat data on the same map as [military movements and conflict tracking](/blog/posts/track-global-conflicts-in-real-time/), political instability scores, and infrastructure networks.
 
 ## Integrated Threat Feeds
 
@@ -61,7 +61,7 @@ World Monitor integrates **[Cloudflare Radar](https://radar.cloudflare.com/)** d
 
 - **Government-ordered shutdowns** during protests or elections
 - **Infrastructure failures** from natural disasters or attacks
-- **Submarine cable cuts** affecting regional connectivity
+- **Submarine cable cuts** affecting regional connectivity (see [global supply chain and infrastructure monitoring](/blog/posts/monitor-global-supply-chains-and-commodity-disruptions/))
 - **BGP hijacking** incidents redirecting traffic through unauthorized networks
 
 Mapping outages alongside conflict and protest data creates a powerful correlation: when a country's internet goes dark the same day CII spikes and Telegram OSINT reports protests, the pattern is clear.

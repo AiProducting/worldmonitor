@@ -15,6 +15,7 @@ function stripTS(src) {
   out = out.replace(/\bas\s+\{[^}]+\}/g, '');
   out = out.replace(/:\s*ReturnType<typeof\s+\w+>\s*\|\s*null/g, '');
   out = out.replace(/:\s*AbortController\s*\|\s*null/g, '');
+  out = out.replace(/:\s*\(\(\)\s*=>\s*void\)\s*\|\s*null/g, '');
   out = out.replace(/:\s*SmartPollReason/g, '');
   out = out.replace(/:\s*SmartPollContext/g, '');
   out = out.replace(/:\s*SmartPollOptions/g, '');

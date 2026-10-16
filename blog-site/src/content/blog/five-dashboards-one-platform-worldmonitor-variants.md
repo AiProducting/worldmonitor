@@ -19,7 +19,7 @@ World Monitor runs specialized dashboards from a single codebase. Switch between
 **Panel set:** Full geopolitical catalog
 **Focus:** Conflicts, military, infrastructure, geopolitical risk
 
-This is the flagship. World Monitor is built for OSINT analysts, defense researchers, journalists, and anyone who needs to understand global security dynamics.
+This is the flagship. World Monitor is built for OSINT analysts, defense researchers, journalists, and anyone who needs to [understand global security dynamics](/blog/posts/track-global-conflicts-in-real-time/).
 
 **Key features:**
 
@@ -65,7 +65,7 @@ Tech Monitor maps the global technology landscape: where AI is being built, wher
 **Panel set:** Finance catalog
 **Focus:** Markets, central banks, forex, Gulf FDI, macro signals
 
-Finance Monitor is for traders and analysts who know that markets move on geopolitics. It combines traditional financial data with the intelligence layers that drive price action.
+Finance Monitor is for [traders and analysts](/blog/posts/real-time-market-intelligence-for-traders-and-analysts/) who know that markets move on geopolitics. It combines traditional financial data with the intelligence layers that drive price action.
 
 **Key features:**
 
@@ -89,7 +89,7 @@ Finance Monitor is for traders and analysts who know that markets move on geopol
 **Panel set:** Commodity catalog
 **Focus:** Mining, metals, energy, supply chain disruption
 
-Commodity Monitor tracks the physical resources that power the global economy: where they're extracted, how they're priced, and what threatens their supply.
+Commodity Monitor tracks the physical resources that power the global economy: where they're extracted, how they're priced, and [what threatens their supply](/blog/posts/monitor-global-supply-chains-and-commodity-disruptions/).
 
 **Key features:**
 

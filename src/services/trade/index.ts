@@ -1,6 +1,6 @@
 /**
- * Trade policy intelligence service -- WTO data sources.
- * Trade restrictions, tariff trends, trade flows, and SPS/TBT barriers.
+ * Trade policy intelligence service.
+ * WTO MFN baselines, trade flows/barriers, and US customs/effective tariff context.
  */
 
 import { getRpcBaseUrl } from '@/services/rpc-client';
@@ -16,12 +16,14 @@ import { getHydratedData } from '@/services/bootstrap';
 import { TradeServiceClient } from '@/services/generated-rpc-clients';
 
 // Re-export types for consumers
-export type { TradeRestriction, TariffDataPoint, TradeFlowRecord, TradeBarrier };
+export type { TradeRestriction, TariffDataPoint, EffectiveTariffRate, TradeFlowRecord, TradeBarrier, CustomsRevenueMonth, ComtradeFlowRecord };
 export type {
   GetTradeRestrictionsResponse,
   GetTariffTrendsResponse,
   GetTradeFlowsResponse,
   GetTradeBarriersResponse,
+  GetCustomsRevenueResponse,
+  ListComtradeFlowsResponse,
 };
 
 // Two clients to prevent cross-entitlement cache leakage.
@@ -124,6 +126,8 @@ const emptyFlows: GetTradeFlowsResponse = {
   coverageStartYear: 0, coverageEndYear: 0,
 };
 const emptyBarriers: GetTradeBarriersResponse = { barriers: [], fetchedAt: '', upstreamUnavailable: false };
+const emptyRevenue: GetCustomsRevenueResponse = { months: [], fetchedAt: '', upstreamUnavailable: false };
+const emptyComtrade: ListComtradeFlowsResponse = { flows: [], fetchedAt: '', upstreamUnavailable: false };
 
 export async function fetchTradeRestrictions(countries: string[] = [], limit = 50): Promise<GetTradeRestrictionsResponse> {
   if (!isFeatureAvailable('wtoTrade')) return emptyRestrictions;

@@ -44,6 +44,7 @@ export interface CryptoQuote {
   price: number;
   change: number;
   sparkline: number[];
+  change7d: number;
 }
 
 export interface ListCommodityQuotesRequest {
@@ -2033,3 +2034,4 @@ export function createMarketServiceRoutes(
     },
   ];
 }
+

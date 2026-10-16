@@ -101,6 +101,7 @@ export {
   STRATEGIC_WATERWAYS,
 } from './geo';
 
+export { APT_GROUPS } from './apt-groups';
 export { GAMMA_IRRADIATORS } from './irradiators';
 export { PIPELINES, PIPELINE_COLORS } from './pipelines';
 export { PORTS } from './ports';

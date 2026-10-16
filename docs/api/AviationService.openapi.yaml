@@ -2267,6 +2267,8 @@ components:
                         - FLIGHT_DELAY_SOURCE_FAA
                         - FLIGHT_DELAY_SOURCE_EUROCONTROL
                         - FLIGHT_DELAY_SOURCE_COMPUTED
+                        - FLIGHT_DELAY_SOURCE_AVIATIONSTACK
+                        - FLIGHT_DELAY_SOURCE_NOTAM
                     description: FlightDelaySource represents the source of delay data.
                 updatedAt:
                     type: integer

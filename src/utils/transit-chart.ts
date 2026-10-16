@@ -72,16 +72,13 @@ export class TransitChart {
       fontSize: 'calc(11px * var(--wm-panel-effective-scale, 1))', color: 'var(--text-primary, #eee)',
       whiteSpace: 'nowrap', lineHeight: '1.6',
     });
+    container.appendChild(this.tooltip);
 
     this.legend = document.createElement('div');
     Object.assign(this.legend.style, {
       display: 'flex', flexWrap: 'wrap', gap: '8px 12px', padding: '5px 0 0',
     });
-
-    this.source = document.createElement('div');
-    Object.assign(this.source.style, { fontSize: '10px', color: 'var(--text-dim, #888)', paddingTop: '4px' });
-    this.source.textContent = 'Source: IMF PortWatch · 180d history';
-    container.appendChild(this.source);
+    container.appendChild(this.legend);
 
     this.source = document.createElement('div');
     Object.assign(this.source.style, {

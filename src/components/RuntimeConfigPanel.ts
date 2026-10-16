@@ -36,6 +36,7 @@ export class RuntimeConfigPanel extends Panel {
   private readonly mode: 'full' | 'alert';
   private readonly buffered: boolean;
   private readonly featureFilter?: RuntimeFeatureId[];
+  private hiddenByUser = false;
   private pendingSecrets = new Map<RuntimeSecretKey, string>();
   private validatedKeys = new Map<RuntimeSecretKey, boolean>();
   private validationMessages = new Map<RuntimeSecretKey, string>();
@@ -159,6 +160,25 @@ export class RuntimeConfigPanel extends Panel {
     this.unsubscribe = null;
   }
 
+  private setEffectiveVisibility(visible: boolean): void {
+    if (visible) super.show();
+    else super.hide();
+  }
+
+  public override show(): void {
+    this.hiddenByUser = false;
+    if (this.mode === 'alert') {
+      this.render();
+    } else {
+      this.setEffectiveVisibility(true);
+    }
+  }
+
+  public override hide(): void {
+    this.hiddenByUser = true;
+    this.setEffectiveVisibility(false);
+  }
+
   private captureUnsavedInputs(): void {
     if (!this.buffered) return;
     this.content.querySelectorAll<HTMLInputElement>('input[data-secret]').forEach((input) => {
@@ -196,19 +216,25 @@ export class RuntimeConfigPanel extends Panel {
     const features = this.getFilteredFeatures();
 
     if (desktop && this.mode === 'alert') {
+      if (this.hiddenByUser) {
+        this.setEffectiveVisibility(false);
+        return;
+      }
+
       const totalFeatures = RUNTIME_FEATURES.length;
       const availableFeatures = RUNTIME_FEATURES.filter((feature) => isFeatureAvailable(feature.id)).length;
       const missingFeatures = Math.max(0, totalFeatures - availableFeatures);
       const configuredCount = Object.keys(snapshot.secrets).length;
+      const alertState = configuredCount > 0
+        ? (missingFeatures > 0 ? 'some' : 'configured')
+        : 'needsKeys';
 
       if (missingFeatures === 0 && configuredCount >= totalFeatures) {
-        this.hide();
+        this.setEffectiveVisibility(false);
         return;
       }
 
-      const alertTitle = configuredCount > 0
-        ? (missingFeatures > 0 ? t('modals.runtimeConfig.alertTitle.some') : t('modals.runtimeConfig.alertTitle.configured'))
-        : t('modals.runtimeConfig.alertTitle.needsKeys');
+      const alertTitle = t(`modals.runtimeConfig.alertTitle.${alertState}`);
       const alertClass = missingFeatures > 0 ? 'warn' : 'ok';
 
       this.setEffectiveVisibility(true);
@@ -507,7 +533,7 @@ export class RuntimeConfigPanel extends Panel {
   private async fetchOllamaModels(select: HTMLSelectElement): Promise<void> {
     const snapshot = getRuntimeConfigSnapshot();
     const ollamaUrl = this.pendingSecrets.get('OLLAMA_API_URL')
-      || snapshot.secrets['OLLAMA_API_URL']?.value
+      || snapshot.secrets.OLLAMA_API_URL?.value
       || '';
     if (!ollamaUrl) {
       setTrustedHtml(select, trustedHtml('<option value="" disabled selected>Set Ollama URL first</option>', "legacy direct innerHTML migration"));
@@ -515,7 +541,7 @@ export class RuntimeConfigPanel extends Panel {
     }
 
     const currentModel = this.pendingSecrets.get('OLLAMA_MODEL')
-      || snapshot.secrets['OLLAMA_MODEL']?.value
+      || snapshot.secrets.OLLAMA_MODEL?.value
       || '';
 
     try {

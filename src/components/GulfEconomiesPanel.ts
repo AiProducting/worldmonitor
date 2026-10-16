@@ -32,7 +32,7 @@ function renderSection(title: string, quotes: GulfQuote[]): string {
 
 export class GulfEconomiesPanel extends Panel {
   constructor() {
-    super({ id: 'gulf-economies', title: t('panels.gulfEconomies') });
+    super({ id: 'gulf-economies', title: t('panels.gulfEconomies'), infoTooltip: t('components.gulfEconomies.infoTooltip') });
   }
 
   public async fetchData(): Promise<void> {

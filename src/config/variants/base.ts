@@ -8,12 +8,13 @@ export { SECTORS, COMMODITIES, MARKET_SYMBOLS } from '../markets';
 // '@/config/ai-datacenters'. (#4404)
 export { IDLE_PAUSE_MS } from '../idle';
 
-// Refresh intervals - shared across all variants
+// Refresh intervals (ms) - shared across all variants
 export const REFRESH_INTERVALS = {
   feeds: 20 * 60 * 1000,
   markets: 12 * 60 * 1000,
   crypto: 12 * 60 * 1000,
   predictions: 15 * 60 * 1000,
+  forecasts: 30 * 60 * 1000,
   ais: 15 * 60 * 1000,
   pizzint: 10 * 60 * 1000,
   natural: 60 * 60 * 1000,

@@ -9,10 +9,6 @@ ARG BUILDKIT_SBOM_SCAN_STAGE=true
 WORKDIR /app
 ENV npm_config_install_links=true
 
-# Install all dependencies (including devDependencies for tsc, vite, etc.).
-COPY package.json package-lock.json ./
-RUN npm ci --include=dev
-
 # Copy source and build.
 COPY . .
 

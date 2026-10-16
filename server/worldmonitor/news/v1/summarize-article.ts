@@ -96,7 +96,6 @@ export async function summarizeArticle(
     return payload;
   };
 
-  // Input sanitization (M-14 fix): limit headline count and length
   const MAX_HEADLINES = 10;
   const MAX_HEADLINE_LEN = 500;
   const MAX_GEO_CONTEXT_LEN = 2000;

@@ -1,4 +1,5 @@
 import { Panel } from './Panel';
+import { t } from '@/services/i18n';
 import type { StockAnalysisResult } from '@/services/stock-analysis';
 import { isAnalyzableSymbol } from '@/services/stock-analysis';
 import {

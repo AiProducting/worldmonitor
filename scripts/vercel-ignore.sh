@@ -59,7 +59,7 @@ fi
 [ -z "$COMPARE_SHA" ] && exit 1
 
 # Build if any of these web-relevant paths changed
-git diff --name-only "$VERCEL_GIT_PREVIOUS_SHA" HEAD -- \
+git diff --name-only "$COMPARE_SHA" HEAD -- \
   'src/' \
   'api/' \
   'server/' \

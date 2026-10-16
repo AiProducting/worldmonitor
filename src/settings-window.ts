@@ -41,7 +41,7 @@ export function initSettingsWindow(): void {
   // This window shows only "which panels to display" (panel display settings).
   document.title = `${t('header.settings')} - World Monitor`;
 
-  let panelSettings = loadFromStorage<Record<string, PanelConfig>>(
+  const panelSettings = loadFromStorage<Record<string, PanelConfig>>(
     STORAGE_KEYS.panels,
     DEFAULT_PANELS
   );
@@ -61,7 +61,7 @@ export function initSettingsWindow(): void {
 
   function render(): void {
     const panelEntries = Object.entries(panelSettings).filter(
-      ([key]) => key !== 'runtime-config' || isDesktopApp
+      ([key]) => (key !== 'runtime-config' || isDesktopApp) && (!key.startsWith('cw-') || isProUser())
     );
     const panelHtml = panelEntries
       .map(

@@ -3715,6 +3715,10 @@ components:
                         type: number
                         format: double
                         description: Sparkline data points (recent price history).
+                change7d:
+                    type: number
+                    format: double
+                    description: 7-day percentage change.
             required:
                 - symbol
             description: CryptoQuote represents a cryptocurrency quote from CoinGecko.

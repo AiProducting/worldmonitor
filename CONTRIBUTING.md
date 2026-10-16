@@ -568,10 +568,10 @@ Two ordering rules follow from the manifest being a fixpoint of the source tree:
 
 ### Country boundary overrides
 
-Country outlines are loaded from `public/data/countries.geojson`. Optional higher-resolution overrides (sourced from [Natural Earth](https://www.naturalearthdata.com/)) are served from R2 CDN. The app loads overrides after the main file and replaces geometry for any country whose `ISO3166-1-Alpha-2` (or `ISO_A2`) matches. To refresh the Pakistan boundary from Natural Earth, run:
+Country outlines are loaded from `public/data/countries.geojson`. Optional higher-resolution overrides (sourced from [Natural Earth](https://www.naturalearthdata.com/)) are served from R2 CDN. The app loads overrides after the main file and replaces geometry for any country whose `ISO3166-1-Alpha-2` (or `ISO_A2`) matches. To refresh boundary overrides from Natural Earth, run:
 
 ```bash
-node scripts/fetch-pakistan-boundary-override.mjs
+node scripts/fetch-country-boundary-overrides.mjs
 rclone copy public/data/country-boundary-overrides.geojson r2:worldmonitor-maps/
 ```
 

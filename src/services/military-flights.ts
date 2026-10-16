@@ -103,6 +103,14 @@ const breaker = createCircuitBreaker<{ flights: MilitaryFlight[]; clusters: Mili
   maxFailures: 3,
   cooldownMs: 5 * 60 * 1000, // 5 minute cooldown
   cacheTtlMs: 10 * 60 * 1000,
+  persistCache: true,
+  revivePersistedData: (data) => ({
+    ...data,
+    flights: data.flights.map((f: MilitaryFlight) => ({
+      ...f,
+      lastSeen: f.lastSeen instanceof Date ? f.lastSeen : new Date(f.lastSeen as unknown as string),
+    })),
+  }),
 });
 
 function mapProtoFlight(pf: ProtoMilitaryFlight, nowDate: Date): MilitaryFlight | null {
@@ -467,7 +475,7 @@ function clusterFlights(flights: MilitaryFlight[]): MilitaryFlightCluster[] {
   for (const hotspot of MILITARY_HOTSPOTS) {
     const nearbyFlights = flights.filter((f) => {
       if (processed.has(f.id)) return false;
-      const distance = Math.sqrt(Math.pow(f.lat - hotspot.lat, 2) + Math.pow(f.lon - hotspot.lon, 2));
+      const distance = Math.sqrt((f.lat - hotspot.lat) ** 2 + (f.lon - hotspot.lon) ** 2);
       return distance <= hotspot.radius;
     });
 

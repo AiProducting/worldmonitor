@@ -9,6 +9,12 @@ export interface ListWebcamsRequest {
   boundN: number;
 }
 
+export interface ListWebcamsResponse {
+  webcams: WebcamEntry[];
+  clusters: WebcamCluster[];
+  totalInView: number;
+}
+
 export interface WebcamEntry {
   webcamId: string;
   title: string;
@@ -25,12 +31,6 @@ export interface WebcamCluster {
   categories: string[];
 }
 
-export interface ListWebcamsResponse {
-  webcams: WebcamEntry[];
-  clusters: WebcamCluster[];
-  totalInView: number;
-}
-
 export interface GetWebcamImageRequest {
   webcamId: string;
 }
@@ -40,7 +40,7 @@ export interface GetWebcamImageResponse {
   playerUrl: string;
   title: string;
   windyUrl: string;
-  lastUpdated: number;
+  lastUpdated: string;
   error: string;
 }
 
@@ -161,3 +161,4 @@ export class WebcamServiceClient {
     throw new ApiError(resp.status, `Request failed with status ${resp.status}`, body);
   }
 }
+

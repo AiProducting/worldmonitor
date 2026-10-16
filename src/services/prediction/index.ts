@@ -88,7 +88,7 @@ export function protoToMarket(m: { id?: string; title: string; yesPrice: number;
     volume: m.volume,
     url: m.url || undefined,
     endDate: m.closesAt ? new Date(m.closesAt).toISOString() : undefined,
-    source: m.source === MarketSource.MARKET_SOURCE_KALSHI ? 'kalshi' : 'polymarket',
+    source: m.source === 'MARKET_SOURCE_KALSHI' ? 'kalshi' : 'polymarket',
     regions: tagRegions(m.title),
   };
 }
@@ -99,7 +99,7 @@ export async function fetchPredictionCandidates(opts?: { region?: string }): Pro
 }> {
   const markets = await breaker.execute(async () => {
     const hydrated = getHydratedData('predictions') as BootstrapPredictionData | undefined;
-    if (hydrated && hydrated.fetchedAt && Date.now() - hydrated.fetchedAt < 20 * 60 * 1000) {
+    if (hydrated?.fetchedAt && Date.now() - hydrated.fetchedAt < 40 * 60 * 1000) {
       const variant = SITE_VARIANT === 'tech' ? hydrated.tech
         : SITE_VARIANT === 'finance' ? (hydrated.finance ?? hydrated.geopolitical)
         : hydrated.geopolitical;

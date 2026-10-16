@@ -4,6 +4,7 @@ import type {
   CascadeResult,
   UnderseaCable,
   Pipeline,
+  Port,
 } from '@/types';
 import { STRATEGIC_WATERWAYS } from '@/config/geo';
 import {

@@ -4,7 +4,7 @@ import { invokeTauri } from './tauri-bridge';
 
 export type RuntimeSecretKey =
   | 'OPENROUTER_API_KEY'
-  | 'TAVILY_API_KEYS'
+  | 'EXA_API_KEYS'
   | 'BRAVE_API_KEYS'
   | 'SERPAPI_API_KEYS'
   | 'FRED_API_KEY'
@@ -32,7 +32,7 @@ export type RuntimeSecretKey =
 
 export type RuntimeFeatureId =
   | 'aiOpenRouter'
-  | 'stockNewsSearchTavily'
+  | 'stockNewsSearchExa'
   | 'stockNewsSearchBrave'
   | 'stockNewsSearchSerpApi'
   | 'economicFred'
@@ -81,7 +81,7 @@ const TOGGLES_STORAGE_KEY = 'worldmonitor-runtime-feature-toggles';
 
 const defaultToggles: Record<RuntimeFeatureId, boolean> = {
   aiOpenRouter: true,
-  stockNewsSearchTavily: true,
+  stockNewsSearchExa: true,
   stockNewsSearchBrave: true,
   stockNewsSearchSerpApi: true,
   economicFred: true,
@@ -122,10 +122,10 @@ export const RUNTIME_FEATURES: RuntimeFeatureDefinition[] = [
     fallback: 'Falls back to local browser model only.',
   },
   {
-    id: 'stockNewsSearchTavily',
-    name: 'Tavily stock-news search',
+    id: 'stockNewsSearchExa',
+    name: 'Exa stock-news search',
     description: 'Primary targeted stock-news search provider for premium analysis enrichment.',
-    requiredSecrets: ['TAVILY_API_KEYS'],
+    requiredSecrets: ['EXA_API_KEYS'],
     fallback: 'Falls back to Brave, then SerpAPI, then Google News RSS.',
   },
   {
@@ -266,8 +266,8 @@ export const RUNTIME_FEATURES: RuntimeFeatureDefinition[] = [
   {
     id: 'aviationStack',
     name: 'AviationStack flight delays',
-    description: 'Real-time international airport delay data from AviationStack API.',
-    requiredSecrets: ['AVIATIONSTACK_API'],
+    description: 'Real-time international airport delay data via Railway relay (seed loop + proxy).',
+    requiredSecrets: ['WS_RELAY_URL'],
     fallback: 'Non-US airports use simulated delay data.',
   },
   {

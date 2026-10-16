@@ -67,14 +67,6 @@ export interface DirectionalDwt {
   wowChangePct: number;
 }
 
-export interface TransitDayCount {
-  date: string;
-  tanker: number;
-  cargo: number;
-  other: number;
-  total: number;
-}
-
 export interface TransitSummary {
   todayTotal: number;
   todayTanker: number;

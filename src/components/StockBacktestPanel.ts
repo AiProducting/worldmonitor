@@ -1,4 +1,5 @@
 import { Panel } from './Panel';
+import { t } from '@/services/i18n';
 import type { StockBacktestResult } from '@/services/stock-backtest';
 import { escapeHtml, unsafeRawHtml } from '@/utils/sanitize';
 import { createWatchlistButton } from './watchlist-modal';

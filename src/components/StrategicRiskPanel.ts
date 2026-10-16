@@ -272,6 +272,8 @@ export class StrategicRiskPanel extends Panel {
       case 'convergence': return '🎯';
       case 'cii_spike': return '📊';
       case 'cascade': return '🔗';
+      case 'sanctions': return '🚫';
+      case 'radiation': return '☢️';
       case 'composite': return '⚠️';
       default: return '📍';
     }
@@ -438,7 +440,7 @@ export class StrategicRiskPanel extends Panel {
         <div class="risk-section-title">${t('components.strategicRisk.recentAlerts', { count: String(this.alerts.length) })}</div>
         <div class="risk-alerts">
           ${displayAlerts.map(alert => {
-      const hasLocation = alert.location && alert.location.lat && alert.location.lon;
+      const hasLocation = alert.location?.lat && alert.location.lon;
       const clickableClass = hasLocation ? 'risk-alert-clickable' : '';
       const locationAttrs = hasLocation
         ? `data-lat="${alert.location!.lat}" data-lon="${alert.location!.lon}" role="button" tabindex="0"`
@@ -532,7 +534,7 @@ export class StrategicRiskPanel extends Panel {
       item.addEventListener('click', () => {
         const lat = parseFloat((item as HTMLElement).dataset.lat || '0');
         const lon = parseFloat((item as HTMLElement).dataset.lon || '0');
-        if (this.onLocationClick && !isNaN(lat) && !isNaN(lon)) {
+        if (this.onLocationClick && !Number.isNaN(lat) && !Number.isNaN(lon)) {
           this.onLocationClick(lat, lon);
         }
       });
@@ -544,7 +546,7 @@ export class StrategicRiskPanel extends Panel {
       alert.addEventListener('click', () => {
         const lat = parseFloat((alert as HTMLElement).dataset.lat || '0');
         const lon = parseFloat((alert as HTMLElement).dataset.lon || '0');
-        if (this.onLocationClick && !isNaN(lat) && !isNaN(lon)) {
+        if (this.onLocationClick && !Number.isNaN(lat) && !Number.isNaN(lon)) {
           this.onLocationClick(lat, lon);
         }
       });

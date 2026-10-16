@@ -85,6 +85,37 @@ export interface BaselineStats {
   sampleCount: number;
 }
 
+export interface GetIpGeoRequest {
+}
+
+export interface GetIpGeoResponse {
+  country: string;
+  region: string;
+  city: string;
+}
+
+export interface ReverseGeocodeRequest {
+  lat: number;
+  lon: number;
+}
+
+export interface ReverseGeocodeResponse {
+  country: string;
+  code: string;
+  displayName: string;
+  error: string;
+}
+
+export interface GetBootstrapDataRequest {
+  tier: string;
+  keys: string[];
+}
+
+export interface GetBootstrapDataResponse {
+  data: Record<string, string>;
+  missing: string[];
+}
+
 export interface RecordBaselineSnapshotRequest {
   updates: BaselineUpdate[];
 }
@@ -98,26 +129,6 @@ export interface BaselineUpdate {
 export interface RecordBaselineSnapshotResponse {
   updated: number;
   error: string;
-}
-
-export interface ListTemporalAnomaliesRequest {
-}
-
-export interface ListTemporalAnomaliesResponse {
-  anomalies: TemporalAnomalyProto[];
-  trackedTypes: string[];
-  computedAt: string;
-}
-
-export interface TemporalAnomalyProto {
-  type: string;
-  region: string;
-  currentCount: number;
-  expectedCount: number;
-  zScore: number;
-  severity: string;
-  multiplier: number;
-  message: string;
 }
 
 export interface GetCableHealthRequest {
@@ -140,6 +151,73 @@ export interface CableHealthEvidence {
   source: string;
   summary: string;
   ts: number;
+}
+
+export interface ListTemporalAnomaliesRequest {
+}
+
+export interface ListTemporalAnomaliesResponse {
+  anomalies: TemporalAnomaly[];
+  trackedTypes: string[];
+  computedAt: string;
+}
+
+export interface TemporalAnomaly {
+  type: string;
+  region: string;
+  currentCount: number;
+  expectedCount: number;
+  zScore: number;
+  severity: string;
+  multiplier: number;
+  message: string;
+}
+
+export interface ListInternetDdosAttacksRequest {
+}
+
+export interface ListInternetDdosAttacksResponse {
+  protocol: DdosAttackSummaryEntry[];
+  vector: DdosAttackSummaryEntry[];
+  dateRangeStart: string;
+  dateRangeEnd: string;
+  topTargetLocations: DdosLocationHit[];
+}
+
+export interface DdosAttackSummaryEntry {
+  label: string;
+  percentage: number;
+}
+
+export interface DdosLocationHit {
+  countryCode: string;
+  countryName: string;
+  percentage: number;
+  latitude: number;
+  longitude: number;
+}
+
+export interface ListInternetTrafficAnomaliesRequest {
+  country: string;
+}
+
+export interface ListInternetTrafficAnomaliesResponse {
+  anomalies: TrafficAnomaly[];
+  totalCount: number;
+}
+
+export interface TrafficAnomaly {
+  uuid: string;
+  type: string;
+  status: string;
+  startDate: number;
+  endDate: number;
+  asn: string;
+  asnName: string;
+  locationCode: string;
+  locationName: string;
+  latitude: number;
+  longitude: number;
 }
 
 export type CableHealthStatus = "CABLE_HEALTH_STATUS_UNSPECIFIED" | "CABLE_HEALTH_STATUS_OK" | "CABLE_HEALTH_STATUS_DEGRADED" | "CABLE_HEALTH_STATUS_FAULT";
@@ -196,9 +274,14 @@ export interface InfrastructureServiceHandler {
   listInternetOutages(ctx: ServerContext, req: ListInternetOutagesRequest): Promise<ListInternetOutagesResponse>;
   listServiceStatuses(ctx: ServerContext, req: ListServiceStatusesRequest): Promise<ListServiceStatusesResponse>;
   getTemporalBaseline(ctx: ServerContext, req: GetTemporalBaselineRequest): Promise<GetTemporalBaselineResponse>;
+  getIpGeo(ctx: ServerContext, req: GetIpGeoRequest): Promise<GetIpGeoResponse>;
+  reverseGeocode(ctx: ServerContext, req: ReverseGeocodeRequest): Promise<ReverseGeocodeResponse>;
+  getBootstrapData(ctx: ServerContext, req: GetBootstrapDataRequest): Promise<GetBootstrapDataResponse>;
   recordBaselineSnapshot(ctx: ServerContext, req: RecordBaselineSnapshotRequest): Promise<RecordBaselineSnapshotResponse>;
   getCableHealth(ctx: ServerContext, req: GetCableHealthRequest): Promise<GetCableHealthResponse>;
   listTemporalAnomalies(ctx: ServerContext, req: ListTemporalAnomaliesRequest): Promise<ListTemporalAnomaliesResponse>;
+  listInternetDdosAttacks(ctx: ServerContext, req: ListInternetDdosAttacksRequest): Promise<ListInternetDdosAttacksResponse>;
+  listInternetTrafficAnomalies(ctx: ServerContext, req: ListInternetTrafficAnomaliesRequest): Promise<ListInternetTrafficAnomaliesResponse>;
 }
 
 export function createInfrastructureServiceRoutes(
@@ -582,6 +665,90 @@ export function createInfrastructureServiceRoutes(
 
           const result = await handler.listTemporalAnomalies(ctx, body);
           return new Response(JSON.stringify(result as ListTemporalAnomaliesResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/infrastructure/v1/list-internet-ddos-attacks",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const body = {} as ListInternetDdosAttacksRequest;
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.listInternetDdosAttacks(ctx, body);
+          return new Response(JSON.stringify(result as ListInternetDdosAttacksResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/infrastructure/v1/list-internet-traffic-anomalies",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: ListInternetTrafficAnomaliesRequest = {
+            country: params.get("country") ?? "",
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("listInternetTrafficAnomalies", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.listInternetTrafficAnomalies(ctx, body);
+          return new Response(JSON.stringify(result as ListInternetTrafficAnomaliesResponse), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });

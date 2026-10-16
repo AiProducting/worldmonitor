@@ -368,56 +368,14 @@ function buildRiskWatch(items: DailyMarketBriefItem[], headlines: NewsItem[]): s
   return 'Risk watch is centered on macro follow-through, index breadth, and any abrupt reversal in the strongest names.';
 }
 
-function buildSummaryInputs(items: DailyMarketBriefItem[], headlines: NewsItem[]): string[] {
-  const marketLines = items.map((item) => {
+function buildSummaryInputs(items: DailyMarketBriefItem[], headlines: NewsItem[]): { headlines: string[]; marketContext: string } {
+  const marketContext = items.map((item) => {
     const change = formatSignedPercent(item.change);
-    const price = typeof item.price === 'number' ? ` at ${item.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '';
-    return `${item.name} (${item.display}) is ${change}${price}; stance is ${item.stance}.`;
-  });
+    return `${item.name} (${item.display}) ${change}`;
+  }).join(', ');
 
   const headlineLines = headlines.slice(0, 6).map((item) => item.title.trim()).filter(Boolean);
-  return [...marketLines, ...headlineLines];
-}
-
-function buildExtendedMarketContext(
-  baseContext: string,
-  regime?: RegimeMacroContext,
-  yieldCurve?: YieldCurveContext,
-  sector?: SectorBriefContext,
-): string {
-  const parts: string[] = [`Markets: ${baseContext}`];
-
-  if (regime && regime.compositeScore > 0) {
-    const lines = [
-      `Fear & Greed: ${regime.compositeScore.toFixed(0)} (${regime.compositeLabel})`,
-    ];
-    if (regime.fsiValue > 0) lines.push(`FSI: ${regime.fsiValue.toFixed(2)} (${regime.fsiLabel})`);
-    if (regime.vix > 0) lines.push(`VIX: ${regime.vix.toFixed(1)}`);
-    if (regime.hySpread > 0) lines.push(`HY Spread: ${regime.hySpread.toFixed(0)}bps`);
-    if (regime.cnnFearGreed > 0) lines.push(`CNN F&G: ${regime.cnnFearGreed.toFixed(0)} (${regime.cnnLabel})`);
-    if (regime.momentum) lines.push(`Momentum: ${regime.momentum.score.toFixed(0)}/100`);
-    if (regime.sentiment) lines.push(`Sentiment: ${regime.sentiment.score.toFixed(0)}/100`);
-    parts.push(`Market Stress Indicators:\n${lines.join('\n')}`);
-  }
-
-  if (yieldCurve && yieldCurve.rate10y > 0) {
-    const spreadStr = (yieldCurve.spread2s10s >= 0 ? '+' : '') + yieldCurve.spread2s10s.toFixed(0);
-    parts.push([
-      `Yield Curve: ${yieldCurve.inverted ? 'INVERTED' : 'NORMAL'} (2s/10s ${spreadStr}bps)`,
-      `2Y: ${yieldCurve.rate2y.toFixed(2)}%  10Y: ${yieldCurve.rate10y.toFixed(2)}%  30Y: ${yieldCurve.rate30y.toFixed(2)}%`,
-    ].join('\n'));
-  }
-
-  if (sector && sector.total > 0) {
-    const topSign = sector.topChange >= 0 ? '+' : '';
-    const worstSign = sector.worstChange >= 0 ? '+' : '';
-    parts.push([
-      `Sectors: ${sector.countPositive}/${sector.total} positive`,
-      `Top: ${sector.topName} ${topSign}${sector.topChange.toFixed(1)}%  Worst: ${sector.worstName} ${worstSign}${sector.worstChange.toFixed(1)}%`,
-    ].join('\n'));
-  }
-
-  return parts.join('\n\n');
+  return { headlines: headlineLines, marketContext };
 }
 
 function buildExtendedMarketContext(
@@ -564,7 +522,7 @@ export async function buildDailyMarketBrief(options: BuildDailyMarketBriefOption
   let model = '';
   let fallback = true;
 
-  if (summaryInputs.length >= 2) {
+  if (summaryHeadlines.length >= 1) {
     try {
       const summaryProvider = options.summarize || await getDefaultSummarizer();
       const generated = await withTimeout(

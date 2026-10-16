@@ -85,6 +85,37 @@ export interface BaselineStats {
   sampleCount: number;
 }
 
+export interface GetIpGeoRequest {
+}
+
+export interface GetIpGeoResponse {
+  country: string;
+  region: string;
+  city: string;
+}
+
+export interface ReverseGeocodeRequest {
+  lat: number;
+  lon: number;
+}
+
+export interface ReverseGeocodeResponse {
+  country: string;
+  code: string;
+  displayName: string;
+  error: string;
+}
+
+export interface GetBootstrapDataRequest {
+  tier: string;
+  keys: string[];
+}
+
+export interface GetBootstrapDataResponse {
+  data: Record<string, string>;
+  missing: string[];
+}
+
 export interface RecordBaselineSnapshotRequest {
   updates: BaselineUpdate[];
 }
@@ -98,26 +129,6 @@ export interface BaselineUpdate {
 export interface RecordBaselineSnapshotResponse {
   updated: number;
   error: string;
-}
-
-export interface ListTemporalAnomaliesRequest {
-}
-
-export interface ListTemporalAnomaliesResponse {
-  anomalies: TemporalAnomalyProto[];
-  trackedTypes: string[];
-  computedAt: string;
-}
-
-export interface TemporalAnomalyProto {
-  type: string;
-  region: string;
-  currentCount: number;
-  expectedCount: number;
-  zScore: number;
-  severity: string;
-  multiplier: number;
-  message: string;
 }
 
 export interface GetCableHealthRequest {
@@ -140,6 +151,73 @@ export interface CableHealthEvidence {
   source: string;
   summary: string;
   ts: number;
+}
+
+export interface ListTemporalAnomaliesRequest {
+}
+
+export interface ListTemporalAnomaliesResponse {
+  anomalies: TemporalAnomaly[];
+  trackedTypes: string[];
+  computedAt: string;
+}
+
+export interface TemporalAnomaly {
+  type: string;
+  region: string;
+  currentCount: number;
+  expectedCount: number;
+  zScore: number;
+  severity: string;
+  multiplier: number;
+  message: string;
+}
+
+export interface ListInternetDdosAttacksRequest {
+}
+
+export interface ListInternetDdosAttacksResponse {
+  protocol: DdosAttackSummaryEntry[];
+  vector: DdosAttackSummaryEntry[];
+  dateRangeStart: string;
+  dateRangeEnd: string;
+  topTargetLocations: DdosLocationHit[];
+}
+
+export interface DdosAttackSummaryEntry {
+  label: string;
+  percentage: number;
+}
+
+export interface DdosLocationHit {
+  countryCode: string;
+  countryName: string;
+  percentage: number;
+  latitude: number;
+  longitude: number;
+}
+
+export interface ListInternetTrafficAnomaliesRequest {
+  country: string;
+}
+
+export interface ListInternetTrafficAnomaliesResponse {
+  anomalies: TrafficAnomaly[];
+  totalCount: number;
+}
+
+export interface TrafficAnomaly {
+  uuid: string;
+  type: string;
+  status: string;
+  startDate: number;
+  endDate: number;
+  asn: string;
+  asnName: string;
+  locationCode: string;
+  locationName: string;
+  latitude: number;
+  longitude: number;
 }
 
 export type CableHealthStatus = "CABLE_HEALTH_STATUS_UNSPECIFIED" | "CABLE_HEALTH_STATUS_OK" | "CABLE_HEALTH_STATUS_DEGRADED" | "CABLE_HEALTH_STATUS_FAULT";

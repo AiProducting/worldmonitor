@@ -1,15 +1,12 @@
 /**
- * RPC: listHackernewsItems
- *
- * Fetches Hacker News stories via the Firebase JSON API with a 2-step fetch
- * (IDs then items) and bounded concurrency. Returns empty array on any failure.
+ * RPC: listHackernewsItems -- reads seeded HN data from Railway seed cache.
+ * All external Hacker News Firebase API calls happen in seed-research.mjs on Railway.
  */
 
 import type {
   ServerContext,
   ListHackernewsItemsRequest,
   ListHackernewsItemsResponse,
-  HackernewsItem,
 } from '../../../../src/generated/server/worldmonitor/research/v1/service_server';
 
 import filterParamContracts from '../../../../shared/openapi-filter-param-contracts.json';

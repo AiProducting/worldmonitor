@@ -155,25 +155,16 @@ export function mapErrorToResponse(error: unknown, _req: Request): Response {
 
   // JSON parse errors from req.json() on malformed/empty POST body → 400 not 500
   if (error instanceof SyntaxError) {
-    return new Response(JSON.stringify({ message: 'Invalid request body' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonMessageResponse('Invalid request body', 400);
   }
 
   // Network/fetch errors: upstream is unreachable (M-5 fix: runtime-agnostic detection)
   if (isNetworkError(error)) {
     console.error('[error-mapper] Network error (502):', (error as Error).message);
-    return new Response(JSON.stringify({ message: 'Upstream unavailable' }), {
-      status: 502,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonMessageResponse('Upstream unavailable', 502);
   }
 
   // Catch-all: 500 Internal Server Error
   console.error('[error-mapper] Unhandled error:', error instanceof Error ? error.message : error);
-  return new Response(JSON.stringify({ message: 'Internal server error' }), {
-    status: 500,
-    headers: { 'Content-Type': 'application/json' },
-  });
+  return jsonMessageResponse('Internal server error', 500);
 }

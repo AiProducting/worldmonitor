@@ -150,23 +150,7 @@ describe('premium gateway API key enforcement', () => {
         'X-WorldMonitor-Key': 'real-key-123',
       },
     }));
-    assert.equal(premiumAllowed.status, 200);
-
-    const resilienceScoreWithKey = await handler(new Request('https://worldmonitor.app/api/resilience/v1/get-resilience-score?countryCode=US', {
-      headers: {
-        Origin: 'https://worldmonitor.app',
-        'X-WorldMonitor-Key': 'real-key-123',
-      },
-    }));
-    assert.equal(resilienceScoreWithKey.status, 200);
-
-    const resilienceRankingWithKey = await handler(new Request('https://worldmonitor.app/api/resilience/v1/get-resilience-ranking', {
-      headers: {
-        Origin: 'https://worldmonitor.app',
-        'X-WorldMonitor-Key': 'real-key-123',
-      },
-    }));
-    assert.equal(resilienceRankingWithKey.status, 200);
+    assert.equal(browserWithKey.status, 200);
 
     const resilienceScoreWithKey = await handler(new Request('https://worldmonitor.app/api/resilience/v1/get-resilience-score?countryCode=US', {
       headers: {

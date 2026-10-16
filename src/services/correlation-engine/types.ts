@@ -1,5 +1,6 @@
 // Core types for the correlation engine
 
+// boundary-ignore: AppContext is an aggregate type that lives in app/ by design
 import type { AppContext } from '@/app/app-context';
 import type { CorrelationDomain } from '@/types/correlation';
 

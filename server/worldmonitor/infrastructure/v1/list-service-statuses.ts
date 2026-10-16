@@ -7,7 +7,7 @@ import type {
 } from '../../../../src/generated/server/worldmonitor/infrastructure/v1/service_server';
 
 import { UPSTREAM_TIMEOUT_MS } from './_shared';
-import { cachedFetchJson } from '../../../_shared/redis';
+import { cachedFetchJsonWithMeta, setCachedJson } from '../../../_shared/redis';
 import { CHROME_UA } from '../../../_shared/constants';
 
 // ========================================================================

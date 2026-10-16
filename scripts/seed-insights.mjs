@@ -1111,7 +1111,13 @@ async function fetchInsights() {
   const fastMovingCount = 0; // velocity not available in digest items
 
   const enrichedStories = topStories.map(story => {
-    const { category, threatLevel } = categorizeStory(story.primaryTitle);
+    // Use digest threat when present and not keyword-sourced (keyword threat uses old taxonomy).
+    // Fall back to categorizeStory() for legacy/incomplete payloads.
+    const hasDigestThreat = story.threat?.level && story.threat?.source !== 'keyword';
+    const { category, threatLevel } = hasDigestThreat
+      ? { category: story.threat.category ?? 'general', threatLevel: story.threat.level }
+      : categorizeStory(story.primaryTitle);
+    const countryCode = extractCountryCode(story.primaryTitle) ?? null;
     return {
       primaryTitle: story.primaryTitle,
       primarySource: story.primarySource,
@@ -1142,6 +1148,7 @@ async function fetchInsights() {
       isAlert: story.isAlert,
       category,
       threatLevel,
+      countryCode,
     };
   });
 

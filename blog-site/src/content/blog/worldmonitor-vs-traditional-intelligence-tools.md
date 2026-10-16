@@ -123,7 +123,7 @@ The fundamental difference isn't any single feature. It's that World Monitor fus
 | Price | $24K/yr (Quartz, 2022) | Undisclosed (enterprise-negotiated) | Undisclosed (enterprise-negotiated) | Undisclosed (enterprise-negotiated) | Free |
 | Open source | No | No | No | No | AGPL-3.0 |
 
-No single traditional tool covers all these domains. Analysts typically cobble together 5-6 subscriptions. World Monitor provides integrated coverage across all of them.
+No single traditional tool covers all these domains. Analysts typically cobble together 5-6 subscriptions. World Monitor provides integrated coverage across all of them. For a deeper dive into the market intelligence capabilities, see [Real-Time Market Intelligence for Traders](/blog/posts/real-time-market-intelligence-for-traders-and-analysts/).
 
 ## What World Monitor Doesn't Do
 

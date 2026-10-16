@@ -1,3 +1,4 @@
+import { getPersistentCache, setPersistentCache } from '@/services/persistent-cache';
 import { isDesktopRuntime, toApiUrl } from '@/services/runtime';
 import {
   buildBootstrapTransferRumSample,

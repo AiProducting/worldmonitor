@@ -463,6 +463,7 @@ export class IntelligenceFindingsBadge {
     }
     if (alert.type === 'convergence') return t('components.intelligenceFindings.insights.convergence');
     if (alert.type === 'cascade') return t('components.intelligenceFindings.insights.cascade');
+    if (alert.type === 'radiation') return 'Elevated radiation readings warrant validation against recent baseline and nearby industrial or environmental activity';
     return t('components.intelligenceFindings.insights.review');
   }
 
@@ -486,6 +487,7 @@ export class IntelligenceFindingsBadge {
       // Unified alerts
       cii_spike: '🔴',
       cascade: '⚡',
+      radiation: '☢️',
       composite: '🔗',
     };
     return icons[type] || '📌';

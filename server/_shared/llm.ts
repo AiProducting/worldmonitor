@@ -94,11 +94,11 @@ export function getProviderCredentials(
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const apiKey = process.env.OLLAMA_API_KEY;
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
     return {
       apiUrl: new URL('/v1/chat/completions', baseUrl).toString(),
-      model: process.env.OLLAMA_MODEL || 'llama3.1:8b',
+      model: overrides.model || process.env.OLLAMA_MODEL || 'llama3.1:8b',
       headers,
       extraBody: { think: false },
     };
@@ -125,6 +125,21 @@ export function getProviderCredentials(
       extraBody: {
         ...(overrides.enableReasoning ? {} : { reasoning: { enabled: false } }),
         provider: OPENROUTER_PROVIDER_ROUTING,
+      },
+    };
+  }
+
+  // Generic OpenAI-compatible endpoint via LLM_API_URL/LLM_API_KEY/LLM_MODEL
+  if (provider === 'generic') {
+    const apiUrl = process.env.LLM_API_URL;
+    const apiKey = process.env.LLM_API_KEY;
+    if (!apiUrl || !apiKey) return null;
+    return {
+      apiUrl,
+      model: overrides.model || process.env.LLM_MODEL || 'gpt-3.5-turbo',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
     };
   }
@@ -198,6 +213,10 @@ export interface LlmCallOptions {
   maxTokens?: number;
   timeoutMs?: number;
   provider?: string;
+  // Optional overrides. When omitted, the historic provider chain and default
+  // provider models remain unchanged for all existing callers.
+  providerOrder?: string[];
+  modelOverrides?: Partial<Record<LlmProviderName, string>>;
   stripThinkingTags?: boolean;
   validate?: (content: string) => boolean;
   /** Optional text to append to the system message (index 0). Appended as \n\n---\n\n<systemAppend>. No-op if no system message at index 0. */
@@ -555,6 +574,8 @@ export async function callLlm(opts: LlmCallOptions): Promise<LlmCallResult | nul
     maxTokens = 1500,
     timeoutMs = 25_000,
     provider: forcedProvider,
+    providerOrder,
+    modelOverrides,
     stripThinkingTags: shouldStrip = true,
     validate,
     systemAppend,

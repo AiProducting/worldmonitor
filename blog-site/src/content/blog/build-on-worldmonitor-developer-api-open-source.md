@@ -129,7 +129,7 @@ Feed World Monitor data into your own analytics:
 Academic researchers can use the API programmatically:
 
 - Study the relationship between news velocity and conflict escalation
-- Analyze prediction market accuracy against actual outcomes
+- Analyze prediction market accuracy against actual outcomes (see [prediction markets and AI forecasting](/blog/posts/prediction-markets-ai-forecasting-geopolitics/))
 - Build custom scoring models using World Monitor's raw data feeds
 
 ### Mobile Apps
@@ -156,7 +156,7 @@ Every developer surface has a dedicated, named page you can jump to directly —
 
 ## Self-Hosting
 
-World Monitor is AGPL-3.0. You can self-host the entire platform:
+World Monitor is AGPL-3.0. You can self-host the entire platform, including [local AI capabilities that run without cloud dependencies](/blog/posts/ai-powered-intelligence-without-the-cloud/):
 
 **Frontend:** React + TypeScript + Vite. Standard `npm install && npm run build`.
 
@@ -206,7 +206,7 @@ For reference, World Monitor is built with:
 
 ## Why Build on World Monitor?
 
-The intelligence industry has a consolidation problem. A handful of vendors control the data, the algorithms, and the interfaces. Analysts are locked into ecosystems they can't customize, audit, or extend.
+The intelligence industry has a consolidation problem. A handful of vendors control the data, the algorithms, and the interfaces. Analysts are locked into ecosystems they can't customize, audit, or extend. See how World Monitor [compares to traditional intelligence tools](/blog/posts/worldmonitor-vs-traditional-intelligence-tools/) in practice.
 
 World Monitor's open, typed, proto-first architecture is the alternative:
 

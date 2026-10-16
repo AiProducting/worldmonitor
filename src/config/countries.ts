@@ -231,6 +231,13 @@ export const TIER1_COUNTRIES: Record<string, string> = {
   AE: 'United Arab Emirates',
   MX: 'Mexico',
   CU: 'Cuba',
+  KR: 'South Korea',
+  IQ: 'Iraq',
+  AF: 'Afghanistan',
+  LB: 'Lebanon',
+  EG: 'Egypt',
+  JP: 'Japan',
+  QA: 'Qatar',
 };
 
 export const DEFAULT_BASELINE_RISK = DEFAULT_CII_BASELINE_RISK;

@@ -213,8 +213,15 @@ export class BreakingNewsBanner {
     const panel = document.querySelector(`[data-panel="${panelId}"]`);
     if (!panel) return;
     panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    panel.classList.add('flash-highlight');
-    setTimeout(() => panel.classList.remove('flash-highlight'), 1500);
+    const prev = this.highlightTimers.get(panel);
+    if (prev) clearTimeout(prev);
+    panel.classList.remove('search-highlight');
+    void (panel as HTMLElement).offsetWidth;
+    panel.classList.add('search-highlight');
+    this.highlightTimers.set(panel, setTimeout(() => {
+      panel.classList.remove('search-highlight');
+      this.highlightTimers.delete(panel);
+    }, 3100));
   }
 
   private createAlertElement(alert: BreakingAlert): HTMLElement {

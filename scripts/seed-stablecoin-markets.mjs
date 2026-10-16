@@ -12,7 +12,7 @@ const stablecoinConfig = loadSharedConfig('stablecoins.json');
 loadEnvFile(import.meta.url);
 
 const CANONICAL_KEY = 'market:stablecoins:v1';
-const CACHE_TTL = 3600; // 1 hour
+const CACHE_TTL = 5400; // 90min — 1h buffer over 10min cron cadence (was 60min = 50min buffer)
 
 const STABLECOIN_IDS = stablecoinConfig.ids.join(',');
 const COINPAPRIKA_ID_MAP = stablecoinConfig.coinpaprika;
@@ -127,6 +127,6 @@ if (isMain) runSeed('market', 'stablecoins', CANONICAL_KEY, fetchStablecoinMarke
   schemaVersion: 1,
   maxStaleMin: 60,
 }).catch((err) => {
-  console.error('FATAL:', err.message || err);
+  const _cause = err.cause ? ` (cause: ${err.cause.message || err.cause.code || err.cause})` : ''; console.error('FATAL:', (err.message || err) + _cause);
   process.exit(1);
 });

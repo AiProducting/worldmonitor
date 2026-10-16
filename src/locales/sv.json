@@ -811,7 +811,8 @@
       "token": "Token",
       "mcap": "Börsv.",
       "vol24h": "24t volym",
-      "chg24h": "24h Ändr"
+      "chg24h": "24h Ändr",
+      "infoTooltip": "<strong>Stablecoins</strong> Peg health, market cap, and 24h volume for major USD-pegged tokens (USDT, USDC, DAI, BUSD). A broken peg signals systemic risk."
     },
     "status": {
       "updatedAt": "Uppdaterad {{time}}"
@@ -1122,7 +1123,7 @@
       }
     },
     "gdeltIntel": {
-      "infoTooltip": "<strong>GDELT Intelligence</strong> Global nyhetsövervakning i realtid:<ul><li>Utvalda ämneskategorier (konflikter, cyber, etc.)</li><li>Artiklar från 100+ språk översatta</li><li>__Uppdateringar var 4____DEL: Projekt varje 4__5 minuter (gdeltproject.org)"
+      "infoTooltip": "<strong>News Intelligence</strong> Global nyhetsövervakning i realtid:<ul><li>Utvalda ämneskategorier (konflikter, cyber, etc.)</li><li>Artiklar från 100+ språk översatta</li><li>Uppdateringar var 15:e minut</li><li>14-day media tone &amp; volume trend per topic</li></ul>Källa: GDELT Project (gdeltproject.org)"
     },
     "telegramIntel": {
       "infoTooltip": "Direktsignaler från övervakade öppenkällaintelligenskanaler på Telegram",

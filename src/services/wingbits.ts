@@ -15,6 +15,8 @@ import type { AircraftDetails, WingbitsLiveFlight } from '@/generated/client/wor
 import { MilitaryServiceClient } from '@/services/generated-rpc-clients';
 import { premiumFetch } from '@/services/premium-fetch';
 
+export type { WingbitsLiveFlight };
+
 export interface WingbitsAircraftDetails {
   icao24: string;
   registration: string | null;
@@ -461,4 +463,18 @@ export function clearWingbitsCache(): void {
   localCache.clear();
   lastCacheSweep = 0;
   batchRotationCursor = '';
+}
+
+/**
+ * Fetch live position data from the Wingbits ECS network for a single aircraft.
+ * Returns null if the aircraft is not currently tracked by any Wingbits receiver.
+ */
+export async function getWingbitsLiveFlight(icao24: string): Promise<WingbitsLiveFlight | null> {
+  if (!isFeatureAvailable('wingbitsEnrichment')) return null;
+  try {
+    const resp = await client.getWingbitsLiveFlight({ icao24: icao24.toLowerCase() });
+    return resp.flight ?? null;
+  } catch {
+    return null;
+  }
 }

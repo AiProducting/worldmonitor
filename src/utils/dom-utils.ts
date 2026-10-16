@@ -82,7 +82,11 @@ export function rawHtml(html: TrustedHtml): DocumentFragment {
 const SAFE_TAGS = new Set([
   'strong', 'em', 'b', 'i', 'br', 'p', 'ul', 'ol', 'li', 'span', 'div', 'a',
 ]);
-const SAFE_ATTRS = new Set(['style', 'class', 'href', 'target', 'rel']);
+const SAFE_ATTRS = new Set(['class', 'href', 'target', 'rel', 'style']);
+
+// Only permit `color` declarations using hex, rgb(), named colors, or CSS vars.
+// Blocks url(), expression(), javascript:, data: and other CSS injection vectors.
+const SAFE_STYLE_RE = /^color:\s*(#[0-9a-fA-F]{3,8}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)|[a-zA-Z]+|var\(--[\w-]+\))\s*;?\s*$/;
 
 export function ensureNoopenerRel(rel: string | null): string {
   const tokens = new Set(

@@ -30,7 +30,7 @@ If you've ever tried to monitor a developing situation, whether it's a military 
 
 Each tool has its own interface, its own refresh cycle, its own learning curve. Cross-referencing between them is manual and slow. By the time you've built a picture, the situation has moved.
 
-World Monitor integrates all of these data sources (and many more) into a single, layered map with real-time updates.
+World Monitor integrates all of these data sources (and many more) into a single, layered map with real-time updates. Learn more about [what World Monitor is and how it works](/blog/posts/what-is-worldmonitor-real-time-global-intelligence/).
 
 ## Curated Intelligence Feeds, Zero Configuration
 
@@ -118,11 +118,11 @@ You can also share map states via URL: the map position, active layers, time ran
 1. **Open worldmonitor.app** in any modern browser
 2. **Toggle layers** using the left sidebar: start with "Conflicts" and "Military Bases"
 3. **Click any data point** on the map for details and source links
-4. **Open the Command Palette** (Cmd+K / Ctrl+K) to fuzzy-search across 24 result types and 250+ country commands
+4. **Open the [Command Palette](/blog/posts/command-palette-search-everything-instantly/)** (Cmd+K / Ctrl+K) to fuzzy-search across 24 result types and 250+ country commands
 5. **Click any country** for its full intelligence dossier with CII score
 6. **Set up keyword monitors** for topics you want to track persistently
 
-No account needed. No API keys required for the web version. For local AI analysis, install Ollama and point World Monitor at your local instance.
+No account needed. No API keys required for the web version. For local AI analysis, install Ollama and point World Monitor at your local instance. You can also explore [AI-powered intelligence without the cloud](/blog/posts/ai-powered-intelligence-without-the-cloud/).
 
 ## Why Open Source Matters for OSINT
 

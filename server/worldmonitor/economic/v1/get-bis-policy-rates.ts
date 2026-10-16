@@ -1,20 +1,18 @@
 /**
- * RPC: getBisPolicyRates -- BIS SDMX API (WS_CBPOL)
- * Central bank policy rates for major economies.
+ * RPC: getBisPolicyRates -- reads BIS policy rate data from Railway seed cache.
+ * All external BIS SDMX API calls happen in seed-bis-data.mjs on Railway.
  */
 
 import type {
   ServerContext,
   GetBisPolicyRatesRequest,
   GetBisPolicyRatesResponse,
-  BisPolicyRate,
 } from '../../../../src/generated/server/worldmonitor/economic/v1/service_server';
 
 import { getCachedJson } from '../../../_shared/redis';
 import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
 
-const REDIS_CACHE_KEY = 'economic:bis:policy:v1';
-const REDIS_CACHE_TTL = 21600; // 6 hours — monthly data
+const SEED_CACHE_KEY = 'economic:bis:policy:v1';
 
 export async function getBisPolicyRates(
   ctx: ServerContext,
