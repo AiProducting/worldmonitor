@@ -11,7 +11,19 @@ const MAX_PATTERNS = 3;
 const MAX_DELETIONS = 200;
 const MAX_SCAN_ITERATIONS = 5;
 
-const BLOCKLIST_PREFIXES = ['rl:', '__'];
+// Never purgeable, by key or pattern. Besides rate-limit counters, this is the
+// OAuth and connector auth state: deleting it is not a cache refresh but a
+// token revocation (or a replay-protection reset), so a leaked relay secret
+// must not be able to log every MCP client out.
+// `internal-mcp-replay:` holds the nonces that make a signed internal-MCP
+// request single-use (server/gateway.ts), so purging it re-opens the replay
+// window. `webhook:` holds customers' shipping webhook subscriptions and their
+// signing secrets (server/worldmonitor/shipping/v2/webhook-shared.ts); that is
+// durable tenant data, not a cache.
+const BLOCKLIST_PREFIXES = [
+  'rl:', '__', 'oauth:', 'mcp-grant:', 'wm:slack:oauth:', 'wm:discord:oauth:',
+  'internal-mcp-replay:', 'webhook:',
+];
 const DURABLE_DATA_PREFIXES = ['military:bases:', 'conflict:iran-events:', 'conflict:ucdp-events:'];
 
 function getKeyPrefix() {
@@ -80,7 +92,7 @@ export default async function handler(req) {
   }
 
   if (req.method !== 'POST') {
-    return json({ error: 'Method not allowed' }, 405, corsHeaders);
+    return jsonResponse({ error: 'Method not allowed' }, 405, corsHeaders);
   }
 
   const auth = req.headers.get('authorization') || '';
@@ -93,7 +105,7 @@ export default async function handler(req) {
   try {
     body = await req.json();
   } catch {
-    return json({ error: 'Invalid JSON body' }, 422, corsHeaders);
+    return jsonResponse({ error: 'Invalid JSON body' }, 422, corsHeaders);
   }
 
   const { keys: explicitKeys, patterns, dryRun = false } = body || {};
@@ -101,21 +113,21 @@ export default async function handler(req) {
   const hasPatterns = Array.isArray(patterns) && patterns.length > 0;
 
   if (!hasKeys && !hasPatterns) {
-    return json({ error: 'At least one of "keys" or "patterns" required' }, 422, corsHeaders);
+    return jsonResponse({ error: 'At least one of "keys" or "patterns" required' }, 422, corsHeaders);
   }
 
   if (hasKeys && explicitKeys.length > MAX_EXPLICIT_KEYS) {
-    return json({ error: `"keys" exceeds max of ${MAX_EXPLICIT_KEYS}` }, 422, corsHeaders);
+    return jsonResponse({ error: `"keys" exceeds max of ${MAX_EXPLICIT_KEYS}` }, 422, corsHeaders);
   }
 
   if (hasPatterns && patterns.length > MAX_PATTERNS) {
-    return json({ error: `"patterns" exceeds max of ${MAX_PATTERNS}` }, 422, corsHeaders);
+    return jsonResponse({ error: `"patterns" exceeds max of ${MAX_PATTERNS}` }, 422, corsHeaders);
   }
 
   if (hasPatterns) {
     for (const p of patterns) {
       if (typeof p !== 'string' || !p.endsWith('*') || p === '*') {
-        return json({ error: `Invalid pattern "${p}": must end with "*" and cannot be bare "*"` }, 422, corsHeaders);
+        return jsonResponse({ error: `Invalid pattern "${p}": must end with "*" and cannot be bare "*"` }, 422, corsHeaders);
       }
     }
   }
@@ -154,12 +166,12 @@ export default async function handler(req) {
 
   if (dryRun) {
     console.log('[cache-purge]', { mode: 'dry-run', matched: keyList.length, deleted: 0, truncated, dryRun: true, ip, ts });
-    return json({ matched: keyList.length, deleted: 0, keys: keyList, dryRun: true, truncated }, 200, corsHeaders);
+    return jsonResponse({ matched: keyList.length, deleted: 0, keys: keyList, dryRun: true, truncated }, 200, corsHeaders);
   }
 
   if (keyList.length === 0) {
     console.log('[cache-purge]', { mode: 'purge', matched: 0, deleted: 0, truncated, dryRun: false, ip, ts });
-    return json({ matched: 0, deleted: 0, keys: [], dryRun: false, truncated }, 200, corsHeaders);
+    return jsonResponse({ matched: 0, deleted: 0, keys: [], dryRun: false, truncated }, 200, corsHeaders);
   }
 
   let deleted = 0;
@@ -169,9 +181,9 @@ export default async function handler(req) {
     deleted = results.reduce((sum, r) => sum + (r.result || 0), 0);
   } catch (err) {
     console.log('[cache-purge]', { mode: 'purge-error', matched: keyList.length, error: err.message, ip, ts });
-    return json({ error: 'Redis pipeline failed' }, 502, corsHeaders);
+    return jsonResponse({ error: 'Redis pipeline failed' }, 502, corsHeaders);
   }
 
   console.log('[cache-purge]', { mode: 'purge', matched: keyList.length, deleted, truncated, dryRun: false, ip, ts });
-  return json({ matched: keyList.length, deleted, keys: keyList, dryRun: false, truncated }, 200, corsHeaders);
+  return jsonResponse({ matched: keyList.length, deleted, keys: keyList, dryRun: false, truncated }, 200, corsHeaders);
 }

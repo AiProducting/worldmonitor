@@ -66,12 +66,18 @@ export type RequestReason =
   | 'ok'
   | 'origin_403'
   | 'rate_limit_429'
+  | 'rate_limit_429_endpoint'
+  | 'rate_limit_429_global'
+  | 'rate_limit_429_direct_llm'
   | 'rate_limit_degraded'
   | 'preflight'
   | 'auth_401'
   | 'auth_403'
   | 'tier_403'
   | 'billing_verification_503'
+  // Transient Convex user-API-key validation outage (wm_ key path). Distinct
+  // from auth_401 so a backend blip is not counted as invalid credentials.
+  | 'validation_unavailable'
   // F8/F14 (U7+U8 review pass): body-buffer / payload-size rejections.
   // Distinct from auth_401 so telemetry separates malformed requests
   // from auth failures.
@@ -80,8 +86,27 @@ export type RequestReason =
   // is unavailable so an atomic claim can't be made. Distinct from auth_401
   // so a Redis outage is not conflated with genuine signature/auth failures.
   | 'replay_cache_unavailable'
+  // Missing MCP_INTERNAL_HMAC_SECRET on a request that presented an internal
+  // MCP signature. HTTP remains 500 CONFIGURATION; this reason keeps a
+  // deploy/config incident out of caller-auth dashboards. Distinct from
+  // auth_401, which still covers malformed or invalid signatures.
+  | 'hmac_secret_unconfigured'
+  // Internal-MCP signature rejections, split out of auth_401 the same way
+  // replay_cache_unavailable and hmac_secret_unconfigured were. The caller
+  // still gets one indistinguishable 401 — only the telemetry separates
+  // these, because collapsed they describe a rare failure nobody can
+  // reproduce: clock skew, a real forgery, and a replayed nonce all looked
+  // identical. Split, a week of rows names the cause.
+  | 'internal_mcp_no_user'
+  | 'internal_mcp_malformed_sig'
+  | 'internal_mcp_bad_nonce'
+  | 'internal_mcp_ts_window'
+  | 'internal_mcp_bad_request'
+  | 'internal_mcp_sig_mismatch'
+  | 'internal_mcp_replay'
   | 'unknown_route'
   | 'method_not_allowed'
+  | 'canonical_endpoint_required'
   | 'cors_error'
   // #3199 per-account API rate limit. `_429` = enforced reject; `_shadow` =
   // would-have-rejected but served (shadow mode), threaded onto the single
@@ -113,7 +138,10 @@ export interface RequestEvent {
   status: number;
   duration_ms: number;
   req_bytes: number;
-  res_bytes: number;
+  // null when size is genuinely unknown (e.g. chunked/SSE with no
+  // Content-Length). Never coerce a missing header to 0 — that made empty
+  // and unknown responses indistinguishable (#8403).
+  res_bytes: number | null;
   customer_id: string | null;
   principal_id: string | null;
   auth_kind: AuthKind;
@@ -138,6 +166,11 @@ export interface RequestEvent {
   host: string | null;
   sentry_trace_id: string | null;
   reason: RequestReason;
+  // #8403 — MCP JSON-RPC attribution. HTTP `method` stays the transport verb;
+  // these fields name the JSON-RPC method and (for tools/call) the registered
+  // tool. null on non-MCP routes and on MCP requests that never parsed a body.
+  rpc_method: string | null;
+  tool_name: string | null;
 }
 
 export interface UpstreamEvent {
@@ -225,7 +258,7 @@ export function buildRequestEvent(p: {
   status: number;
   durationMs: number;
   reqBytes: number;
-  resBytes: number;
+  resBytes: number | null;
   customerId: string | null;
   principalId: string | null;
   authKind: AuthKind;
@@ -246,6 +279,10 @@ export function buildRequestEvent(p: {
   host: string | null;
   sentryTraceId: string | null;
   reason: RequestReason;
+  /** JSON-RPC method on MCP surfaces; null elsewhere (#8403). */
+  rpcMethod?: string | null;
+  /** Registry-bounded tools/call name; null when unknown/non-call (#8403). */
+  toolName?: string | null;
 }): RequestEvent {
   return {
     _time: new Date().toISOString(),
@@ -278,6 +315,8 @@ export function buildRequestEvent(p: {
     host: p.host,
     sentry_trace_id: p.sentryTraceId,
     reason: p.reason,
+    rpc_method: p.rpcMethod ?? null,
+    tool_name: p.toolName ?? null,
   };
 }
 
@@ -408,7 +447,7 @@ export function deriveReqBytes(req: Request): number {
 }
 
 export function deriveSentryTraceId(req: Request): string | null {
-  return req.headers.get('sentry-trace') ?? null;
+  return capHeaderValue(req.headers.get('sentry-trace'));
 }
 
 // ua_hash: SHA-256(UA + monthly-rotated pepper). Pepper key: USAGE_UA_PEPPER.

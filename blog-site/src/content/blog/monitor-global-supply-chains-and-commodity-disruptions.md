@@ -1,15 +1,15 @@
 ---
 title: "Monitor Global Supply Chains and Commodity Disruptions in Real Time"
-description: "Track commodity prices, port disruptions, pipeline infrastructure, shipping routes, and supply chain risks on one free dashboard. World Monitor Commodity Monitor."
-metaTitle: "Real-Time Supply Chain Monitoring Dashboard | Commodity Disruption Alerts | World Monitor"
+description: "Track commodity prices, port disruptions, pipeline infrastructure, and supply chain risks in real time. Free supply chain monitoring dashboard on World Monitor."
+metaTitle: "Supply Chain Monitoring Dashboard | World Monitor"
 keywords: "supply chain monitoring tool, commodity price dashboard, supply chain disruption alerts, global shipping tracker, commodity risk monitoring"
 audience: "Supply chain managers, commodity traders, logistics professionals, procurement teams, risk analysts"
 heroImage: "/blog/images/blog/monitor-global-supply-chains-and-commodity-disruptions.jpg"
 pubDate: "2026-02-26"
-modifiedDate: "2026-07-22"
+modifiedDate: "2026-09-10"
 ---
 
-In March 2021, the Ever Given blocked the Suez Canal for six days. Global trade lost an estimated $9.6 billion per day. Most supply chain teams learned about it from Twitter.
+In March 2021, the Ever Given blocked the [Suez Canal](https://www.worldmonitor.app/chokepoints/suez-canal/) for six days. Global trade lost an estimated $9.6 billion per day. Most supply chain teams learned about it from Twitter.
 
 The companies that recovered fastest were the ones that already had multi-source monitoring in place: ship positions, port congestion data, commodity prices, and alternative route analysis, all visible before the situation hit mainstream news.
 
@@ -19,13 +19,13 @@ World Monitor's Commodity Monitor (commodity.worldmonitor.app) gives every suppl
 
 Modern supply chains are global, interconnected, and fragile. A single disruption can cascade across industries:
 
-- A drought in Taiwan affects semiconductor fabrication water supply
-- A coup in Niger disrupts uranium supply for European nuclear plants
-- Houthi attacks in the Red Sea force rerouting around the Cape of Good Hope
+- A drought in [Taiwan](https://www.worldmonitor.app/countries/taiwan/) affects semiconductor fabrication water supply
+- A coup in [Niger](https://www.worldmonitor.app/countries/niger/) disrupts uranium supply for European nuclear plants
+- Houthi attacks in the [Red Sea](https://www.worldmonitor.app/crises/red-sea-security/) force rerouting around the [Cape of Good Hope](https://www.worldmonitor.app/chokepoints/cape-of-good-hope/)
 - A port strike in Montreal affects grain exports to North Africa
 - GPS jamming in the Baltic disrupts automated shipping navigation
 
-Traditional supply chain tools focus on your own logistics: purchase orders, shipment tracking, inventory levels. They don't tell you about the geopolitical, military, and environmental events that create the disruptions in the first place.
+Traditional supply chain tools focus on your own logistics: purchase orders, shipment tracking, inventory levels. They don't tell you about the geopolitical, military, and environmental events that create the disruptions in the first place. For a deeper look at how conflicts affect logistics, see [tracking global trade routes and chokepoints](/blog/posts/tracking-global-trade-routes-chokepoints-freight-costs/).
 
 World Monitor fills that gap.
 
@@ -74,9 +74,9 @@ World Monitor maps the world's **10 major commodity exchanges**:
 
 Click any exchange for trading hours, primary instruments, and current market status.
 
-## 83 Strategic Ports Under Watch
+## Strategic Ports Under Watch
 
-Maritime chokepoints and major ports are the pressure points of global trade. World Monitor maps **83 strategic ports** with:
+Maritime chokepoints and major ports are the pressure points of global trade. World Monitor maps its **strategic-port registry** with:
 
 - Current operational status
 - Geographic chokepoint proximity (Suez, Strait of Hormuz, Malacca, Panama Canal)
@@ -147,7 +147,7 @@ Supply chains don't just face geopolitical risk. Environmental events are equall
 - **NASA EONET:** Volcanic eruptions, floods, and severe storms
 - **Cloudflare Radar:** Internet outages that disrupt digital supply chains
 
-All of these layer onto the same map as your commodity and infrastructure data.
+All of these layer onto the same map as your commodity and infrastructure data. For more on these capabilities, see [natural disaster monitoring with World Monitor](/blog/posts/natural-disaster-monitoring-earthquakes-fires-volcanoes/).
 
 ## GPS Jamming: The Invisible Shipping Risk
 
@@ -192,17 +192,19 @@ Enterprise supply chain risk platforms (Resilinc, Everstream Analytics, Interos)
 
 It's not a replacement for a full supply chain management platform. It's the situational awareness layer that tells you where to look, before your logistics system shows delays. See how World Monitor compares to [traditional intelligence tools](/blog/posts/worldmonitor-vs-traditional-intelligence-tools/).
 
+For the evergreen monitoring procedure that keeps this workflow durable and product-handoff oriented, see [Monitor supply-chain disruptions](/use-cases/monitor-supply-chain-disruptions/). This article remains supporting editorial around Commodity Monitor surfaces.
+
 ## Frequently Asked Questions
 
 **How often are commodity prices updated?**
 Prices are sourced from CME, ICE, LME, and other major exchanges with near real-time updates throughout trading hours. The dashboard shows current price, daily change, and trend indicators.
 
 **Can I set alerts for specific supply chain disruptions?**
-Yes. World Monitor's Custom Keyword Monitors let you set persistent alerts for terms like "port closure," "pipeline disruption," or specific commodity names. Matching headlines from 500+ curated RSS feeds are highlighted in your chosen color.
+Yes. World Monitor's Custom Keyword Monitors let you set persistent alerts for terms like "port closure," "pipeline disruption," or specific commodity names. Matching headlines from the curated RSS catalog are highlighted in your chosen color.
 
 **Does the Commodity Monitor include geopolitical risk context?**
 Yes. The Country Instability Index (CII), conflict layers, and Infrastructure Cascade panel overlay directly onto commodity and shipping data, so you see disruption risks alongside pricing.
 
 ---
 
-**Start monitoring at [commodity.worldmonitor.app](https://commodity.worldmonitor.app). Free real-time intelligence for supply chain professionals.**
+**Start monitoring at [commodity.worldmonitor.app](https://commodity.worldmonitor.app/dashboard). Free real-time intelligence for supply chain professionals.**

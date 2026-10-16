@@ -17,12 +17,18 @@
  *   - INVALID_REQUEST              400  missing nonce
  *   - INVALID_NONCE                400  Redis nonce miss / expired
  *   - UNKNOWN_CLIENT               400  Redis client miss
- *   - INSUFFICIENT_TIER            403  user tier < 1 or expired (do NOT
- *                                       leak client_name to non-Pro callers)
+ *   - INSUFFICIENT_TIER            403  user tier < 1, no mcpAccess, expired, or
+ *                                       a provider-CONFIRMED lapse (which also
+ *                                       sets X-Billing-Verification). Do NOT
+ *                                       leak client_name to non-Pro callers.
  *   - NONCE_CLAIMED_BY_OTHER_USER  403  the nonce has been claimed by a
  *                                       different Clerk userId (F2 — the
  *                                       apex page must NOT render context
  *                                       for a hijacked nonce).
+ *   - TIER_VERIFICATION_UNAVAILABLE 503 entitlement unverifiable / renewal
+ *                                       re-check in flight. Retryable, with
+ *                                       Retry-After + X-Billing-Verification
+ *                                       (#5622). Leaks nothing either.
  *   - SERVICE_UNAVAILABLE          503  Redis transport failure
  *
  * Cache-Control: no-store on every path.
@@ -30,8 +36,21 @@
 
 export const config = { runtime: 'edge' };
 
-import { resolveClerkSession } from '../../server/_shared/auth-session';
-import { getEntitlements } from '../../server/_shared/entitlement-check';
+import { resolveSessionUserId } from '../../server/_shared/auth-session';
+import {
+  getEntitlements,
+  isEntitlementBackendConfigured,
+} from '../../server/_shared/entitlement-check';
+import {
+  checkProMcpAccess,
+  grantSessionVerificationUnavailableResponse,
+  proMcpGateDenialResponse,
+  type ProMcpEntitlement,
+} from '../../server/_shared/pro-mcp-gate';
+// @ts-expect-error — JS module, no declaration file
+import { redirectDisplayHost } from '../oauth/_redirect-uri.js';
+// @ts-expect-error — JS module, no declaration file
+import { requestMatchesOAuthBinding } from '../oauth/_browser-binding.js';
 
 const NO_STORE_JSON: Record<string, string> = {
   'Content-Type': 'application/json',
@@ -45,6 +64,7 @@ function jsonError(error: string, error_description: string, status: number): Re
 interface NonceData {
   client_id: string;
   redirect_uri: string;
+  bind_hash?: string;
 }
 
 interface ClientData {
@@ -66,9 +86,9 @@ async function rawRedisGet(key: string): Promise<unknown | null> {
 }
 
 export interface ContextDeps {
-  resolveUserId: (req: Request) => Promise<string | null>;
+  resolveUserId: (req: Request) => Promise<string | Response | null>;
   redisGet: (key: string) => Promise<unknown | null>;
-  getEntitlements: (userId: string) => Promise<{ features: { tier: number; mcpAccess?: boolean }; validUntil: number } | null>;
+  getEntitlements: (userId: string) => Promise<ProMcpEntitlement | null>;
   now: () => number;
 }
 
@@ -80,6 +100,7 @@ export async function grantContextHandler(req: Request, deps: ContextDeps): Prom
   }
 
   const userId = await deps.resolveUserId(req);
+  if (userId instanceof Response) return grantSessionVerificationUnavailableResponse();
   if (!userId) {
     return jsonError('UNAUTHENTICATED', 'A valid Clerk session is required.', 401);
   }
@@ -93,20 +114,32 @@ export async function grantContextHandler(req: Request, deps: ContextDeps): Prom
   // Pro gate BEFORE leaking any client_name — a tier-0 caller probing the
   // endpoint must not see whether a given nonce/client exists.
   //
-  // Mirror the downstream MCP-edge gate (api/mcp.ts runProPreChecks): both
-  // tier ≥ 1 AND mcpAccess === true are required. Reviewer round-2 finding
-  // P2 — gating on tier alone here lets a tier-1 user without mcpAccess
-  // complete OAuth, get a tokenId, then have every tools/call fail at the
-  // gateway. The two gates must agree.
+  // The decision is shared with mcp-grant-mint.ts and oauth/authorize-pro.ts
+  // (server/_shared/pro-mcp-gate.ts) so the gates cannot drift: both tier >= 1
+  // AND mcpAccess === true are required — mirroring the downstream MCP-edge gate
+  // (api/mcp.ts runProPreChecks), because gating on tier alone lets a tier-1
+  // user without mcpAccess complete OAuth, get a tokenId, then have every
+  // tools/call fail at the gateway — and an entitlement that could not be
+  // VERIFIED answers a retryable 503 instead of the terminal INSUFFICIENT_TIER
+  // (#5622). Both paths still reveal nothing about the nonce or client.
   const ent = await deps.getEntitlements(userId);
-  if (
-    !ent ||
-    ent.features.tier < 1 ||
-    ent.features.mcpAccess !== true ||
-    ent.validUntil < deps.now()
-  ) {
-    return jsonError('INSUFFICIENT_TIER', 'A WorldMonitor Pro subscription is required.', 403);
-  }
+  const gate = checkProMcpAccess(ent, deps.now(), {
+    backendConfigured: isEntitlementBackendConfigured(),
+  });
+  // #6716: a CONFIRMED free account gets the consent card, mirroring
+  // mcp-grant-mint — the mint immediately after now accepts it, and refusing
+  // here would strand a free account mid-flow on an error page.
+  //
+  // The client-metadata disclosure this gate was written to prevent is still
+  // bounded: `resolveUserId` above rejects anonymous callers, so registered
+  // client names remain visible only to a Clerk-authenticated session. What
+  // changed is that the session no longer has to be a paying one — which the
+  // consent card itself requires, since a user cannot meaningfully approve a
+  // connection without seeing what they are approving.
+  //
+  // Every other denial kind still refuses, so an expired paid row, a malformed
+  // entitlement, or an unverifiable read discloses nothing.
+  if (gate && gate.kind !== 'free_account') return proMcpGateDenialResponse(gate);
 
   // F2 (U7+U8 review pass): if `mcp-grant:<n>` exists with a userId that
   // doesn't match the Clerk session's userId, the nonce has been claimed
@@ -141,6 +174,11 @@ export async function grantContextHandler(req: Request, deps: ContextDeps): Prom
   if (!nonceData || typeof nonceData.client_id !== 'string' || typeof nonceData.redirect_uri !== 'string') {
     return jsonError('INVALID_NONCE', 'The authorization nonce is missing or expired.', 400);
   }
+  // Refuse before rendering consent UI for a link forwarded from another
+  // browser; the mint enforces the same binding.
+  if (!(await requestMatchesOAuthBinding(req, nonceData))) {
+    return jsonError('BROWSER_MISMATCH', 'This authorization was started in a different browser. Start over from your MCP client in this browser.', 403);
+  }
 
   let clientData: ClientData | null;
   try {
@@ -154,7 +192,7 @@ export async function grantContextHandler(req: Request, deps: ContextDeps): Prom
 
   let redirectHost = '';
   try {
-    redirectHost = new URL(nonceData.redirect_uri).hostname;
+    redirectHost = redirectDisplayHost(nonceData.redirect_uri);
   } catch {
     // Already validated at registration time; defense-in-depth catch.
     return jsonError('INVALID_REDIRECT_URI', 'The registered redirect URI is malformed.', 400);
@@ -171,7 +209,7 @@ export async function grantContextHandler(req: Request, deps: ContextDeps): Prom
 
 export default async function handler(req: Request): Promise<Response> {
   return grantContextHandler(req, {
-    resolveUserId: async (r) => (await resolveClerkSession(r))?.userId ?? null,
+    resolveUserId: resolveSessionUserId,
     redisGet: rawRedisGet,
     getEntitlements: (userId) => getEntitlements(userId),
     now: () => Date.now(),

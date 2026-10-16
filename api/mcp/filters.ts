@@ -89,15 +89,14 @@ export function narrowNested(
 
 // Return a copy of an entity-keyed object map keeping only keys in `codes`
 // (case-insensitive). Empty `codes` or a non-object → returned unchanged. A
-// request that matches NOTHING also returns the original — additive: a typo'd
-// country code must not collapse the payload to empty.
+// A valid country without coverage returns an empty map.
 export function pickMapKeys(obj: unknown, codes: string[]): unknown {
   if (codes.length === 0 || !obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
   const out: Record<string, unknown> = {};
   for (const [k, val] of Object.entries(obj as Record<string, unknown>)) {
     if (codes.includes(k.toLowerCase())) out[k] = val;
   }
-  return Object.keys(out).length > 0 ? out : obj;
+  return out;
 }
 
 // In-place: narrow an entity-keyed map nested at data[label][child] (e.g. the
@@ -147,14 +146,7 @@ export function mapNested(
 // satisfies `pred` (for payloads keyed by an opaque id — fuel-shortages
 // keyed by shortage id, disruptions keyed by event id). Non-object → unchanged.
 //
-// No-match → `{}` is intentional and correct: this is a VALUE PREDICATE, the
-// object-map analogue of `narrowArray` / `narrowNested` — "country=DE has no
-// fuel shortages" is a legitimate empty result, exactly like a country filter
-// emptying an events array. It deliberately does NOT use the
-// `Object.keys(out).length ? out : obj` fall-back that `pickMapKeys` has:
-// `pickMapKeys` is a KEY SELECTOR where a no-match means "you named keys that
-// don't exist" (a likely typo, so don't nuke the map), whereas a value
-// predicate matching nothing is a real answer, not a malformed request.
+// No match returns an empty map, as country selectors and event arrays do.
 export function filterMapValues(
   obj: unknown,
   pred: (value: Record<string, unknown>) => boolean,
@@ -267,7 +259,9 @@ export function summarizeData(data: Record<string, unknown>): Record<string, unk
 // ---------------------------------------------------------------------------
 // Every cache tool returns a uniform envelope from `executeTool`:
 //
-//   { cached_at: string|null, stale: boolean, data: { [label]: ... } }
+//   { cached_at: string|null, stale: boolean, activationUnknown?: true,
+//     freshnessUnknown?: true, unreadable?: string[],
+//     contentFreshnessPendingUntil?: string, data: { [label]: ... } }
 //
 // where each `label` is derived from one of the tool's `_cacheKeys` via the
 // NON_LABEL regex in executeTool. `cacheEnvelope(dataProps)` returns the spec
@@ -283,6 +277,9 @@ export function summarizeData(data: Record<string, unknown>): Record<string, unk
 //     per-label `data` properties are intentionally NOT required because any
 //     single cache key may be transiently null without tripping the
 //     `cache_all_null` guard (which fires only when ALL keys are null).
+//     `contentFreshnessPendingUntil` is likewise optional: it is advertised on
+//     every cache envelope but only a tool whose freshness check declares a
+//     `contentFreshnessActivationKey` can ever populate it.
 //   - `additionalProperties` is left implicit (true) so forward-compat fields
 //     added to a payload by a producer don't suddenly fail validation.
 //   - Per-array `items.properties` lists known top-level fields with types but
@@ -299,7 +296,25 @@ export function cacheEnvelope(dataProperties: Record<string, object>): object {
       },
       stale: {
         type: 'boolean',
-        description: 'True when any contributing cache key is older than its per-key maxStaleMin freshness budget.',
+        description: 'True when any contributing cache key fails its freshness contract: fetched longer ago than its per-key maxStaleMin budget, below a declared minRecordCount, or — for keys that declare a content-age contract — carrying upstream observations older than maxContentAgeMin even though the fetch itself is recent. A recent cached_at with stale:true means the fetch is current but the underlying data has stopped advancing, so refetching will not help.',
+      },
+      activationUnknown: {
+        type: 'boolean',
+        description: 'Optional. True when an activation marker this tool consults could not be read, so `stale` was computed without knowing whether the producer has ever published. Distinguishes an unreadable marker from a producer that genuinely never ran — the same signal /api/health and /api/seed-health publish under this name.',
+      },
+      freshnessUnknown: {
+        type: 'boolean',
+        description: 'Optional. True when a freshness record could not be read (a cache timeout), so `stale` is true because freshness is unknown, not because the data was shown to be old. Retrying shortly will usually clear it.',
+      },
+      unreadable: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional. Labels of `data` sections whose cache read failed. Those sections are null because they could not be read, not because the dataset is empty. Retrying shortly will usually fill them.',
+      },
+      contentFreshnessPendingUntil: {
+        type: 'string',
+        format: 'date-time',
+        description: 'Optional ISO-8601 deadline while a cleanly absent content-freshness block is temporarily covered by deployment-order grace.',
       },
       data: { type: 'object', properties: dataProperties },
     },

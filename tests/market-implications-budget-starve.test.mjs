@@ -9,6 +9,15 @@
 // SEED_ERROR for benign, self-healing resource contention. A budget-starve must
 // instead PRESERVE last-good (leaving seed-meta.fetchedAt untouched) so
 // age-based STALE_SEED still escalates only if the starve persists past 2h.
+//
+// What this file protects is the CLASSIFICATION boundary: a starve and a real
+// provider failure must never look alike in seed-meta. The signal that carries
+// the distinction changed once a real failure over fresh last-good stopped
+// being an instant SEED_ERROR (see market-implications-seed-health.test.mjs) —
+// a starve now records NO failure at all, while a genuine failure records the
+// streak, the attempt timestamp and the reason code that escalate health on
+// the second consecutive miss. The boundary itself is unchanged and is
+// asserted on those fields below.
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,7 +35,7 @@ const BUDGET_EXHAUSTED = 'budget_exhausted';
 const PROVIDER_FAILED = 'provider_failed';
 
 const ENV_KEYS = [
-  'OPENROUTER_API_KEY', 'GROQ_API_KEY',
+  'OPENROUTER_API_KEY',
   'FORECAST_LLM_MARKET_IMPLICATIONS_PROVIDER_ORDER', 'FORECAST_LLM_PROVIDER_ORDER',
 ];
 const originalEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -44,8 +53,8 @@ afterEach(() => {
 });
 
 const LAST_GOOD = [{
-  ticker: 'LMT', name: 'Lockheed Martin', direction: 'long', timeframe: '1-3m',
-  confidence: 0.7, title: 'Defense demand', narrative: 'n', risk_caveat: '', driver: '', transmission_chain: [],
+  ticker: 'LMT', name: 'Lockheed Martin', direction: 'long', timeframe: '1M',
+  confidence: 'MEDIUM', title: 'Defense demand', narrative: 'Sustained procurement lifts the backlog across primes.', risk_caveat: '', driver: '', transmission_chain: [],
 }];
 
 function seedLastGood(store) {
@@ -82,10 +91,50 @@ test('run-budget starve preserves last-good and does NOT write a SEED_ERROR', as
   assert.equal(meta.status, 'ok', 'a budget starve must NOT flip seed-meta to error — age-based STALE_SEED escalates instead');
   assert.equal(meta.recordCount, 1, 'last-good record count is preserved (fetchedAt untouched)');
   assert.equal(meta.fetchedAt, 1783340000000, 'seed-meta.fetchedAt must not advance on a starve, else STALE_SEED never fires');
+  assert.equal(meta.consecutiveFailures, undefined, 'a starve is NOT a producer miss — recording one here would escalate health for pure resource contention');
+  assert.equal(meta.lastSynthesisFailureCode, undefined, 'and it has no failure reason to report');
   assert.deepEqual(store['intelligence:market-implications:v1'].cards, LAST_GOOD, 'last-good cards preserved');
   assert.ok(
     !Object.keys(store).some((k) => k.startsWith('forecast:llm-market-implications:')),
     'no stage cache entry written on a budget-starved skip',
+  );
+});
+
+test('a starve landing on an already-degraded meta neither clears nor advances the streak', async () => {
+  // The boundary between the two mechanisms: a prior LLM miss recorded a
+  // streak, and the NEXT tick is starved rather than attempted. A starve is
+  // not a miss (nothing was tried) and not a success (nothing was published),
+  // so it must leave the record exactly as it found it — clearing it would
+  // erase the escalation, incrementing it would alarm on contention.
+  const store = {};
+  __setRedisStoreForTests(store);
+  seedLastGood(store);
+  store['seed-meta:intelligence:market-implications'] = {
+    fetchedAt: 1783340000000,
+    recordCount: 1,
+    status: 'ok',
+    lastAttemptAt: 1783340000000,
+    lastSuccessAt: 1783340000000,
+    consecutiveFailures: 1,
+    lastSynthesisFailureCode: 'MARKET_IMPLICATIONS_LLM_NO_RESPONSE',
+  };
+
+  __setForecastLlmRunDeadlineForTests(Date.now() - 1000);
+  const redisCommands = [];
+  global.fetch = async (_url, init = {}) => {
+    redisCommands.push(JSON.parse(String(init.body || '[]')));
+    return { ok: true, status: 200, json: async () => ({ result: 1 }), text: async () => '' };
+  };
+
+  await buildAndSeedMarketImplications({});
+
+  const meta = store['seed-meta:intelligence:market-implications'];
+  assert.equal(meta.consecutiveFailures, 1, 'a starve must not reset a real miss streak — that would erase the pending escalation');
+  assert.equal(meta.lastSynthesisFailureCode, 'MARKET_IMPLICATIONS_LLM_NO_RESPONSE', 'nor drop the reason');
+  assert.equal(meta.fetchedAt, 1783340000000, 'nor advance the content clock');
+  assert.ok(
+    redisCommands.some((command) => command[0] === 'EXPIRE' && command[1] === 'seed-meta:intelligence:market-implications'),
+    'the degraded meta is TTL-refreshed rather than rewritten, so the diagnostics survive',
   );
 });
 
@@ -148,7 +197,7 @@ test('a genuine provider failure (budget remaining) still writes a SEED_ERROR', 
   assert.equal(meta.status, 'error', 'a real LLM failure with budget remaining must still surface SEED_ERROR');
 });
 
-test('a genuine provider failure that drains the run deadline still writes a SEED_ERROR', async () => {
+test('a genuine provider failure that drains the run deadline is still recorded as a failure', async () => {
   const store = {};
   __setRedisStoreForTests(store);
   seedLastGood(store);
@@ -178,22 +227,23 @@ test('a genuine provider failure that drains the run deadline still writes a SEE
 
   assert.equal(providerCalls, 1, 'provider failure path must run before the deadline is drained');
   const meta = store['seed-meta:intelligence:market-implications'];
-  assert.equal(meta.status, 'error', 'provider failure must not be reclassified as budget starve just because the deadline is now exhausted');
+  assert.equal(meta.consecutiveFailures, 1, 'provider failure must not be reclassified as a budget starve just because the deadline is now exhausted — a starve would record nothing');
+  assert.equal(meta.lastSynthesisFailureCode, 'MARKET_IMPLICATIONS_LLM_NO_RESPONSE', 'the reason reaches health');
+  assert.equal(meta.fetchedAt, Date.parse('2026-07-06T13:00:00.000Z'), 'and it is not mistaken for a fresh publish');
 });
 
 test('pre-call guard skips when the run budget cannot cover the full provider chain (#1/#4)', async () => {
   const store = {};
   __setRedisStoreForTests(store);
   seedLastGood(store);
-  // Default chain, both providers runnable → reservation is openrouter 15s + groq
-  // 20s + 5s guard = 40s. Real keys so a broken/too-low guard would actually invoke
-  // the transport rather than short-circuit on a missing key.
+  // Default chain (paid openrouter only) → reservation is 40s Flash + 5s guard = 45s.
+  // A real key so a broken/too-low guard would actually invoke the transport rather
+  // than short-circuit on a missing key.
   process.env.OPENROUTER_API_KEY = 'test-key';
-  process.env.GROQ_API_KEY = 'test-key';
   delete process.env.FORECAST_LLM_MARKET_IMPLICATIONS_PROVIDER_ORDER;
   delete process.env.FORECAST_LLM_PROVIDER_ORDER;
 
-  // 25s run budget: below the 40s two-provider reservation, so it must SKIP
+  // 25s run budget: below the 45s reservation, so it must SKIP
   // cleanly and preserve last-good instead of attempting an ambiguous, doomed call.
   __setForecastLlmRunDeadlineForTests(Date.now() + 25_000);
 
@@ -216,7 +266,7 @@ test('mid-call budget_exhausted result preserves last-good, no SEED_ERROR (#5 de
   __setRedisStoreForTests(store);
   seedLastGood(store);
 
-  // Admit the call (>= the 40s full-chain reservation), then have callForecastLLM
+  // Admit the call (>= the 45s full-chain reservation), then have callForecastLLM
   // report a run-budget exhaustion mid-flight. This drives the caller's mid-call
   // preserve branch (result.failureReason === BUDGET_EXHAUSTED) directly via the
   // call-override seam — retained as defense-in-depth for env-overridden provider
@@ -242,7 +292,7 @@ test('mid-call budget_exhausted result preserves last-good, no SEED_ERROR (#5 de
   );
 });
 
-test('mid-call provider_failed result still writes a SEED_ERROR (#5 classification symmetry)', async () => {
+test('mid-call provider_failed result is still recorded as a failure (#5 classification symmetry)', async () => {
   const store = {};
   __setRedisStoreForTests(store);
   seedLastGood(store);
@@ -254,30 +304,30 @@ test('mid-call provider_failed result still writes a SEED_ERROR (#5 classificati
   await buildAndSeedMarketImplications({});
 
   const meta = store['seed-meta:intelligence:market-implications'];
-  assert.equal(meta.status, 'error', 'a genuine provider failure (even textless) must surface SEED_ERROR, not be preserved as a starve');
+  // The BUDGET_EXHAUSTED twin of this test asserts the opposite: same textless
+  // result, but recorded as nothing. That asymmetry IS the classification.
+  assert.equal(meta.consecutiveFailures, 1, 'a genuine provider failure (even textless) must be counted, not preserved as a starve');
+  assert.equal(meta.lastSynthesisFailureCode, 'MARKET_IMPLICATIONS_LLM_NO_RESPONSE');
 });
 
-test('a budget covering only the primary — not the fallback — skips instead of stranding groq → no SEED_ERROR (#4978 follow-up)', async () => {
+test('a budget covering only the primary — not the fallback — skips instead of stranding the fallback → no SEED_ERROR (#4978 follow-up)', async () => {
   const store = {};
   __setRedisStoreForTests(store);
   seedLastGood(store);
   process.env.OPENROUTER_API_KEY = 'test-key';
-  process.env.GROQ_API_KEY = 'test-key';
-  // The 2-provider chain is no longer the market_implications DEFAULT (it is now
-  // openrouter-only — groq's free tier 429s for most of the day). Pin it explicitly:
+  // The 2-provider chain is not the market_implications DEFAULT (that is
+  // openrouter-only). Pin it explicitly:
   // the stranded-fallback logic still exists and must stay correct for any deployment
   // that configures a fallback. Without this the test would skip for the WRONG reason
   // and silently stop covering #4978.
-  process.env.FORECAST_LLM_MARKET_IMPLICATIONS_PROVIDER_ORDER = 'openrouter,groq';
+  process.env.FORECAST_LLM_MARKET_IMPLICATIONS_PROVIDER_ORDER = 'openrouter,openrouter-free';
   delete process.env.FORECAST_LLM_PROVIDER_ORDER;
 
-  // 30s budget: enough for the primary openrouter attempt (15s) + guard, but NOT
-  // the full openrouter→groq chain (40s). The reported bug class is unchanged:
-  // admitting only the primary can strand Groq ("groq llm budget exhausted")
-  // after a timeout and misreport a recoverable timeout as SEED_ERROR. The full-
-  // chain reservation makes this SKIP and preserve last-good (green) instead.
-  // 50s covers the primary (40s Flash + 5s guard = 45s) but NOT the full
-  // openrouter→groq chain (40 + 20 + 5 = 65s) => must SKIP rather than strand groq.
+  // The reported bug class: admitting only the primary can strand the fallback
+  // ("llm budget exhausted") after a timeout and misreport a recoverable timeout as
+  // SEED_ERROR. The full-chain reservation makes this SKIP and preserve last-good
+  // (green) instead. 50s covers the primary (40s Flash + 5s guard = 45s) but NOT the
+  // full openrouter→openrouter-free chain (40 + 25 + 5 = 70s) => must SKIP.
   __setForecastLlmRunDeadlineForTests(Date.now() + 50_000);
 
   let providerCalls = 0;
@@ -288,7 +338,7 @@ test('a budget covering only the primary — not the fallback — skips instead 
 
   await buildAndSeedMarketImplications({});
 
-  assert.equal(providerCalls, 0, 'a call that cannot finish the openrouter→groq chain must skip before stranding the fallback');
+  assert.equal(providerCalls, 0, 'a call that cannot finish the openrouter→openrouter-free chain must skip before stranding the fallback');
   const meta = store['seed-meta:intelligence:market-implications'];
   assert.equal(meta.status, 'ok', 'a stranded-fallback budget must preserve last-good, not write SEED_ERROR (the health WARNING this fixes)');
   assert.equal(meta.fetchedAt, 1783340000000, 'fetchedAt untouched — STALE_SEED still escalates if the starve persists past 2h');
@@ -299,28 +349,25 @@ test('an admitted primary timeout falls through to the fallback in ONE attempt e
   __setRedisStoreForTests(store);
   seedLastGood(store);
   process.env.OPENROUTER_API_KEY = 'test-key';
-  process.env.GROQ_API_KEY = 'test-key';
   // Pin the 2-provider chain explicitly: it is no longer the market_implications
   // default, but the one-attempt-per-provider machinery must stay correct for any
   // deployment that configures a fallback. Deleting the env here would leave an
-  // openrouter-only chain and the test could never reach groq — it would assert
+  // openrouter-only chain and the test could never reach the fallback — it would assert
   // nothing about the #5003 regression.
-  process.env.FORECAST_LLM_MARKET_IMPLICATIONS_PROVIDER_ORDER = 'openrouter,groq';
+  process.env.FORECAST_LLM_MARKET_IMPLICATIONS_PROVIDER_ORDER = 'openrouter,openrouter-free';
   delete process.env.FORECAST_LLM_PROVIDER_ORDER;
 
-  // 70s admits the full two-provider chain (40s Flash + 20s groq + 5s guard = 65s).
+  // 75s admits the full two-provider chain (40s Flash + 25s free + 5s guard = 70s).
   // Every attempt times out. PRE-FIX, openrouter's 3 retries (4 attempts) drained the
-  // run budget and groq was NEVER reached — a recoverable timeout became a SEED_ERROR
-  // without trying the fallback. With maxRetries:0 each provider gets exactly ONE
-  // attempt, so groq IS reached.
-  __setForecastLlmRunDeadlineForTests(Date.now() + 70_000);
+  // run budget and the fallback was NEVER reached — a recoverable timeout became a
+  // SEED_ERROR without trying the fallback. With maxRetries:0 each provider gets
+  // exactly ONE attempt, so the fallback IS reached.
+  __setForecastLlmRunDeadlineForTests(Date.now() + 75_000);
 
-  const calls = { openrouter: 0, groq: 0 };
+  const calls = { openrouter: 0, 'openrouter-free': 0 };
   __setForecastLlmTransportForTests({
-    fetch: async (u) => {
-      const url = String(u);
-      if (url.includes('openrouter')) calls.openrouter += 1;
-      else if (url.includes('groq')) calls.groq += 1;
+    fetch: async (_u, init) => {
+      calls[JSON.parse(init.body).model.endsWith(':free') ? 'openrouter-free' : 'openrouter'] += 1;
       throw Object.assign(new Error('timeout'), { name: 'TimeoutError' });
     },
   });
@@ -329,9 +376,10 @@ test('an admitted primary timeout falls through to the fallback in ONE attempt e
   await buildAndSeedMarketImplications({});
 
   assert.equal(calls.openrouter, 1, 'primary must be tried exactly ONCE (maxRetries:0) — no 4-attempt retry storm that burns the fallback budget');
-  assert.equal(calls.groq, 1, 'the fallback MUST be reached (it was stranded pre-fix)');
+  assert.equal(calls['openrouter-free'], 1, 'the fallback MUST be reached (it was stranded pre-fix)');
   const meta = store['seed-meta:intelligence:market-implications'];
-  assert.equal(meta.status, 'error', 'both providers genuinely failed → SEED_ERROR is correct (the fallback ran, it just also failed)');
+  assert.equal(meta.consecutiveFailures, 1, 'both providers genuinely failed → the miss is recorded (the fallback ran, it just also failed)');
+  assert.equal(meta.lastSynthesisFailureCode, 'MARKET_IMPLICATIONS_LLM_NO_RESPONSE');
 });
 
 test('a single-provider override reserves only that provider — admitted where the 2-provider chain would skip (#5003 review, finding 2)', async () => {
@@ -339,11 +387,10 @@ test('a single-provider override reserves only that provider — admitted where 
   __setRedisStoreForTests(store);
   seedLastGood(store);
   process.env.OPENROUTER_API_KEY = 'test-key';
-  process.env.GROQ_API_KEY = 'test-key';
   // Pin to openrouter only → resolved chain reserves just 40s Flash + 5s guard = 45s.
   process.env.FORECAST_LLM_MARKET_IMPLICATIONS_PROVIDER_ORDER = 'openrouter';
 
-  // 50s: below the 2-provider 65s reservation (would skip) but above the pinned
+  // 50s: below the 2-provider 70s reservation (would skip) but above the pinned
   // single-provider 45s reservation — so this MUST be admitted, not skipped.
   __setForecastLlmRunDeadlineForTests(Date.now() + 50_000);
 

@@ -15,12 +15,6 @@ export interface ListPredictionMarketsResponse {
   dataAvailable: boolean;
 }
 
-export enum MarketSource {
-  MARKET_SOURCE_UNSPECIFIED = "MARKET_SOURCE_UNSPECIFIED",
-  MARKET_SOURCE_POLYMARKET = "MARKET_SOURCE_POLYMARKET",
-  MARKET_SOURCE_KALSHI = "MARKET_SOURCE_KALSHI",
-}
-
 export interface PredictionMarket {
   id: string;
   title: string;
@@ -36,6 +30,8 @@ export interface PaginationResponse {
   nextCursor: string;
   totalCount: number;
 }
+
+export type MarketSource = "MARKET_SOURCE_UNSPECIFIED" | "MARKET_SOURCE_POLYMARKET" | "MARKET_SOURCE_KALSHI";
 
 export interface FieldViolation {
   field: string;

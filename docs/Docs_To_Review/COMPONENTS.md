@@ -214,7 +214,7 @@ const map = new DeckGLMap(container, initialState);
 #### Rendering Stack
 
 Built on **MapLibre GL JS** (`maplibregl.Map`) with a **deck.gl** overlay
-(`MapboxOverlay` from `@deck.gl/mapbox`). The following deck.gl layer types
+(`MapLibreOverlay` from `@deck.gl/maplibre`). The following deck.gl layer types
 are used:
 
 - `GeoJsonLayer` — country polygons, cables, pipelines, waterways
@@ -679,8 +679,8 @@ domain-specific markup.
 | **Panel ID** | `live-news` |
 | **Purpose** | Embedded YouTube live-stream player with channel switching. |
 | **DOM** | YouTube IFrame player, channel switcher bar, mute/live buttons. |
-| **Services** | `fetchLiveVideoId`, `isDesktopRuntime`, `getRemoteApiBaseUrl` |
-| **Variant channels** | `tech` → `TECH_LIVE_CHANNELS` (Bloomberg, Yahoo Finance, CNBC, NASA TV). `world` / `full` → `FULL_LIVE_CHANNELS` (Bloomberg, Sky, Euronews, DW, CNBC, France24, Al Arabiya, Al Jazeera). |
+| **Services** | `openLiveVideo` (`src/services/live-video/session.ts`, streams from `src/config/live-video-sources.ts`), `isDesktopRuntime` |
+| **Variant channels** | `tech` → `TECH_LIVE_CHANNELS` (Bloomberg, Yahoo Finance, NASA TV). `world` / `full` → `FULL_LIVE_CHANNELS` (Bloomberg, Sky, Euronews, DW, France24, Al Arabiya, Al Jazeera). |
 | **Notes** | Idle pause after 5 minutes of inactivity. |
 
 #### PredictionPanel
@@ -953,11 +953,11 @@ domain-specific markup.
 
 | Field | Detail |
 |---|---|
-| **File** | `src/components/StatusPanel.ts` (251 lines) |
+| **File** | `src/components/StatusPanel.ts` |
 | **Panel ID** | `status` |
-| **Purpose** | Internal feed & API health status dashboard. |
-| **Key methods** | `updateFeed(name, status)`, `updateApi(name, status)`, `setFeedDisabled(name)` |
-| **DOM** | `div.status-panel-container` with toggle button, sections: `feeds-list`, `apis-list`, `storage-info`. |
+| **Purpose** | Write-only feed & API status model plus the digest coverage row (#7085) — its historical rendering (feed/API lists, storage info, toggle) was removed. |
+| **Key methods** | `updateFeed(name, status)`, `updateApi(name, status)`, `updateDigestCoverage(coverage)` |
+| **DOM** | `div.status-panel-container` holding only `div.digest-coverage-row` (`role="status"`, `aria-live="polite"`); self-mounts into `footer.site-footer` on the first coverage update. Feed/API maps have no DOM — nothing reads `getFeeds()`/`getApis()`. |
 | **Variant data** | `tech` → `TECH_FEEDS` / `TECH_APIS`. `world` / `full` → `WORLD_FEEDS` / `WORLD_APIS`. |
 
 #### RuntimeConfigPanel
@@ -1045,15 +1045,6 @@ small UI affordances.
 | **Exported** | `maybeShowDownloadBanner()` |
 | **Platform detection** | `macos-arm64`, `macos-x64`, `windows`, `linux` |
 
-### CommunityWidget
-
-| Field | Detail |
-|---|---|
-| **File** | `src/components/CommunityWidget.ts` |
-| **Purpose** | Small floating widget linking to GitHub Discussions. |
-| **Exported** | `mountCommunityWidget()` |
-| **Notes** | Dismissible via `localStorage`. |
-
 ### PizzIntIndicator
 
 | Field | Detail |
@@ -1135,7 +1126,6 @@ small UI affordances.
 | StoryModal | ✅ | ✅ | ✅ |
 | MobileWarningModal | ✅ | ✅ | ✅ |
 | DownloadBanner | ✅ | ✅ | ✅ |
-| CommunityWidget | ✅ | ✅ | ✅ |
 | PizzIntIndicator | ✅ | — | — |
 | IntelligenceFindingsBadge | ✅ | — | — |
 | VerificationChecklist | ✅ | ✅ | — |

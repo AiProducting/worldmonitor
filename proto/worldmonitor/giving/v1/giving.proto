@@ -3,7 +3,6 @@ syntax = "proto3";
 package worldmonitor.giving.v1;
 
 import "buf/validate/validate.proto";
-import "sebuf/http/annotations.proto";
 
 // GivingSummary is a cacheable snapshot of published giving claims. Source
 // reference periods live in provenance; generated_at is only the time this

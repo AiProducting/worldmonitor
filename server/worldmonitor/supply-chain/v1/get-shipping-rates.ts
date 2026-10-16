@@ -3,82 +3,43 @@ import type {
   GetShippingRatesRequest,
   GetShippingRatesResponse,
   ShippingIndex,
-  ShippingRatePoint,
 } from '../../../../src/generated/server/worldmonitor/supply_chain/v1/service_server';
 
-import { cachedFetchJson } from '../../../_shared/redis';
-import { CHROME_UA } from '../../../_shared/constants';
-// @ts-expect-error — .mjs module, no declaration file
-import { detectSpike } from './_scoring.mjs';
+import { getCachedJson } from '../../../_shared/redis';
 
-const FRED_API_BASE = 'https://api.stlouisfed.org/fred';
 const REDIS_CACHE_KEY = 'supply_chain:shipping:v2';
-const REDIS_CACHE_TTL = 3600;
 
-interface FredSeriesConfig {
-  seriesId: string;
-  name: string;
-  unit: string;
-  frequency: string;
+// The seeder writes the four decision-grade period-change fields as an explicit
+// JSON `null` whenever the exchange published no comparable prior (#6066), and
+// this handler returns the cached blob verbatim. `ShippingIndex` declares those
+// fields `optional`, which in this repo means "absent from the JSON", not
+// "null" — the generated client types them `number | undefined` and the OpenAPI
+// schema types them as a bare `number` with no `nullable`. Collapse null to
+// undefined so the wire payload matches the declared contract (#6078), mirroring
+// get-market-breadth-history.ts's nullToUndefined seam for the same proto shape.
+function nullToUndefined<T>(value: T | null | undefined): T | undefined {
+  return value == null ? undefined : value;
 }
 
-const SHIPPING_SERIES: FredSeriesConfig[] = [
-  { seriesId: 'PCU483111483111', name: 'Deep Sea Freight Producer Price Index', unit: 'index', frequency: 'm' },
-  { seriesId: 'TSIFRGHT', name: 'Freight Transportation Services Index', unit: 'index', frequency: 'm' },
-];
+function normalizeIndex(index: ShippingIndex): ShippingIndex {
+  const priorPeriodValue = nullToUndefined(index.priorPeriodValue);
+  return {
+    ...index,
+    periodChangePct: nullToUndefined(index.periodChangePct),
+    periodChangeBasis: nullToUndefined(index.periodChangeBasis),
+    priorPeriodValue,
+    // prior_period_date is declared as the date OF prior_period_value, so it
+    // must not outlive it. The seeder accepts the publisher's `lastDate`
+    // independently of whether `lastContent` was a usable number, so a dated
+    // envelope with an unusable prior level yields a date describing a level
+    // that was never published. #6077 tightens this seeder-side; enforcing it
+    // here keeps the served response self-consistent either way.
+    priorPeriodDate: priorPeriodValue === undefined ? undefined : nullToUndefined(index.priorPeriodDate),
+  };
+}
 
-async function fetchFredSeries(cfg: FredSeriesConfig): Promise<ShippingIndex | null> {
-  const apiKey = process.env.FRED_API_KEY;
-  if (!apiKey) return null;
-
-  try {
-    const params = new URLSearchParams({
-      series_id: cfg.seriesId,
-      api_key: apiKey,
-      file_type: 'json',
-      frequency: cfg.frequency,
-      sort_order: 'desc',
-      limit: '24',
-    });
-
-    const response = await fetch(`${FRED_API_BASE}/series/observations?${params}`, {
-      headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
-      signal: AbortSignal.timeout(10000),
-    });
-
-    if (!response.ok) return null;
-
-    const data = await response.json() as { observations?: Array<{ date: string; value: string }> };
-    const observations = (data.observations || [])
-      .map((obs): ShippingRatePoint | null => {
-        const value = parseFloat(obs.value);
-        if (isNaN(value) || obs.value === '.') return null;
-        return { date: obs.date, value };
-      })
-      .filter((o): o is ShippingRatePoint => o !== null)
-      .reverse();
-
-    if (observations.length === 0) return null;
-
-    const currentValue = observations[observations.length - 1]!.value;
-    const previousValue = observations.length > 1 ? observations[observations.length - 2]!.value : currentValue;
-    const changePct = previousValue !== 0 ? ((currentValue - previousValue) / previousValue) * 100 : 0;
-
-    const spikeAlert = detectSpike(observations);
-
-    return {
-      indexId: cfg.seriesId,
-      name: cfg.name,
-      currentValue,
-      previousValue,
-      changePct,
-      unit: cfg.unit,
-      history: observations,
-      spikeAlert,
-    };
-  } catch {
-    return null;
-  }
+function unavailable(): GetShippingRatesResponse {
+  return { indices: [], fetchedAt: new Date().toISOString(), upstreamUnavailable: true };
 }
 
 export async function getShippingRates(
@@ -86,19 +47,10 @@ export async function getShippingRates(
   _req: GetShippingRatesRequest,
 ): Promise<GetShippingRatesResponse> {
   try {
-    const result = await cachedFetchJson<GetShippingRatesResponse>(
-      REDIS_CACHE_KEY,
-      REDIS_CACHE_TTL,
-      async () => {
-        const results = await Promise.all(SHIPPING_SERIES.map(fetchFredSeries));
-        const indices = results.filter((r): r is ShippingIndex => r !== null);
-        if (indices.length === 0) return null;
-        return { indices, fetchedAt: new Date().toISOString(), upstreamUnavailable: false };
-      },
-    );
-
-    return result ?? { indices: [], fetchedAt: new Date().toISOString(), upstreamUnavailable: true };
+    const result = await getCachedJson(REDIS_CACHE_KEY, true) as GetShippingRatesResponse | null;
+    if (!result) return unavailable();
+    return { ...result, indices: (result.indices ?? []).map(normalizeIndex) };
   } catch {
-    return { indices: [], fetchedAt: new Date().toISOString(), upstreamUnavailable: true };
+    return unavailable();
   }
 }

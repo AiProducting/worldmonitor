@@ -92,7 +92,7 @@ test('getResilienceOverallDisplay treats negative and non-finite scores as insuf
     scoreLabel: 'n/a',
     visualLevel: 'unknown',
     visualLevelLabel: 'Insufficient data',
-    serverLevelLabel: 'API level: unknown',
+    serverLevelLabel: 'Reported level: unknown',
   });
   assert.deepEqual(getResilienceOverallDisplay({ overallScore: Number.NaN, level: 'low' }), {
     hasScore: false,
@@ -100,7 +100,7 @@ test('getResilienceOverallDisplay treats negative and non-finite scores as insuf
     scoreLabel: 'n/a',
     visualLevel: 'unknown',
     visualLevelLabel: 'Insufficient data',
-    serverLevelLabel: 'API level: low',
+    serverLevelLabel: 'Reported level: low',
   });
 });
 
@@ -116,7 +116,7 @@ test('getResilienceOverallDisplay treats null, undefined, and API unknown zero a
     scoreLabel: 'n/a',
     visualLevel: 'unknown',
     visualLevelLabel: 'Insufficient data',
-    serverLevelLabel: 'API level: unknown',
+    serverLevelLabel: 'Reported level: unknown',
   });
 });
 
@@ -128,7 +128,7 @@ test('getResilienceOverallDisplay keeps explicit zero scores when API level is r
     scoreLabel: '0',
     visualLevel: 'very_low',
     visualLevelLabel: 'Visual band: VERY LOW',
-    serverLevelLabel: 'API level: low',
+    serverLevelLabel: 'Reported level: low',
   });
 });
 
@@ -142,7 +142,7 @@ test('getResilienceOverallDisplay distinguishes positive sub-1 scores from expli
     scoreLabel: '<1',
     visualLevel: 'very_low',
     visualLevelLabel: 'Visual band: VERY LOW',
-    serverLevelLabel: 'API level: low',
+    serverLevelLabel: 'Reported level: low',
   });
 });
 
@@ -153,7 +153,7 @@ test('getResilienceOverallDisplay separates visual band from API level', () => {
     scoreLabel: '61',
     visualLevel: 'high',
     visualLevelLabel: 'Visual band: HIGH',
-    serverLevelLabel: 'API level: medium',
+    serverLevelLabel: 'Reported level: medium',
   });
 });
 
@@ -172,7 +172,7 @@ test('resilience methodology help copy derives current counts from the preview f
   assert.match(title, new RegExp(`${summary.activeDimensionCount} active dimensions`));
   assert.match(title, new RegExp(`${summary.domainCount} domains`));
   assert.match(title, new RegExp(`${summary.pillarCount} pillars`));
-  assert.match(title, /pillar detail appears when the API response includes it/i);
+  assert.match(title, /pillar detail appears when the data response includes it/i);
 });
 
 test('getResilienceTrendArrow renders the expected glyphs', () => {
@@ -331,6 +331,26 @@ test('formatResilienceConfidence excludes retired dimensions by ID (not by cover
   // If we filtered by coverage=0: (0.9 + 0.8) / 2 = 0.85 → 85% (the
   // over-aggressive filter that would mask genuine sparsity).
   assert.equal(formatResilienceConfidence(withRetired), 'Coverage 57% ✓');
+});
+
+test('formatResilienceConfidence excludes only the education rollback shape', () => {
+  const withZeroCoverageEducation: ResilienceScoreResponse = {
+    ...baseResponse,
+    domains: [{ id: 'social-governance', score: 80, weight: 0.19, dimensions: [
+      { id: 'governanceInstitutional', score: 80, coverage: 0.8, observedWeight: 0.8, imputedWeight: 0.2 },
+      { id: 'education', score: 0, coverage: 0, observedWeight: 0, imputedWeight: 0 },
+    ] }],
+  };
+  assert.equal(formatResilienceConfidence(withZeroCoverageEducation), 'Coverage 80% ✓');
+
+  const withEducationOutage: ResilienceScoreResponse = {
+    ...withZeroCoverageEducation,
+    domains: [{ ...withZeroCoverageEducation.domains[0]!, dimensions: [
+      withZeroCoverageEducation.domains[0]!.dimensions[0]!,
+      { id: 'education', score: 50, coverage: 0, observedWeight: 0, imputedWeight: 1, imputationClass: 'source-failure' },
+    ] }],
+  };
+  assert.equal(formatResilienceConfidence(withEducationOutage), 'Coverage 40% ✓');
 });
 
 test('formatResilienceChange30d preserves explicit sign formatting', () => {
@@ -614,7 +634,7 @@ test('collectDimensionConfidences returns an empty list for an empty response', 
 // representative card instead of a blank gap between the domain rows
 // and the footer. If a future edit accidentally drops a dimension
 // from the preview, this regression test fails loudly.
-test('LOCKED_PREVIEW populates all 22 serialized dimensions for the gated preview (PR #2949 review)', async () => {
+test('LOCKED_PREVIEW populates all 23 serialized dimensions for the gated preview (PR #2949 review)', async () => {
   const {
     RESILIENCE_DIMENSION_ORDER,
     RESILIENCE_RETIRED_DIMENSIONS,
@@ -623,8 +643,8 @@ test('LOCKED_PREVIEW populates all 22 serialized dimensions for the gated previe
   const all = collectDimensionConfidences(LOCKED_PREVIEW.domains);
   assert.equal(
     all.length,
-    22,
-    `locked preview should carry all 22 serialized dimensions (20 active + 2 retired), got ${all.length}`,
+    23,
+    `locked preview should carry all 23 serialized dimensions (21 active + 2 retired), got ${all.length}`,
   );
   assert.deepEqual(
     all.map((dim) => dim.id),

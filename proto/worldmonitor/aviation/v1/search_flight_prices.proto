@@ -26,14 +26,16 @@ message SearchFlightPricesRequest {
   string departure_date = 3 [
     (sebuf.http.query) = { name: "departure_date" },
     (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 10,
-    (buf.validate.field).string.max_len = 10
+    (buf.validate.field).string.len = 10
   ];
   // Return date (ISO 8601), empty for one-way.
   string return_date = 4 [(sebuf.http.query) = { name: "return_date" }];
   // Number of adult passengers (1-9).
+  // Accepted but currently ignored; quotes are per-person and the count does not filter.
   int32 adults = 5 [
     (sebuf.http.query) = { name: "adults" },
+    (sebuf.http.unimplemented) = true,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).int32.gte = 1,
     (buf.validate.field).int32.lte = 9
   ];
@@ -44,6 +46,7 @@ message SearchFlightPricesRequest {
   // Maximum number of quotes to return (1-50).
   int32 max_results = 8 [
     (sebuf.http.query) = { name: "max_results" },
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).int32.gte = 1,
     (buf.validate.field).int32.lte = 50
   ];

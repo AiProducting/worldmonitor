@@ -42,8 +42,8 @@ export interface StoryData {
   };
   signals: {
     protests: number;
-    militaryFlights: number;
-    militaryVessels: number;
+    militaryFlights: number | null;
+    militaryVessels: number | null;
     outages: number;
     gpsJammingHexes: number;
   };
@@ -60,7 +60,7 @@ export function collectStoryData(
   allNews: ClusteredEvent[],
   theaterPostures: Array<{ theaterId: string; theaterName: string; shortName: string; targetNation: string | null; postureLevel: string; totalAircraft: number; totalVessels: number; fighters: number; tankers: number; awacs: number; strikeCapable: boolean }>,
   predictionMarkets: Array<{ title: string; yesPrice: number }>,
-  signals?: { protests: number; militaryFlights: number; militaryVessels: number; outages: number; gpsJammingHexes: number },
+  signals?: { protests: number; militaryFlights: number | null; militaryVessels: number | null; outages: number; gpsJammingHexes: number },
   convergence?: { score: number; signalTypes: string[]; regionalDescriptions: string[] } | null,
 ): StoryData {
   const normalizedCountryCode = normalizeCiiCountryCode(countryCode);
@@ -113,7 +113,13 @@ export function collectStoryData(
     news: sortedNews.slice(0, 5).map(n => ({
       title: n.primaryTitle,
       threatLevel: (n.threat?.level || 'info') as ThreatLevel,
-      sourceCount: n.sourceCount,
+      // #6428: the shared story card renders "N sources" — publishers, not
+      // articles (see story-renderer.ts). Guarded like its sibling call sites
+      // because TS's "required" is not a runtime guarantee here: playback
+      // restores ClusteredEvent objects straight out of the IndexedDB snapshot
+      // (event-handlers.ts restoreSnapshot, 7-day retention), so a cluster
+      // persisted before this field existed arrives without it.
+      sourceCount: n.uniquePublisherCount ?? 0,
     })),
     theater: theater ? {
       theaterName: theater.theaterName,
@@ -135,7 +141,7 @@ export function collectStoryData(
       medium: threatCounts.medium,
       categories: [...threatCounts.categories],
     },
-    signals: signals || { protests: 0, militaryFlights: 0, militaryVessels: 0, outages: 0, gpsJammingHexes: 0 },
+    signals: signals || { protests: 0, militaryFlights: null, militaryVessels: null, outages: 0, gpsJammingHexes: 0 },
     convergence: convergence || null,
   };
 }

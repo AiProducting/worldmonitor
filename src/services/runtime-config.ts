@@ -1,10 +1,10 @@
 import { isDesktopRuntime } from './runtime';
+import { safeStorageSet } from '@/utils/safe-storage';
 import { invokeTauri } from './tauri-bridge';
 
 export type RuntimeSecretKey =
-  | 'GROQ_API_KEY'
   | 'OPENROUTER_API_KEY'
-  | 'TAVILY_API_KEYS'
+  | 'EXA_API_KEYS'
   | 'BRAVE_API_KEYS'
   | 'SERPAPI_API_KEYS'
   | 'FRED_API_KEY'
@@ -31,9 +31,8 @@ export type RuntimeSecretKey =
   | 'ICAO_API_KEY';
 
 export type RuntimeFeatureId =
-  | 'aiGroq'
   | 'aiOpenRouter'
-  | 'stockNewsSearchTavily'
+  | 'stockNewsSearchExa'
   | 'stockNewsSearchBrave'
   | 'stockNewsSearchSerpApi'
   | 'economicFred'
@@ -81,9 +80,8 @@ export interface RuntimeConfig {
 const TOGGLES_STORAGE_KEY = 'worldmonitor-runtime-feature-toggles';
 
 const defaultToggles: Record<RuntimeFeatureId, boolean> = {
-  aiGroq: true,
   aiOpenRouter: true,
-  stockNewsSearchTavily: true,
+  stockNewsSearchExa: true,
   stockNewsSearchBrave: true,
   stockNewsSearchSerpApi: true,
   economicFred: true,
@@ -114,27 +112,20 @@ export const RUNTIME_FEATURES: RuntimeFeatureDefinition[] = [
     name: 'Ollama local summarization',
     description: 'Local LLM provider via OpenAI-compatible endpoint (Ollama or LM Studio, desktop-first).',
     requiredSecrets: ['OLLAMA_API_URL', 'OLLAMA_MODEL'],
-    fallback: 'Falls back to Groq, then OpenRouter, then local browser model.',
-  },
-  {
-    id: 'aiGroq',
-    name: 'Groq summarization',
-    description: 'Primary fast LLM provider used for AI summary generation.',
-    requiredSecrets: ['GROQ_API_KEY'],
     fallback: 'Falls back to OpenRouter, then local browser model.',
   },
   {
     id: 'aiOpenRouter',
     name: 'OpenRouter summarization',
-    description: 'Secondary LLM provider for AI summary fallback.',
+    description: 'Hosted LLM provider used for AI summary generation.',
     requiredSecrets: ['OPENROUTER_API_KEY'],
     fallback: 'Falls back to local browser model only.',
   },
   {
-    id: 'stockNewsSearchTavily',
-    name: 'Tavily stock-news search',
+    id: 'stockNewsSearchExa',
+    name: 'Exa stock-news search',
     description: 'Primary targeted stock-news search provider for premium analysis enrichment.',
-    requiredSecrets: ['TAVILY_API_KEYS'],
+    requiredSecrets: ['EXA_API_KEYS'],
     fallback: 'Falls back to Brave, then SerpAPI, then Google News RSS.',
   },
   {
@@ -240,7 +231,7 @@ export const RUNTIME_FEATURES: RuntimeFeatureDefinition[] = [
   {
     id: 'finnhubMarkets',
     name: 'Finnhub market data',
-    description: 'Real-time stock quotes and market data from Finnhub.',
+    description: 'Delayed or seeded stock quotes via Finnhub when configured. A key is not a live tape.',
     requiredSecrets: ['FINNHUB_API_KEY'],
     fallback: 'Stock ticker uses limited free data.',
   },
@@ -275,8 +266,8 @@ export const RUNTIME_FEATURES: RuntimeFeatureDefinition[] = [
   {
     id: 'aviationStack',
     name: 'AviationStack flight delays',
-    description: 'Real-time international airport delay data from AviationStack API.',
-    requiredSecrets: ['AVIATIONSTACK_API'],
+    description: 'Real-time international airport delay data via Railway relay (seed loop + proxy).',
+    requiredSecrets: ['WS_RELAY_URL'],
     fallback: 'Non-US airports use simulated delay data.',
   },
   {
@@ -449,7 +440,7 @@ export function getEffectiveSecrets(feature: RuntimeFeatureDefinition): RuntimeS
 
 export function setFeatureToggle(featureId: RuntimeFeatureId, enabled: boolean): void {
   runtimeConfig.featureToggles[featureId] = enabled;
-  localStorage.setItem(TOGGLES_STORAGE_KEY, JSON.stringify(runtimeConfig.featureToggles));
+  safeStorageSet(TOGGLES_STORAGE_KEY, JSON.stringify(runtimeConfig.featureToggles));
   notifyConfigChanged();
 }
 

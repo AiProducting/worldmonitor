@@ -8,38 +8,7 @@ import { getCSSColor } from '@/utils/theme-colors';
 import { isHealthMappedSource } from '@/services/health-freshness-map';
 import type { DataSourceId } from '@/types';
 
-export type DataSourceId =
-  | 'acled'      // Protests/conflicts
-  | 'opensky'    // Military flights
-  | 'wingbits'   // Aircraft enrichment
-  | 'ais'        // Vessel tracking
-  | 'usgs'       // Earthquakes
-  | 'gdelt'      // News velocity
-  | 'gdelt_doc'  // GDELT Doc protest intelligence
-  | 'rss'        // RSS feeds
-  | 'polymarket' // Prediction markets
-  | 'predictions' // Predictions feed
-  | 'pizzint'    // PizzINT monitoring
-  | 'outages'    // Internet outages
-  | 'cyber_threats' // Cyber threat IOC layer
-  | 'weather'    // Weather alerts
-  | 'economic'   // Economic indicators (FRED)
-  | 'oil'        // EIA oil analytics
-  | 'spending'        // USASpending.gov
-  | 'firms'          // NASA FIRMS satellite fires
-  | 'acled_conflict' // ACLED battles/explosions/violence
-  | 'ucdp'           // UCDP conflict classification
-  | 'hapi'           // HDX HAPI aggregated conflict data
-  | 'ucdp_events'    // UCDP georeferenced conflict events
-  | 'unhcr'          // UNHCR displacement data
-  | 'climate'        // Climate anomaly data (Open-Meteo)
-  | 'worldpop'       // WorldPop population exposure
-  | 'giving'         // Global giving activity data
-  | 'bis'            // BIS central bank data
-  | 'wto_trade'      // WTO trade policy data
-  | 'supply_chain'   // Supply chain disruption intelligence
-  | 'security_advisories'  // Government travel/security advisories
-  | 'gpsjam';              // GPS/GNSS interference
+export type { DataSourceId } from '@/types';
 
 export type FreshnessStatus = 'fresh' | 'stale' | 'very_stale' | 'no_data' | 'disabled' | 'error';
 type FreshnessEvidence = 'session' | 'seed-health';
@@ -125,7 +94,17 @@ const SOURCE_METADATA: Record<DataSourceId, { name: string; requiredForRisk: boo
   pizzint: { name: 'PizzINT Monitoring', requiredForRisk: false, panelId: 'intel' },
   outages: { name: 'Internet Outages', requiredForRisk: false, panelId: 'outages' },
   cyber_threats: { name: 'Cyber Threat IOCs', requiredForRisk: false, panelId: 'map' },
-  weather: { name: 'Weather Alerts', requiredForRisk: false, panelId: 'weather' },
+  // This branch widened the weather source to cover ECCC as well as NWS; main's
+  // road entries below are untouched by that.
+  weather: { name: 'Severe Weather Alerts (NWS, ECCC, WMO SWIC)', requiredForRisk: false, panelId: 'weather' },
+  // One entry per CANADA_ROAD_SOURCES descriptor. Five sources union onto the
+  // canadaRoads layer, and recording them all as ontario_511 made an Alberta,
+  // Toronto or BC outage read as an Ontario one — or vanish entirely.
+  ontario_511: { name: 'Ontario Roads (511)', requiredForRisk: false, panelId: 'map' },
+  alberta_511: { name: 'Alberta Roads (511)', requiredForRisk: false, panelId: 'map' },
+  manitoba_511: { name: 'Manitoba Roads (511)', requiredForRisk: false, panelId: 'map' },
+  toronto_roads: { name: 'Toronto Road Restrictions', requiredForRisk: false, panelId: 'map' },
+  bc_open511: { name: 'BC Roads (Open511)', requiredForRisk: false, panelId: 'map' },
   economic: { name: 'Economic Data (FRED)', requiredForRisk: false, panelId: 'economic' },
   oil: { name: 'Oil Analytics (EIA)', requiredForRisk: false, panelId: 'economic' },
   spending: { name: 'Gov Spending', requiredForRisk: false, panelId: 'economic' },
@@ -139,10 +118,14 @@ const SOURCE_METADATA: Record<DataSourceId, { name: string; requiredForRisk: boo
   worldpop: { name: 'Population Exposure', requiredForRisk: false, panelId: 'population-exposure' },
   giving: { name: 'Global Giving Activity', requiredForRisk: false, panelId: 'giving' },
   bis: { name: 'BIS Central Banks', requiredForRisk: false, panelId: 'economic' },
+  bls: { name: 'BLS Labor Market', requiredForRisk: false, panelId: 'economic' },
   wto_trade: { name: 'WTO Trade Policy', requiredForRisk: false, panelId: 'trade-policy' },
   supply_chain: { name: 'Supply Chain Intelligence', requiredForRisk: false, panelId: 'supply-chain' },
   security_advisories: { name: 'Security Advisories', requiredForRisk: false, panelId: 'security-advisories' },
+  sanctions_pressure: { name: 'Sanctions Pressure', requiredForRisk: false, panelId: 'sanctions-pressure' },
+  radiation: { name: 'Radiation Watch', requiredForRisk: false, panelId: 'radiation-watch' },
   gpsjam: { name: 'GPS/GNSS Interference', requiredForRisk: false, panelId: 'map' },
+  treasury_revenue: { name: 'Treasury Customs Revenue', requiredForRisk: false, panelId: 'trade-policy' },
 };
 
 const PANEL_FRESHNESS_SOURCES: Record<string, readonly DataSourceId[]> = {
@@ -489,6 +472,9 @@ class DataFreshnessTracker {
     if (age <= freshThreshold) return source.healthStatus === 'COVERAGE_PARTIAL'
       || source.healthStatus === 'STALE_CONTENT'
       || source.healthStatus === 'STALE_SEED'
+      || source.healthStatus === 'COVERAGE_DEGRADED'
+      || source.healthStatus === 'CHINA_DEGRADED'
+      || source.healthStatus === 'ROLLOUT_PENDING'
       ? 'stale'
       : 'fresh';
     if (age <= staleThreshold) return 'stale';
@@ -497,7 +483,10 @@ class DataFreshnessTracker {
   }
 
   private healthStatusIsError(status: string): boolean {
-    return status === 'SEED_ERROR' || status === 'REDIS_DOWN' || status === 'REDIS_PARTIAL';
+    return status === 'SEED_ERROR' || status === 'REDIS_DOWN' || status === 'REDIS_PARTIAL'
+      // Server-crit: a fresh-aged CHINA_UNAVAILABLE must render as an error, not
+      // pass through calculateStatus's age check as 'fresh' (api/health.js crit).
+      || status === 'CHINA_UNAVAILABLE';
   }
 
   private healthStatusHasNoData(status: string): boolean {
@@ -576,7 +565,12 @@ const INTELLIGENCE_GAP_MESSAGES: Record<DataSourceId, string> = {
   pizzint: 'PizzINT monitor unavailable—location/tension tracking degraded',
   outages: 'Internet disruptions may be unreported—outage monitoring offline',
   cyber_threats: 'Cyber IOC map points unavailable—malicious infrastructure visibility reduced',
-  weather: 'Severe weather warnings may be missed—weather alerts unavailable',
+  weather: 'Official weather warnings may be missed—NWS, ECCC, or WMO SWIC alerts unavailable',
+  ontario_511: 'Ontario highway incidents may be missed—511 feed unavailable',
+  alberta_511: 'Alberta highway incidents may be missed—511 feed unavailable',
+  manitoba_511: 'Manitoba highway incidents may be missed—511 feed unavailable',
+  toronto_roads: 'Toronto road restrictions may be missed—City of Toronto feed unavailable',
+  bc_open511: 'BC highway incidents may be missed—Open511 feed unavailable',
   economic: 'Economic indicators stale—Fed/Treasury data not updating',
   oil: 'Oil market analytics unavailable—EIA data not updating',
   spending: 'Government spending data unavailable',
@@ -590,10 +584,14 @@ const INTELLIGENCE_GAP_MESSAGES: Record<DataSourceId, string> = {
   worldpop: 'Population exposure data unavailable—affected population unknown',
   giving: 'Global giving activity data unavailable',
   bis: 'Central bank policy data may be stale—BIS feed unavailable',
+  bls: 'Labor market data unavailable—BLS feed not yet seeded',
   wto_trade: 'Trade policy intelligence unavailable—WTO data not updating',
   supply_chain: 'Supply chain disruption status unavailable—chokepoint monitoring offline',
   security_advisories: 'Government travel advisory data unavailable—security alerts may be missed',
+  sanctions_pressure: 'Structured sanctions pressure unavailable\u2014OFAC designation visibility reduced',
+  radiation: 'Radiation monitoring degraded—EPA RadNet and Safecast observations unavailable',
   gpsjam: 'GPS/GNSS interference data unavailable—jamming zones undetected',
+  treasury_revenue: 'US Treasury customs revenue data unavailable',
 };
 
 /**

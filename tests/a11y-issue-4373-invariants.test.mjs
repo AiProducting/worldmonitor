@@ -86,10 +86,12 @@ describe('PanelTabBar — add button is not a tablist child', () => {
   });
 
   it('the add button is a sibling of the tablist in the bar', () => {
-    // render() appends tabs to the tablist and re-parents [tablist, addBtn]
-    // onto the bar, so the tablist owns only role="tab" children.
+    // render() appends tabs to the tablist and re-parents [tablist, addBtn, …]
+    // onto the bar, so the tablist owns only role="tab" children. Trailing
+    // siblings (the tab-cap live region) are fine — what must never happen is
+    // the add button landing inside the tablist.
     assert.match(tabBar, /this\.tablistEl\.appendChild\(this\.renderTab\(/);
-    assert.match(tabBar, /this\.element\.replaceChildren\(this\.tablistEl,\s*addBtn\)/);
+    assert.match(tabBar, /this\.element\.replaceChildren\(this\.tablistEl,\s*addBtn\s*[,)]/);
   });
 });
 
@@ -261,5 +263,17 @@ describe('target-size — small map controls', () => {
     assert.ok(line, 'DeckGL layer help button must exist');
     assert.ok(line.includes('aria-label='),
       'DeckGL layer help button must expose an accessible name');
+  });
+});
+
+// settings-main.ts boots the desktop settings window on import (module-level
+// `void initSettingsWindow()` behind the Tauri bridge and local sidecar), so
+// the traffic-log table has no runtime harness; its markup is checked here.
+describe('settings traffic-log headers are scoped (#7023)', () => {
+  it('diag-table thead headers include scope="col"', () => {
+    assert.match(
+      read('src', 'settings-main.ts'),
+      /<table class="diag-table"><thead><tr>(?:<th scope="col">[^<]*<\/th>){5}<\/tr><\/thead>/,
+    );
   });
 });

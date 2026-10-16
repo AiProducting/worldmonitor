@@ -83,16 +83,6 @@ export interface HumanitarianCountrySummary {
   updatedAt: number;
 }
 
-export interface GetHumanitarianSummaryBatchRequest {
-  countryCodes: string[];
-}
-
-export interface GetHumanitarianSummaryBatchResponse {
-  results: Record<string, HumanitarianCountrySummary>;
-  fetched: number;
-  requested: number;
-}
-
 export interface ListIranEventsRequest {
 }
 
@@ -111,6 +101,16 @@ export interface IranEvent {
   locationName: string;
   timestamp: string;
   severity: string;
+}
+
+export interface GetHumanitarianSummaryBatchRequest {
+  countryCodes: string[];
+}
+
+export interface GetHumanitarianSummaryBatchResponse {
+  results: Record<string, HumanitarianCountrySummary>;
+  fetched: number;
+  requested: number;
 }
 
 export type UcdpViolenceType = "UCDP_VIOLENCE_TYPE_UNSPECIFIED" | "UCDP_VIOLENCE_TYPE_STATE_BASED" | "UCDP_VIOLENCE_TYPE_NON_STATE" | "UCDP_VIOLENCE_TYPE_ONE_SIDED";
@@ -267,6 +267,30 @@ export class ConflictServiceClient {
     }
 
     return await resp.json() as ListIranEventsResponse;
+  }
+
+  async getHumanitarianSummaryBatch(req: GetHumanitarianSummaryBatchRequest, options?: ConflictServiceCallOptions): Promise<GetHumanitarianSummaryBatchResponse> {
+    let path = "/api/conflict/v1/get-humanitarian-summary-batch";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(req),
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetHumanitarianSummaryBatchResponse;
   }
 
   private async handleError(resp: Response): Promise<never> {

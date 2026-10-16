@@ -79,7 +79,7 @@ export function isElevatedCiiScore(score: number): boolean {
   return level === 'elevated' || level === 'high' || level === 'critical';
 }
 
-function toCachedCII(proto: CiiScore): CachedCIIScore {
+export function toCachedCII(proto: CiiScore): CachedCIIScore {
   return {
     code: proto.region,
     name: TIER1_COUNTRIES[proto.region] || proto.region,
@@ -267,6 +267,7 @@ const breaker = createCircuitBreaker<CachedRiskScores>({
   name: 'Risk Scores',
   cacheTtlMs: 30 * 60 * 1000,
   persistCache: true,
+  persistentStaleCeilingMs: LS_MAX_STALENESS_MS,
 });
 
 // Sync prime from localStorage (before async IndexedDB hydration)

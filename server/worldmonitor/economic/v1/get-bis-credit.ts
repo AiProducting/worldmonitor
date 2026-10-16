@@ -1,20 +1,18 @@
 /**
- * RPC: getBisCredit -- BIS SDMX API (WS_TC)
- * Total credit-to-GDP ratio for major economies.
+ * RPC: getBisCredit -- reads BIS credit-to-GDP data from Railway seed cache.
+ * All external BIS SDMX API calls happen in seed-bis-data.mjs on Railway.
  */
 
 import type {
   ServerContext,
   GetBisCreditRequest,
   GetBisCreditResponse,
-  BisCreditToGdp,
 } from '../../../../src/generated/server/worldmonitor/economic/v1/service_server';
 
 import { getCachedJson } from '../../../_shared/redis';
 import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
 
-const REDIS_CACHE_KEY = 'economic:bis:credit:v1';
-const REDIS_CACHE_TTL = 43200; // 12 hours — quarterly data
+const SEED_CACHE_KEY = 'economic:bis:credit:v1';
 
 export async function getBisCredit(
   ctx: ServerContext,

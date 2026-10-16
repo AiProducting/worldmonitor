@@ -39,10 +39,15 @@ Action-dispatched writer. The body's `action` field selects the mutation:
 | `set-alert-rules` | Replace the caller's alert-rules set in one shot. |
 | `set-quiet-hours` | Set do-not-disturb windows. |
 | `set-digest-settings` | Configure digest cadence and channel routing. |
+| `set-notification-config` | Per-variant notification config: `variant` (required), `enabled`, `eventTypes`, `sensitivity` (`all`/`high`/`critical`), `channels`, `aiDigestEnabled`, `digestMode` (`realtime`/`daily`/`twice_daily`/`weekly`), `digestHour`, `digestTimezone`, `countries`, `tickers`. Validation errors return structured 400 codes (e.g. `COUNTRIES_MUST_BE_ARRAY`, `TICKERS_LIMIT_EXCEEDED`). |
 
-All actions require Clerk bearer + PRO (`tier >= 1`). Invalid actions return `400 Unknown action`. Requests are forwarded to Convex via `RELAY_SHARED_SECRET`.
+All actions require Clerk bearer + PRO, and PRO here specifically means a **billed entitlement row** at `tier >= 1`. A Clerk session whose role is `pro` but which has no entitlement row does **not** qualify, unlike the gateway's tier-1 REST gate: notification delivery is enforced a second time inside Convex (`assertProEntitlement`), so the edge gate returns the clean `403 pro_required` rather than letting the request fail deeper with a less useful error. Invalid actions return `400 Unknown action`. Requests are forwarded to Convex via `RELAY_SHARED_SECRET`.
 
-- **Idempotency**: optional `Idempotency-Key` supported on `POST /api/notification-channels`. Retrying the same key with an identical body replays the original response instead of applying the channel action again.
+A caller without a billed row gets `403 pro_required` only when the entitlement is confirmed non-Pro. When entitlement verification is itself in doubt the gate follows the shared billing-verification contract instead: `503` with `Retry-After` and `X-Billing-Verification` for `entitlement_verification_unavailable` / `renewal_verification_pending` / `renewal_verification_failed`, and `403 subscription_lapsed` for a confirmed lapse. See [Error handling](/usage-errors).
+
+Clients should honor that `503` with at least one retry at the advertised `Retry-After` before surfacing a failure — the dashboard's own service layer (`src/services/notification-channels.ts`) makes exactly one bounded retry. For `entitlement_verification_unavailable` specifically, retrying earlier than `Retry-After` is wasted: that answer is briefly negative-cached server-side, so an early retry is served the same result. The two `renewal_verification_*` codes are not negative-cached, but their delay reflects a real provider re-check or cooldown, so retrying early is still answered from the same state.
+
+- **Idempotency**: optional `Idempotency-Key` supported on `POST /api/notification-channels`. Retrying the same key with an identical body replays the original response instead of applying the channel action again. The exception is a successful webhook `set-channel`: its response carries a one-time signing secret, so it is never cached, and a retry registers the URL again with a new secret.
 
 ## Webhook delivery contract
 
@@ -51,21 +56,59 @@ When an alert fires, registered webhook URLs receive:
 - **Method**: `POST`
 - **Headers**:
   - `Content-Type: application/json`
-  - `X-WM-Signature: sha256=<HMAC-SHA256(body, channelSecret)>`
-  - `X-WM-Delivery-Id: <ulid>`
-  - `X-WM-Event: <event-name>`
-- **Body** (envelope v1):
+  - `X-WM-Delivery-Id: <uuid>`, unique per delivery attempt
+  - `X-WM-Event: <eventType>`, the same value as the body's `eventType`
+  - `X-WM-Timestamp: <unix seconds>`
+  - `X-WM-Signature: sha256=<hex HMAC-SHA256(signingSecret, timestamp + "." + deliveryId + "." + rawBody)>`
+- **Body** (envelope v1). Realtime alerts from the notification relay:
   ```json
   {
-    "envelope": 1,
-    "event": "brief_ready",
-    "deliveryId": "01HX...",
-    "occurredAt": "2026-04-19T06:00:00Z",
-    "data": { "issueDate": "2026-04-19", "magazineUrl": "..." }
+    "version": "1",
+    "eventType": "rss_alert",
+    "severity": "high",
+    "timestamp": 1776578400000,
+    "payload": { "title": "...", "source": "...", "link": "https://..." },
+    "variant": "full"
+  }
+  ```
+  Digests from the digest producer:
+  ```json
+  {
+    "version": "1",
+    "eventType": "digest",
+    "stories": [{ "title": "...", "severity": "high", "phase": "...", "sources": ["..."] }],
+    "summary": "...",
+    "storyCount": 12
   }
   ```
 
-Signature verification: `hmac_sha256(rawBody, channelSecret) == X-WM-Signature[7:]`.
+### Signing secret
+
+Each time a webhook URL is saved through `set-channel`, the response includes a new `signingSecret` (`whsec_...`). It is returned only once and stored encrypted. Saving the URL again issues a new secret and invalidates the old one, which is also how to rotate it.
+
+### Verifying a delivery
+
+1. Read the raw request body before parsing it.
+2. Compute `hex(HMAC-SHA256(signingSecret, X-WM-Timestamp + "." + X-WM-Delivery-Id + "." + rawBody))`.
+3. Reject the delivery unless `X-WM-Signature` is `sha256=` followed by exactly 64 hex characters, then compare those bytes with yours using a constant-time comparison.
+4. Reject deliveries whose `X-WM-Timestamp` is more than 5 minutes from your clock, and deduplicate on `X-WM-Delivery-Id`.
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verify(rawBody, headers, signingSecret) {
+  const ts = headers['x-wm-timestamp'];
+  const id = headers['x-wm-delivery-id'];
+  const sig = headers['x-wm-signature'] ?? '';
+  if (!ts || !id || Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  const match = /^sha256=([0-9a-f]{64})$/.exec(sig);
+  if (!match) return false;
+  const expected = createHmac('sha256', signingSecret).update(`${ts}.${id}.${rawBody}`).digest();
+  return timingSafeEqual(Buffer.from(match[1], 'hex'), expected);
+}
+```
+
+Webhooks registered before signing was introduced have no secret and arrive without `X-WM-Signature`. The settings page marks them **Unsigned**; remove and re-add the URL to get a secret.
 
 <Warning>
 The envelope version is **shared across two producers** (`notification-relay`, `seed-digest-notifications`). Bumping it requires coordinated updates.
@@ -75,25 +118,49 @@ The envelope version is **shared across two producers** (`notification-relay`, `
 
 Authenticated event-publish endpoint for PRO callers. Requires Clerk bearer auth and an active PRO entitlement, then enqueues the accepted event into the notification queue. Relay-internal control events such as `flush_quiet_held` and `channel_welcome` are reserved and rejected.
 
+Errors: 401 (missing/invalid JWT), 403 `pro_required` — and, like every Pro-gated endpoint here, the shared billing-verification contract when entitlement verification is itself in doubt: `503` with `Retry-After` and `X-Billing-Verification` for `entitlement_verification_unavailable` / `renewal_verification_pending` / `renewal_verification_failed`, and `403 subscription_lapsed` for a confirmed lapse. See [Error handling](/usage-errors).
+
 - **Idempotency**: optional `Idempotency-Key` supported. Retrying the same key with an identical body replays the original enqueue response instead of publishing the notification again.
+
+#### Caller-submitted field policy
+
+`payload.title`, `payload.source`, `payload.link`, `payload.url` and `payload.description` reach the email subject and body, the Telegram/Slack/Discord text, and the web-push click target, so they are shaped at this boundary before the event is queued (issue #8397). Fields are neutralised individually — an event is never rejected for its content:
+
+- **`title`** — control characters, newlines and invisible formatting are stripped, the value is truncated to 200 characters, clickable URL tokens are replaced with `[link removed]`, and the result is prefixed `Community alert: ` so caller copy is never rendered as WorldMonitor's own.
+- **`source`** — preserved as submitted, unless it impersonates a first-party identity (matched after Unicode normalisation, confusable folding and punctuation stripping), in which case it becomes the neutral label `Community alert`. Real publisher attribution such as `Reuters` is kept.
+- **`link` / `url`** — must be `https` with no embedded credentials; anything else becomes the dashboard URL. An off-origin article link is delivered to text channels with its destination host disclosed inline (`<url> (source: <host>)`), and is never used as the web-push click target, which stays first-party.
+- **`description`** — same shaping as `title`, truncated to 400 characters.
+- `importanceScore` and `corroborationCount` are stripped; they are computed server-side.
+
+A `200` response carries `warnings` when any field was rewritten, so a caller can detect the change instead of discovering it from a malformed notification:
+
+```json
+{ "ok": true, "warnings": ["source_rewritten", "link_rewritten"] }
+```
+
+The field is omitted entirely when nothing was rewritten, so callers that ignore unknown keys are unaffected.
 
 ## Telegram
 
-### `GET /api/telegram-feed?userId=...`
+### `GET /api/telegram-feed`
 
-Returns the pre-rendered brief feed for a given Telegram-linked user. Used by the Telegram mini-app.
+First-party browser path for the topic-tabbed Telegram Intel panel. Accepts `limit`, `topic`, and `channel`; there is no per-user (`userId`) form. Requires the dashboard session credential (`wms_`) and responds `private, max-age=30` — it is not publicly cacheable, and an uncredentialed request returns `401` with `no-store`. Message text is R4.
+
+For programmatic and partner access use the authenticated RPC [`GET /api/intelligence/v1/list-telegram-feed`](/panels/telegram-intel) instead.
 
 ## YouTube
 
 ### `GET /api/youtube/embed?videoId=...`
 
-SSR'd YouTube embed iframe with CSP-compatible wrapping. Used to bypass WKWebView autoplay restrictions on the desktop app.
+Hosted YouTube iframe wrapper retained for compatibility. The current web app embeds YouTube directly; the desktop app uses the local sidecar's `/api/youtube-embed` route to handle WKWebView autoplay restrictions. Neither uses this hosted route.
+
+`origin` (the YouTube player origin) accepts enumerated app origins, team-pinned Vercel previews, localhost / `127.0.0.1`, and `tauri://localhost`. `parentOrigin` (the iframe `postMessage` target) accepts that same list plus `http(s)://tauri.localhost` and matching single-label `*.tauri.localhost` hosts. Vendor subdomains such as `clerk.worldmonitor.app` and `abacus.worldmonitor.app` remain excluded. A parent-only Tauri URL supplied as `origin` is rejected and falls back to the apex origin (`worldmonitor.app`).
 
 ### `GET /api/youtube/live?channel=<handle>` or `?videoId=<11-char-id>`
 
-Returns live-stream metadata for a YouTube channel (`channel` — handle with or without `@` prefix) or a specific video (`videoId` — 11-char YouTube id). At least one of the two params is required; returns `400 Missing channel or videoId parameter` otherwise. Response cached 10 min for channel lookups, 1 hour for videoId lookups.
+Names a YouTube video for channel management. `videoId` (11-char YouTube id) returns the video's `title` and author (`channelName`) from YouTube oEmbed, fetched directly; the response is cached 1 hour. If oEmbed fails, the response is `200` with null `title` and `channelName` and is not cached. When both params are sent, the `videoId` lookup answers.
 
-Proxies to the Railway relay first (residential proxy for YouTube scraping). On relay failure, falls back to YouTube oEmbed (for `videoId`) or direct channel scraping — both are unreliable from datacenter IPs.
+Channel live detection is retired. A valid `channel` (handle with or without `@`, or a `UC…` channel id) without `videoId` returns `410 {"error":"channel_live_detection_retired"}`, cached 1 day, with no request to YouTube or the Railway relay. At least one of the two params is required; returns `400 Missing channel or videoId parameter` otherwise, and `400` for a malformed handle, channel id or video id.
 
 ## Slack integration
 
@@ -105,7 +172,7 @@ Authenticated (Clerk JWT + PRO). Body is empty. Server generates a one-time CSRF
 { "oauthUrl": "https://slack.com/oauth/v2/authorize?client_id=...&scope=incoming-webhook&..." }
 ```
 
-Errors: 401 (missing/invalid JWT), 403 `pro_required`, 503 (OAuth not configured or Upstash unavailable).
+Errors: 401 (missing/invalid JWT), 403 `pro_required`, 503 (OAuth not configured or Upstash unavailable). A 503 here can **also** be the retryable billing-verification denial — `entitlement_verification_unavailable` / `renewal_verification_pending` / `renewal_verification_failed`, carrying `Retry-After` and `X-Billing-Verification`; a confirmed lapse is `403 subscription_lapsed`. Branch on the `code` field rather than the status alone, since the misconfiguration 503 is not retryable. See [Error handling](/usage-errors).
 
 ### `GET /api/slack/oauth/callback`
 
@@ -115,7 +182,7 @@ Unauthenticated — the popup lands here after Slack redirects. Validates the st
 
 ### `POST /api/discord/oauth/start`
 
-Authenticated (Clerk JWT + PRO). Same shape as the Slack start route — returns `{ oauthUrl }` for a popup.
+Authenticated (Clerk JWT + PRO). Same shape as the Slack start route — returns `{ oauthUrl }` for a popup, and the same error set, including the billing-verification 503/403 codes described there.
 
 ### `GET /api/discord/oauth/callback`
 

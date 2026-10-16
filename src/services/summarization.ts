@@ -1,7 +1,7 @@
 /**
  * Summarization Service with Fallback Chain
  * Server-side Redis caching handles cross-user deduplication
- * Fallback: Ollama -> Groq -> OpenRouter -> Browser T5
+ * Fallback: Ollama -> OpenRouter -> Browser T5
  *
  * Uses NewsServiceClient.summarizeArticle() RPC instead of legacy
  * per-provider fetch endpoints.
@@ -22,13 +22,23 @@ import { premiumFetch } from '@/services/premium-fetch';
 import {
   canAttemptServerSummarization,
   configureSummarizeGate,
+  isServerSummarizationSuppressed,
   parseSummarizeRetryAfterMs,
   suppressServerSummarization,
   suppressServerSummarizationFor,
 } from '@/services/summarize-gate';
 import { hasPremiumAccess } from '@/services/panel-gating';
+import {
+  createSummarizationAttemptState,
+  logChainOutcome,
+  markSummarizationAttempt,
+  markSummarizationShortCircuited,
+  markSummarizationSuppressed,
+  type AttemptedSummarizationProvider,
+  type SummarizationAttemptState,
+} from './summarization-outcome';
 
-export type SummarizationProvider = 'ollama' | 'groq' | 'openrouter' | 'browser' | 'cache';
+export type SummarizationProvider = AttemptedSummarizationProvider | 'cache';
 
 export interface SummarizationResult {
   summary: string;
@@ -40,7 +50,7 @@ export interface SummarizationResult {
 export type ProgressCallback = (step: number, total: number, message: string) => void;
 
 export interface SummarizeOptions {
-  skipCloudProviders?: boolean;  // true = skip Ollama/Groq/OpenRouter, go straight to browser T5
+  skipCloudProviders?: boolean;  // true = skip Ollama/OpenRouter, go straight to browser T5
   skipBrowserFallback?: boolean; // true = skip browser T5 fallback
   /**
    * Optional article bodies paired 1:1 with `headlines`. When supplied and
@@ -75,7 +85,7 @@ const premiumNewsClient = new NewsServiceClient(getRpcBaseUrl(), {
 // Gate every API-provider dispatch on the client-side entitlement signal so
 // anon/free principals fall straight to the browser-T5 provider with ZERO
 // network attempts — before this gate, every summarize attempt fanned out up
-// to 3 doomed RPCs (ollama→openrouter→groq through the same gated endpoint).
+// to 2 doomed RPCs (ollama→openrouter through the same gated endpoint).
 // panel-gating's hasPremiumAccess is the dual-signal source of truth.
 // translateText is deliberately NOT gated: it uses mode='translate' via the
 // plain newsClient, which the server allows for non-premium callers.
@@ -95,25 +105,22 @@ const emptySummaryFallback: SummarizeArticleResponse = { summary: '', provider: 
 
 interface ApiProviderDef {
   featureId: RuntimeFeatureId;
-  provider: SummarizationProvider;
+  provider: Exclude<AttemptedSummarizationProvider, 'browser'>;
   label: string;
 }
 
-// Order matches the server's default chain since #4944: OpenRouter
-// (DeepSeek V4 Flash) ahead of Groq — the RPC honors the client-supplied
-// provider, so the client's try-order decides which model summarizes.
+// The RPC honors the client-supplied provider, so the client's try-order
+// decides which model summarizes.
 const API_PROVIDERS: ApiProviderDef[] = [
   { featureId: 'aiOllama',      provider: 'ollama',     label: 'Ollama' },
   { featureId: 'aiOpenRouter',  provider: 'openrouter', label: 'OpenRouter' },
-  { featureId: 'aiGroq',        provider: 'groq',       label: 'Groq AI' },
 ];
-
-let lastAttemptedProvider = 'none';
 
 // ── Unified API provider caller (via SummarizeArticle RPC) ──
 
 async function tryApiProvider(
   providerDef: ApiProviderDef,
+  attemptState: SummarizationAttemptState,
   headlines: string[],
   geoContext?: string,
   lang?: string,
@@ -122,10 +129,22 @@ async function tryApiProvider(
   if (!isFeatureAvailable(providerDef.featureId)) return null;
   // Entitlement/suppression gate BEFORE any network dispatch (#4913) — a
   // denial returns null so the chain falls through to browser T5.
-  if (!canAttemptServerSummarization()) return null;
-  lastAttemptedProvider = providerDef.provider;
+  if (!canAttemptServerSummarization()) {
+    // #5605: a denial while the post-403/429 cooldown is armed is a server
+    // outage, not the designed anon decline. Recording which one it was keeps
+    // a paying user's broken entitlement visible at the chain's log site.
+    if (isServerSummarizationSuppressed()) markSummarizationSuppressed(attemptState);
+    return null;
+  }
+  let dispatched = false;
   try {
     const resp: SummarizeArticleResponse = await summaryBreaker.execute(async () => {
+      // #5605: the breaker returns its default WITHOUT running this callback
+      // while on cooldown, so marking HERE is what makes "attempted" mean
+      // "actually dispatched" — and makes gate-before-mark structural rather
+      // than a source-order convention a regex has to police.
+      dispatched = true;
+      markSummarizationAttempt(attemptState, providerDef.provider);
       try {
         return await premiumNewsClient.summarizeArticle({
           provider: providerDef.provider,
@@ -151,6 +170,14 @@ async function tryApiProvider(
       }
     }, emptySummaryFallback);
 
+    // Breaker open: `execute` returned its default without contacting anyone.
+    // Reporting that as a provider failure is the outage-shaped lie #5377 is
+    // about, so record it as its own cause instead (#5605).
+    if (!dispatched) {
+      markSummarizationShortCircuited(attemptState);
+      return null;
+    }
+
     // Provider skipped (credentials missing) or signaled fallback
     if (resp.status === 'SUMMARIZE_STATUS_SKIPPED' || resp.fallback) return null;
 
@@ -174,6 +201,7 @@ async function tryApiProvider(
 // ── Browser T5 provider (different interface -- no API call) ──
 
 async function tryBrowserT5(
+  attemptState: SummarizationAttemptState,
   headlines: string[],
   modelId?: string,
   bodies?: string[],
@@ -182,7 +210,7 @@ async function tryBrowserT5(
     if (!mlWorker.isAvailable) {
       return null;
     }
-    lastAttemptedProvider = 'browser';
+    markSummarizationAttempt(attemptState, 'browser');
 
     const lang = getCurrentLanguage();
     // When bodies are supplied, interleave them with headlines so the local
@@ -224,6 +252,7 @@ async function tryBrowserT5(
 
 async function runApiChain(
   providers: ApiProviderDef[],
+  attemptState: SummarizationAttemptState,
   headlines: string[],
   geoContext: string | undefined,
   lang: string | undefined,
@@ -234,14 +263,14 @@ async function runApiChain(
 ): Promise<SummarizationResult | null> {
   for (const [i, provider] of providers.entries()) {
     onProgress?.(stepOffset + i, totalSteps, `Connecting to ${provider.label}...`);
-    const result = await tryApiProvider(provider, headlines, geoContext, lang, bodies);
+    const result = await tryApiProvider(provider, attemptState, headlines, geoContext, lang, bodies);
     if (result) return result;
   }
   return null;
 }
 
 /**
- * Generate a summary using the fallback chain: Ollama -> Groq -> OpenRouter -> Browser T5
+ * Generate a summary using the fallback chain: Ollama -> OpenRouter -> Browser T5
  * Server-side Redis caching is handled by the SummarizeArticle RPC handler.
  *
  * @param geoContext Optional geographic signal context to include in the prompt
@@ -264,20 +293,28 @@ export async function generateSummary(
   const optionsSuffix = options?.skipCloudProviders || options?.skipBrowserFallback
     ? `:opts${options.skipCloudProviders ? 'C' : ''}${options.skipBrowserFallback ? 'B' : ''}`
     : '';
-  const cacheKey = buildSummaryCacheKey(headlines, 'brief', geoContext, SITE_VARIANT, lang, undefined, bodies) + optionsSuffix;
+  const cacheKey = (await buildSummaryCacheKey(headlines, 'brief', geoContext, SITE_VARIANT, lang, undefined, bodies)) + optionsSuffix;
 
-  // Track at generateSummary return only (not inside tryApiProvider) to avoid
-  // double-counting beta comparison traffic. Only the winning provider is recorded.
-  if (result) {
-    trackLLMUsage(result.provider, result.model, result.cached);
-  } else {
-    trackLLMFailure(lastAttemptedProvider);
-  }
+  return summaryResultBreaker.execute(
+    async () => {
+      const attemptState = createSummarizationAttemptState();
+      const result = await generateSummaryInternal(attemptState, headlines, onProgress, geoContext, lang, options);
 
-  return result;
+      if (result) {
+        trackLLMUsage(result.provider, result.model, result.cached);
+      } else {
+        trackLLMFailure(attemptState.lastAttemptedProvider);
+      }
+
+      return result;
+    },
+    null,
+    { cacheKey, shouldCache: (result) => result !== null },
+  );
 }
 
 async function generateSummaryInternal(
+  attemptState: SummarizationAttemptState,
   headlines: string[],
   onProgress: ProgressCallback | undefined,
   geoContext: string | undefined,
@@ -292,7 +329,7 @@ async function generateSummaryInternal(
   // authoritative cachedFetchJsonWithMeta lookup when bodies are present.
   if (!options?.skipCloudProviders && !bodies?.some((b) => typeof b === 'string' && b.length > 0)) {
     try {
-      const cacheKey = buildSummaryCacheKey(headlines, 'brief', geoContext, SITE_VARIANT, lang, undefined, bodies);
+      const cacheKey = await buildSummaryCacheKey(headlines, 'brief', geoContext, SITE_VARIANT, lang, undefined, bodies);
       const cached = await newsClient.getSummarizeArticleCache({ cacheKey });
       if (cached.summary) {
         return { summary: cached.summary, provider: 'cache', model: cached.model || '', cached: true };
@@ -308,18 +345,13 @@ async function generateSummaryInternal(
       // Model already loaded -- use browser T5-small first
       if (!options?.skipBrowserFallback) {
         onProgress?.(1, totalSteps, 'Running local AI model (beta)...');
-        const browserResult = await tryBrowserT5(headlines, 'summarization-beta', bodies);
-        if (browserResult) {
-          const groqProvider = API_PROVIDERS.find(p => p.provider === 'groq');
-          if (groqProvider && !options?.skipCloudProviders) tryApiProvider(groqProvider, headlines, geoContext, undefined, bodies).catch(() => {});
-
-          return browserResult;
-        }
+        const browserResult = await tryBrowserT5(attemptState, headlines, 'summarization-beta', bodies);
+        if (browserResult) return browserResult;
       }
 
       // Warm model failed inference -- fallback through API providers
       if (!options?.skipCloudProviders) {
-        const chainResult = await runApiChain(API_PROVIDERS, headlines, geoContext, undefined, onProgress, 2, totalSteps, bodies);
+        const chainResult = await runApiChain(API_PROVIDERS, attemptState, headlines, geoContext, undefined, onProgress, 2, totalSteps, bodies);
         if (chainResult) return chainResult;
       }
     } else {
@@ -330,7 +362,7 @@ async function generateSummaryInternal(
 
       // API providers while model loads
       if (!options?.skipCloudProviders) {
-        const chainResult = await runApiChain(API_PROVIDERS, headlines, geoContext, undefined, onProgress, 1, totalSteps, bodies);
+        const chainResult = await runApiChain(API_PROVIDERS, attemptState, headlines, geoContext, undefined, onProgress, 1, totalSteps, bodies);
         if (chainResult) {
           return chainResult;
         }
@@ -339,14 +371,14 @@ async function generateSummaryInternal(
       // Last resort: try browser T5 (may have finished loading by now)
       if (mlWorker.isAvailable && !options?.skipBrowserFallback) {
         onProgress?.(API_PROVIDERS.length + 1, totalSteps, 'Waiting for local AI model...');
-        const browserResult = await tryBrowserT5(headlines, 'summarization-beta', bodies);
+        const browserResult = await tryBrowserT5(attemptState, headlines, 'summarization-beta', bodies);
         if (browserResult) return browserResult;
       }
 
       onProgress?.(totalSteps, totalSteps, 'No providers available');
     }
 
-    console.warn('[BETA] All providers failed');
+    logChainOutcome('[BETA]', attemptState);
     return null;
   }
 
@@ -355,17 +387,17 @@ async function generateSummaryInternal(
   let chainResult: SummarizationResult | null = null;
 
   if (!options?.skipCloudProviders) {
-    chainResult = await runApiChain(API_PROVIDERS, headlines, geoContext, lang, onProgress, 1, totalSteps, bodies);
+    chainResult = await runApiChain(API_PROVIDERS, attemptState, headlines, geoContext, lang, onProgress, 1, totalSteps, bodies);
   }
   if (chainResult) return chainResult;
 
   if (!options?.skipBrowserFallback) {
     onProgress?.(totalSteps, totalSteps, 'Loading local AI model...');
-    const browserResult = await tryBrowserT5(headlines, undefined, bodies);
+    const browserResult = await tryBrowserT5(attemptState, headlines, undefined, bodies);
     if (browserResult) return browserResult;
   }
 
-  console.warn('[Summarization] All providers failed');
+  logChainOutcome('[Summarization]', attemptState);
   return null;
 }
 

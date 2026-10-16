@@ -1,9 +1,8 @@
 import type { RuntimeSecretKey, RuntimeFeatureId } from './runtime-config';
 
 export const SIGNUP_URLS: Partial<Record<RuntimeSecretKey, string>> = {
-  GROQ_API_KEY: 'https://console.groq.com/keys',
   OPENROUTER_API_KEY: 'https://openrouter.ai/settings/keys',
-  TAVILY_API_KEYS: 'https://app.tavily.com/home',
+  EXA_API_KEYS: 'https://dashboard.exa.ai/api-keys',
   BRAVE_API_KEYS: 'https://api-dashboard.search.brave.com/app/keys',
   SERPAPI_API_KEYS: 'https://serpapi.com/manage-api-key',
   FRED_API_KEY: 'https://fred.stlouisfed.org/docs/api/api_key.html',
@@ -37,9 +36,8 @@ export const PLAINTEXT_KEYS = new Set<RuntimeSecretKey>([
 export const MASKED_SENTINEL = '__WM_MASKED__';
 
 export const HUMAN_LABELS: Record<RuntimeSecretKey, string> = {
-  GROQ_API_KEY: 'Groq API Key',
   OPENROUTER_API_KEY: 'OpenRouter API Key',
-  TAVILY_API_KEYS: 'Tavily API Keys',
+  EXA_API_KEYS: 'Exa API Keys',
   BRAVE_API_KEYS: 'Brave Search API Keys',
   SERPAPI_API_KEYS: 'SerpAPI Keys',
   FRED_API_KEY: 'FRED API Key',
@@ -76,7 +74,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   {
     id: 'ai',
     label: 'AI & Summarization',
-    features: ['aiOllama', 'aiGroq', 'aiOpenRouter'],
+    features: ['aiOllama', 'aiOpenRouter'],
   },
   {
     id: 'economy',
@@ -86,7 +84,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   {
     id: 'markets',
     label: 'Markets & Trade',
-    features: ['finnhubMarkets', 'stockNewsSearchTavily', 'stockNewsSearchBrave', 'stockNewsSearchSerpApi', 'wtoTrade'],
+    features: ['finnhubMarkets', 'stockNewsSearchExa', 'stockNewsSearchBrave', 'stockNewsSearchSerpApi', 'wtoTrade'],
   },
   {
     id: 'security',

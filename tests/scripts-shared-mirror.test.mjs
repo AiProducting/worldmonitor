@@ -18,12 +18,32 @@ const repoRoot = resolve(__dirname, '..');
 // mirrored files, append them to MIRRORED_FILES.
 
 const MIRRORED_FILES = [
+  'china-corporate-disclosure-policy.js',
+  'correlation-runtime-mode.js',
   'geography.js',
   'hapi-app-identifier.json',
   'iso2-to-region.json',
   'iso3-to-iso2.json',
+  'publisher-families.js',
+  'physical-divergence-contract.js',
+  'physical-divergence-contract.d.ts',
+  'physical-divergence-staleness.js',
+  'physical-divergence-staleness.d.ts',
+  'compare-and-delete-script.cjs',
+  'stablecoin-classifier.cjs',
+  // The classifier's default thresholds come from its SIBLING stablecoins.json
+  // (both homes), so a drift in the JSON mirror silently changes classification.
+  'stablecoins.json',
   'story-identity.js',
   'un-to-iso2.json',
+  'world-bank-rpc-cache.js',
+  // #8867: the market-alert detector graph that seed-market-alert-ledger.mjs
+  // runs from scripts/shared/ on Railway.
+  'market-alert-core.js',
+  'text-analysis-core.js',
+  'entity-registry.js',
+  'entity-extraction-core.js',
+  'news-clustering-core.js',
 ];
 
 describe('scripts/shared/ mirrors shared/', () => {
@@ -55,8 +75,10 @@ describe('regional snapshot seed scripts use scripts/shared/ (not repo-root shar
   // shared/) will ERR_MODULE_NOT_FOUND at runtime on Railway because the
   // shared/ dir is not copied into the deploy root.
   const FILES_THAT_MUST_USE_MIRROR = [
+    'scripts/_seed-utils.mjs',
     'scripts/_clustering.mjs',
     'scripts/seed-regional-snapshots.mjs',
+    'scripts/seed-wb-indicators.mjs',
     'scripts/regional-snapshot/actor-scoring.mjs',
     'scripts/regional-snapshot/balance-vector.mjs',
     'scripts/regional-snapshot/evidence-collector.mjs',

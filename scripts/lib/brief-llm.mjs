@@ -3,9 +3,9 @@
 // Substitutes the stubbed `whyMatters` per story and the stubbed
 // executive summary (`digest.lead` / `digest.threads` / `digest.signals`)
 // with Gemini 2.5 Flash output via the existing OpenRouter-backed
-// callLLM chain. The LLM provider is pinned to openrouter by
-// skipProviders:['ollama','groq'] so the brief's editorial voice
-// stays on one model across environments.
+// callLLM chain. The LLM provider is pinned to paid openrouter by an exact
+// allowedProviders:['openrouter'] list so additions to the shared chain do not
+// change the model and editorial voice across environments.
 //
 // Deliberately:
 //   - Pure parse/build helpers are exported for testing without IO.
@@ -15,12 +15,13 @@
 //     through to the original stub — the brief must always ship.
 //
 // Cache semantics:
-//   - brief:llm:whymatters:v6:{storyHash} — 24h, shared across users
+//   - brief:llm:whymatters:v7:{storyHash} — 24h, shared across users
 //     for the same story. v4 bumped from v3 alongside the F6
 //     date-grounding line: every v3 row was produced from a prompt
 //     with no notion of "today" and may state a fabricated year, so
 //     v3 rows must not survive the deploy. v2 rows were lead-blind.
-//   - brief:llm:digest:v8:{userId|public}:{sensitivity}:{poolHash}
+//     v7 bumped from v6 with the gemini-3.5-flash-lite move.
+//   - brief:llm:digest:v9:{userId|public}:{sensitivity}:{poolHash}
 //     — 4h. The canonical synthesis is now ALWAYS produced through
 //     this path (formerly split with `generateAISummary` in the
 //     digest cron). Material includes profile-SHA, greeting bucket,
@@ -32,7 +33,8 @@
 //     the public cache key. v6 bumped from v5 for the F6
 //     date-grounding line (same reason as whymatters v4); v5 landed
 //     the grounding validator after the May 12 hallucination — see
-//     generateDigestProse header comment.
+//     generateDigestProse header comment. v9 bumped from v8 with the
+//     gemini-3.5-flash-lite move.
 
 import { createHash } from 'node:crypto';
 
@@ -49,12 +51,13 @@ import {
   parseWhyMatters,
   checkLeadGrounding,
   leadGroundsAgainstStory,
+  validateNoHallucinatedStatusQualifiers,
 } from '../../shared/brief-llm-core.js';
 
 // #4921: the grounding spine now lives in shared/brief-llm-core.js — re-export
 // for existing consumers of this module.
 export { checkLeadGrounding, leadGroundsAgainstStory };
-import { sanitizeForPrompt } from '../../server/_shared/llm-sanitize.js';
+import { sanitizeForPrompt, sanitizeForPromptLine } from '../../server/_shared/llm-sanitize.js';
 // Single source of truth for the brief story cap. Both buildDigestPrompt
 // and hashDigestInput must slice to this value or the LLM prose drifts
 // from the rendered story cards (PR #3389 reviewer P1).
@@ -81,12 +84,32 @@ import { MAX_STORIES_PER_USER } from './brief-compose.mjs';
  * @param {{ headline?: string; source?: string; threatLevel?: string; category?: string; country?: string; description?: string }} story
  */
 function sanitizeStoryForPrompt(story) {
+  // Line variant (#5881): every field below is rendered as a single
+  // `Label: value` row in buildStoryDescriptionPrompt's newline-joined block,
+  // so the newline is the delimiter and sanitizeForPrompt -- which preserves a
+  // lone newline for prose -- lets one feed value forge an extra field row.
   return {
-    headline: sanitizeForPrompt(story.headline ?? ''),
-    source: sanitizeForPrompt(story.source ?? ''),
-    threatLevel: sanitizeForPrompt(story.threatLevel ?? ''),
-    category: sanitizeForPrompt(story.category ?? ''),
-    country: sanitizeForPrompt(story.country ?? ''),
+    headline: sanitizeForPromptLine(story.headline ?? ''),
+    source: sanitizeForPromptLine(story.source ?? ''),
+    threatLevel: sanitizeForPromptLine(story.threatLevel ?? ''),
+    category: sanitizeForPromptLine(story.category ?? ''),
+    country: sanitizeForPromptLine(story.country ?? ''),
+    description: sanitizeForPromptLine(story.description ?? ''),
+  };
+}
+
+/**
+ * Sanitize the story shape used by the prose description prompt.
+ * Metadata remains line-safe because it is rendered as labelled rows, while
+ * the RSS description keeps legitimate single newlines for the `Context:`
+ * grounding block. The whyMatters prompt uses sanitizeStoryForPrompt because
+ * its description is also rendered as a single labelled row.
+ *
+ * @param {{ headline?: string; source?: string; threatLevel?: string; category?: string; country?: string; description?: string }} story
+ */
+function sanitizeStoryForDescriptionPrompt(story) {
+  return {
+    ...sanitizeStoryForPrompt(story),
     description: sanitizeForPrompt(story.description ?? ''),
   };
 }
@@ -102,11 +125,20 @@ const DIGEST_PROSE_TTL_SEC = 4 * 60 * 60;
 const STORY_DESCRIPTION_TTL_SEC = 24 * 60 * 60;
 const WHY_MATTERS_CONCURRENCY = 5;
 
-// Pin to openrouter (google/gemini-2.5-flash until the #4944 U4 brief-voice
-// cutover, which is gated on the U3 shadow evaluation). Ollama isn't deployed
-// in Railway, and pinning keeps the brief's editorial voice on one model
-// across environments instead of drifting to the groq fallback.
-const BRIEF_LLM_SKIP_PROVIDERS = ['ollama', 'groq'];
+// Pin to openrouter. Ollama isn't deployed in Railway, and pinning keeps the
+// brief's editorial voice on one model across environments instead of drifting
+// to a fallback provider.
+const BRIEF_LLM_ALLOWED_PROVIDERS = ['openrouter'];
+
+// The brief names its own model rather than inheriting the llm-chain default
+// (still google/gemini-2.5-flash for every other consumer). The #4944 bakeoff
+// on the production prompts had gemini-2.5-flash fabricate "former President
+// Trump" 6/6 on both calls, while gemini-3.5-flash-lite was 0/24 at the same
+// price class. BRIEF_LLM_OPENROUTER_MODEL overrides it without a deploy; the
+// #4944 U4 brief-voice cutover moves the brief to DeepSeek by editing this
+// constant. Any change here bumps all three model-fed cache generations below.
+const BRIEF_LLM_OPENROUTER_MODEL = process.env.BRIEF_LLM_OPENROUTER_MODEL || 'google/gemini-3.5-flash-lite';
+const BRIEF_LLM_MODEL_OVERRIDES = { openrouter: BRIEF_LLM_OPENROUTER_MODEL };
 
 // ── whyMatters (per story) ─────────────────────────────────────────────────
 // The pure helpers (`WHY_MATTERS_SYSTEM`, `buildWhyMattersUserPrompt` (aliased
@@ -130,8 +162,8 @@ function normalizeAnalystWhyMatters(value) {
  *
  * Four-layer graceful degradation:
  *   1. `deps.callAnalystWhyMatters(story)` — the analyst-context edge
- *      endpoint (brief:llm:whymatters:v10 cache lives there). Preferred.
- *   2. Direct read of the endpoint's v10 envelope cache (#4914) — the
+ *      endpoint (brief:llm:whymatters:v11 cache lives there). Preferred.
+ *   2. Direct read of the endpoint's v11 envelope cache (#4914) — the
  *      endpoint CALL can fail while its cached envelope is still valid;
  *      reusing it avoids a paid duplicate generation.
  *   3. Legacy direct-Gemini chain: cacheGet (v6) → callLLM → cacheSet.
@@ -181,7 +213,7 @@ export async function generateWhyMatters(story, deps) {
 
   // #4914: before paying a direct-Gemini generation, check the analyst
   // endpoint's OWN cache namespace. api/internal/brief-why-matters.ts
-  // stores its envelope at brief:llm:whymatters:v10:{hash} under the same
+  // stores its envelope at brief:llm:whymatters:v11:{hash} under the same
   // hashBriefStory identity — when the endpoint CALL failed transiently
   // (or no endpoint is configured), the story may already have a paid,
   // validated envelope sitting in Redis. Read-only: this fallback's own
@@ -189,9 +221,9 @@ export async function generateWhyMatters(story, deps) {
   // two prompt contracts never cross-contaminate in the write direction.
   const storyHash = await hashBriefStory(story);
   try {
-    const v10 = await deps.cacheGet(`brief:llm:whymatters:v10:${storyHash}`);
-    if (v10 && typeof v10 === 'object') {
-      const normalized = normalizeAnalystWhyMatters(v10.whyMatters);
+    const v11 = await deps.cacheGet(`brief:llm:whymatters:v11:${storyHash}`);
+    if (v11 && typeof v11 === 'object') {
+      const normalized = normalizeAnalystWhyMatters(v11.whyMatters);
       if (normalized) return normalized;
     }
   } catch { /* treat as miss */ }
@@ -216,7 +248,12 @@ export async function generateWhyMatters(story, deps) {
   // provider chain rejected finish_reason=length, so an abbreviation-ending
   // token clip could be cached as an apparently complete sentence. The old
   // rows carry no completion metadata and cannot be distinguished safely.
-  const key = `brief:llm:whymatters:v6:${storyHash}`;
+  //
+  // v6→v7: 2026-09-21 issue #4944. The brief's prose model moved from
+  // google/gemini-2.5-flash to google/gemini-3.5-flash-lite. Every v6 row
+  // holds the old model's prose, fabricated actor names included, and would
+  // keep shipping it for the full 24h TTL.
+  const key = `brief:llm:whymatters:v7:${storyHash}`;
   try {
     const hit = await deps.cacheGet(key);
     const parsedHit = parseWhyMatters(hit);
@@ -232,7 +269,8 @@ export async function generateWhyMatters(story, deps) {
       maxTokens: 120,
       temperature: 0.4,
       timeoutMs: 10_000,
-      skipProviders: BRIEF_LLM_SKIP_PROVIDERS,
+      allowedProviders: BRIEF_LLM_ALLOWED_PROVIDERS,
+      modelOverrides: BRIEF_LLM_MODEL_OVERRIDES,
       stage: 'brief-whymatters-cron',
     });
   } catch {
@@ -275,12 +313,27 @@ export function buildStoryDescriptionPrompt(story) {
     && normalise(rawDescription) !== normalise(story.headline ?? '');
   const contextLine = contextUseful ? `Context: ${rawDescription.slice(0, 400)}` : null;
 
+  // Guard at the composition site, not only at the caller (#5881). The
+  // production caller passes sanitizeStoryForPrompt(story), but a builder whose
+  // safety depends on that is one new call site away from a hole -- and these
+  // rows are newline-joined, so one feed newline forges an extra `Key: value`
+  // row the model reads as a real field.
   const lines = [
-    `Headline: ${story.headline}`,
-    `Source: ${story.source}`,
-    `Severity: ${story.threatLevel}`,
-    `Category: ${story.category}`,
-    `Country: ${story.country}`,
+    `Headline: ${sanitizeForPromptLine(story.headline)}`,
+    `Source: ${sanitizeForPromptLine(story.source)}`,
+    `Severity: ${sanitizeForPromptLine(story.threatLevel)}`,
+    `Category: ${sanitizeForPromptLine(story.category)}`,
+    `Country: ${sanitizeForPromptLine(story.country)}`,
+    // NOT line-sanitized, deliberately. This is the one free-prose sink in the
+    // block -- the article body, whose internal newlines are legitimate
+    // grounding text -- and #5857's rule is to keep sanitizeForPrompt on prose.
+    // tests/brief-llm.test.mjs:1788 locks that contract on purpose. It does
+    // leave a residual: Context is composed into the same newline-joined block
+    // as the rows above, so a newline in the body can still forge a trailing
+    // `Key: value` row. Closing that means rendering the body under its own
+    // structural header instead of as a labelled row, which is a prompt-shape
+    // change rather than a sanitizer fix. Flagged in #5881 rather than done
+    // silently here.
     ...(contextLine ? [contextLine] : []),
     '',
     'One editorial sentence describing what happened (not why it matters):',
@@ -297,9 +350,11 @@ export function buildStoryDescriptionPrompt(story) {
  *
  * @param {unknown} text
  * @param {string} [headline]  used to detect headline-echo drift
+ * @param {string} [groundText]  RSS body; with the headline, the ground for
+ *   status qualifiers ("former President X") the model may not introduce
  * @returns {string | null}
  */
-export function parseStoryDescription(text, headline) {
+export function parseStoryDescription(text, headline, groundText) {
   if (typeof text !== 'string') return null;
   let s = text.trim();
   if (!s) return null;
@@ -313,6 +368,12 @@ export function parseStoryDescription(text, headline) {
     // is exactly the fallback we're replacing, shipping it as
     // "LLM enrichment" would be dishonest about cache spend.
     if (normalise(sentence) === normalise(headline)) return null;
+    const ground = [headline, groundText].filter((x) => typeof x === 'string' && x.length > 0).join('\n');
+    const check = validateNoHallucinatedStatusQualifiers(sentence, ground);
+    if (!check.ok) {
+      console.warn(`[brief-llm] status-qualifier gate: rejected description (${check.hallucinated.join(' | ')})`);
+      return null;
+    }
   }
   return sentence;
 }
@@ -331,7 +392,7 @@ export function parseStoryDescription(text, headline) {
  */
 export async function generateStoryDescription(story, deps) {
   // Shares hashBriefStory() with whyMatters — the key prefix
-  // (`brief:llm:description:v3:`) is what separates the two cache
+  // (`brief:llm:description:v4:`) is what separates the two cache
   // namespaces; the material is the six fields including description.
   // Bumped v1→v2 on 2026-04-24 alongside the RSS-description fix so
   // cached pre-grounding output (hallucinated named actors from
@@ -343,13 +404,17 @@ export async function generateStoryDescription(story, deps) {
   // into the hash material — same story-shape change as whymatters
   // v4→v5. Pre-PR every category was 'General'; post-PR carries the
   // per-story Title-Cased EventCategory. Bump invalidates v2 entries.
-  const key = `brief:llm:description:v3:${await hashBriefStory(story)}`;
+  //
+  // v3→v4: 2026-09-21 issue #4944. The brief's prose model moved from
+  // google/gemini-2.5-flash to google/gemini-3.5-flash-lite. Every v3 row
+  // holds the old model's prose and would serve it for the full 24h TTL.
+  const key = `brief:llm:description:v4:${await hashBriefStory(story)}`;
   try {
     const hit = await deps.cacheGet(key);
     if (typeof hit === 'string') {
       // Revalidate on cache hit so a pre-fix bad row (short, echo,
       // malformed) can't flow into the envelope unchecked.
-      const valid = parseStoryDescription(hit, story.headline);
+      const valid = parseStoryDescription(hit, story.headline, story.description);
       if (valid) return valid;
     }
   } catch { /* cache miss is fine */ }
@@ -357,20 +422,21 @@ export async function generateStoryDescription(story, deps) {
   // is untrusted input; without sanitisation, a hostile feed's
   // `<description>` would be an injection vector. The whyMatters path
   // already does this — keep the two symmetric.
-  const { system, user } = buildStoryDescriptionPrompt(sanitizeStoryForPrompt(story));
+  const { system, user } = buildStoryDescriptionPrompt(sanitizeStoryForDescriptionPrompt(story));
   let text = null;
   try {
     text = await deps.callLLM(system, user, {
       maxTokens: 140,
       temperature: 0.4,
       timeoutMs: 10_000,
-      skipProviders: BRIEF_LLM_SKIP_PROVIDERS,
+      allowedProviders: BRIEF_LLM_ALLOWED_PROVIDERS,
+      modelOverrides: BRIEF_LLM_MODEL_OVERRIDES,
       stage: 'brief-description-cron',
     });
   } catch {
     return null;
   }
-  const parsed = parseStoryDescription(text, story.headline);
+  const parsed = parseStoryDescription(text, story.headline, story.description);
   if (!parsed) return null;
   try {
     await deps.cacheSet(key, parsed, STORY_DESCRIPTION_TTL_SEC);
@@ -496,7 +562,7 @@ export function buildDigestPrompt(stories, sensitivity, ctx = {}) {
 
   const lines = stories.slice(0, MAX_STORIES_PER_USER).map((s, i) => {
     const n = String(i + 1).padStart(2, '0');
-    const sev = (s.threatLevel ?? '').toUpperCase();
+    const sev = sanitizeForPromptLine(s.threatLevel ?? '').toUpperCase();
     // Short hash prefix — first 8 chars of digest story hash. Keeps
     // the prompt compact while remaining collision-free for ≤30
     // stories. Stories without a hash fall back to position-based
@@ -504,7 +570,13 @@ export function buildDigestPrompt(stories, sensitivity, ctx = {}) {
     const shortHash = typeof s.hash === 'string' && s.hash.length >= 8
       ? s.hash.slice(0, 8)
       : `p${n}`;
-    return `${n}. [h:${shortHash}] [${sev}] ${s.headline} — ${s.category} · ${s.country} · ${s.source}`;
+    // Sanitize at the composition site, not upstream (#5881): these rows are
+    // newline-joined and the model is asked to key its output off [h:<hash>],
+    // so a feed newline can forge a numbered story row with an attacker-chosen
+    // hash. brief-compose.mjs sanitizes these fields before they get here, but
+    // with sanitizeHeadline/sanitizeForPrompt, both of which keep a lone
+    // newline -- the delimiter guard has to live where the delimiter is.
+    return `${n}. [h:${shortHash}] [${sev}] ${sanitizeForPromptLine(s.headline)} — ${sanitizeForPromptLine(s.category)} · ${sanitizeForPromptLine(s.country)} · ${sanitizeForPromptLine(s.source)}`;
   });
 
   const userParts = [
@@ -553,6 +625,12 @@ export const DIGEST_PROSE_SYSTEM = DIGEST_PROSE_SYSTEM_BASE;
  * grounding check, preserving the original 1-arg behavior for
  * callers that don't have the source pool in hand.
  *
+ * #8438: always drops lead sentences that match a banned stitching
+ * stem (`comes as`, `occurs as`, `meanwhile`, …). The prompt already
+ * listed exact variants and 24/24 production-prompt samples still
+ * opened with "This development comes as" or "occurs as". The gate
+ * is stem-keyed, not variant-keyed, and does not need a stories pool.
+ *
  * @param {unknown} obj
  * @param {Array<{ headline?: string }>} [stories]  source pool used to
  *   ground-check the lead. Optional for back-compat.
@@ -561,11 +639,11 @@ export const DIGEST_PROSE_SYSTEM = DIGEST_PROSE_SYSTEM_BASE;
 export function validateDigestProseShape(obj, stories) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
 
-  const lead = typeof obj.lead === 'string' ? obj.lead.trim() : '';
+  let lead = typeof obj.lead === 'string' ? obj.lead.trim() : '';
   if (lead.length < 40 || lead.length > 1500) return null;
 
   const rawThreads = Array.isArray(obj.threads) ? obj.threads : [];
-  const threads = rawThreads
+  let threads = rawThreads
     .filter((t) => t && typeof t.tag === 'string' && typeof t.teaser === 'string')
     .map((t) => ({
       tag: t.tag.trim().slice(0, 40),
@@ -604,16 +682,189 @@ export function validateDigestProseShape(obj, stories) {
     .filter((x) => x.length >= 4)
     .slice(0, MAX_STORIES_PER_USER * 2);
 
-  // v5 grounding gate. Run AFTER shape normalisation so the
-  // synthesis we evaluate is the same shape the renderer would
-  // see — checkLeadGrounding inspects `lead` and `threads[].teaser`,
-  // both already trimmed and capped above.
-  if (Array.isArray(stories) && stories.length > 0
-      && !checkLeadGrounding({ lead, threads }, stories, MAX_STORIES_PER_USER)) {
-    return null;
+  // Stitching-phrase repair is a shape gate: the stems are banned
+  // connectives, not claims that need a stories pool. Run it before
+  // the status-qualifier / grounding block so a glue sentence that
+  // also carries a fabricated qualifier is dropped once, for the
+  // connective, even when the qualifier would have been licensed.
+  const stitch = repairLeadStitchingPhrases(lead);
+  if (stitch.dropped.length > 0) {
+    console.warn(`[brief-llm] stitching-phrase gate: dropped lead sentence(s) (${stitch.dropped.join(' | ')})`);
+  }
+  lead = stitch.lead;
+  if (lead.length < 40) return null;
+
+  // Status-qualifier repair, then the v5 grounding gate. Run AFTER
+  // shape normalisation so the synthesis we evaluate is the same shape
+  // the renderer would see — both inspect `lead` and `threads[].teaser`,
+  // already trimmed and capped above.
+  if (Array.isArray(stories) && stories.length > 0) {
+    const ground = stories.slice(0, MAX_STORIES_PER_USER).map(storyGroundText);
+    const repaired = repairLeadStatusQualifiers(lead, ground);
+    if (repaired.dropped.length > 0) {
+      console.warn(`[brief-llm] status-qualifier gate: dropped lead sentence(s) (${repaired.dropped.join(' | ')})`);
+    }
+    lead = repaired.lead;
+    if (lead.length < 40) return null;
+    threads = threads.filter((t) => {
+      const check = validateNoHallucinatedStatusQualifiers(t.teaser, ground);
+      if (!check.ok) console.warn(`[brief-llm] status-qualifier gate: dropped teaser (${check.hallucinated.join(' | ')})`);
+      return check.ok;
+    });
+    if (threads.length < 1) return null;
+    const groundingOpts = (repaired.dropped.length > 0 || stitch.dropped.length > 0)
+      ? { combinedThreshold: 1 }
+      : {};
+    if (!checkLeadGrounding({ lead, threads }, stories, MAX_STORIES_PER_USER, groundingOpts)) return null;
   }
 
   return { lead, threads, signals, rankedStoryHashes };
+}
+
+/** @param {{ headline?: unknown; description?: unknown }} story */
+function storyGroundText(story) {
+  return [story?.headline, story?.description]
+    .filter((x) => typeof x === 'string' && x.length > 0)
+    .join('\n');
+}
+
+const LEAD_SENTENCE_SPLIT = /(?<=(?<!\b\p{Lu})[.!?])\s+/u;
+
+// Stem list, not the prompt's exact variants. "This development comes as"
+// and "This development occurs as" were the 24/24 Sep 20 near-misses;
+// listing "this comes as" / "this declaration comes as" in the prompt
+// did not catch them. Word-bounded so "becomes as" is not a hit.
+const LEAD_STITCHING_STEM_RE = /\b(?:comes as|occurs as|meanwhile|at the same time|in other news|elsewhere|on another front|in a separate development)\b/i;
+
+// LEAD_SENTENCE_SPLIT leaves "U.S. Navy" intact by not breaking after a
+// single capital + period. The same lookbehind glues a following stitch
+// sentence onto "... at the U.N. This development comes as ...". Split
+// that case only here, and only when the next words are a stitch opener,
+// so status-qualifier repair keeps the shared splitter.
+const STITCH_AFTER_INITIALISM_SPLIT =
+  /(?<=\b(?:\p{Lu}\.)+)\s+(?=(?:This|Meanwhile|Elsewhere|At the same time|In other news|On another front|In a separate development)\b)/iu;
+
+/**
+ * @param {string} lead
+ * @returns {string[]}
+ */
+function splitLeadSentencesForStitching(lead) {
+  const parts = [];
+  for (const coarse of lead.split(LEAD_SENTENCE_SPLIT)) {
+    parts.push(...coarse.split(STITCH_AFTER_INITIALISM_SPLIT));
+  }
+  return parts;
+}
+
+/**
+ * @param {string} lead
+ * @returns {{ lead: string; dropped: string[] }}
+ */
+function repairLeadStitchingPhrases(lead) {
+  if (!LEAD_STITCHING_STEM_RE.test(lead)) return { lead, dropped: [] };
+  const dropped = [];
+  const kept = [];
+  for (const sentence of splitLeadSentencesForStitching(lead)) {
+    if (LEAD_STITCHING_STEM_RE.test(sentence)) dropped.push(sentence);
+    else kept.push(sentence);
+  }
+  return { lead: kept.join(' ').trim(), dropped };
+}
+
+/**
+ * @param {string} lead
+ * @param {string[]} ground  one entry per pool story
+ * @returns {{ lead: string; dropped: string[] }}
+ */
+function repairLeadStatusQualifiers(lead, ground) {
+  const whole = validateNoHallucinatedStatusQualifiers(lead, ground);
+  if (whole.ok) return { lead, dropped: [] };
+  const kept = lead.split(LEAD_SENTENCE_SPLIT).filter((s) => validateNoHallucinatedStatusQualifiers(s, ground).ok);
+  const repaired = kept.join(' ');
+  if (!validateNoHallucinatedStatusQualifiers(repaired, ground).ok) return { lead: '', dropped: whole.hallucinated };
+  return { lead: repaired, dropped: whole.hallucinated };
+}
+
+const DIGEST_FENCE_START = /^```(?:json)?\s*/i;
+const DIGEST_FENCE_END = /\s*```$/;
+const DIGEST_GREETING_LINE = /^good\s+(?:morning|afternoon|evening|night)(?:[.!])?$/i;
+
+function stripDigestFences(text) {
+  return text.replace(DIGEST_FENCE_START, '').replace(DIGEST_FENCE_END, '').trim();
+}
+
+function normalizeGreetingCore(s) {
+  return s.trim().replace(/[.!]+$/u, '').replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * True for a short time-of-day greeting the prompt injects via
+ * `Open the lead with: "${greeting}."`. Only `Good morning` /
+ * `Good afternoon` / `Good evening` / `Good night` (optional `.`/`!`)
+ * count so an editorial preamble ("Here is the digest:", "This
+ * morning") is not peeled onto `digest.lead`.
+ *
+ * @param {string} line
+ */
+function isDigestGreetingLine(line) {
+  if (typeof line !== 'string') return false;
+  const s = line.trim();
+  if (!s || s.length > 48 || s.includes('{')) return false;
+  return DIGEST_GREETING_LINE.test(s);
+}
+
+/**
+ * @param {string} line
+ * @param {string} expected
+ */
+function greetingLineMatchesExpected(line, expected) {
+  if (typeof line !== 'string' || typeof expected !== 'string') return false;
+  const s = line.trim();
+  if (!s || s.length > 48 || s.includes('{')) return false;
+  const want = normalizeGreetingCore(expected);
+  const got = normalizeGreetingCore(s);
+  return Boolean(want) && got === want;
+}
+
+function normalizeGreetingPrefix(line) {
+  return `${line.trim().replace(/[.!]+$/u, '')}.`;
+}
+
+function leadAlreadyOpensWithGreeting(lead, greeting) {
+  const core = greeting.trim().replace(/[.!]+$/u, '');
+  if (!core) return false;
+  const escaped = core.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Match at end of lead or any non-word boundary so "Good morning,"
+  // (comma) and "Good morning." (period) both count as already open.
+  return new RegExp(`^${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'iu').test(lead.trim());
+}
+
+/**
+ * gemini-2.5-flash sometimes writes the requested greeting on its own
+ * line and then the JSON object (#8439). Peel that line so JSON.parse
+ * can run; the caller prepends it back onto `lead`.
+ *
+ * @param {string} text
+ * @param {string} [expectedGreeting]
+ * @returns {{ json: string; greeting: string }}
+ */
+function peelLeadingDigestGreeting(text, expectedGreeting) {
+  const s = stripDigestFences(text.trim());
+  if (!s || s.startsWith('{')) return { json: s, greeting: '' };
+  const match = s.match(/^([^\r\n]+)\r?\n+([\s\S]*)$/);
+  if (!match) return { json: s, greeting: '' };
+  const firstLine = match[1].trim();
+  const rest = stripDigestFences(match[2].trim());
+  // 3-state: omitted expectedGreeting → tight regex for 2-arg callers;
+  // explicit '' → never peel (public / unpersonalised); non-empty →
+  // exact match against the requested greeting.
+  const isGreeting = typeof expectedGreeting === 'string'
+    ? expectedGreeting.trim() !== '' && greetingLineMatchesExpected(firstLine, expectedGreeting)
+    : isDigestGreetingLine(firstLine);
+  if (!isGreeting || !rest.startsWith('{')) {
+    return { json: s, greeting: '' };
+  }
+  return { json: rest, greeting: firstLine };
 }
 
 /**
@@ -621,22 +872,36 @@ export function validateDigestProseShape(obj, stories) {
  * @param {Array<{ headline?: string }>} [stories]  forwarded to
  *   validateDigestProseShape so fresh LLM output is grounding-checked
  *   the same way cache hits are.
+ * @param {string} [expectedGreeting]  when a string, peel the first line
+ *   only if it matches this greeting (trim / case / trailing punct).
+ *   Empty string means never peel (public / unpersonalised prompts).
+ *   When omitted, the tight `Good morning|afternoon|evening|night`
+ *   regex still recovers those opens for 2-arg callers.
  * @returns {{ lead: string; threads: Array<{tag:string;teaser:string}>; signals: string[] } | null}
  */
-export function parseDigestProse(text, stories) {
+export function parseDigestProse(text, stories, expectedGreeting) {
   if (typeof text !== 'string') return null;
-  let s = text.trim();
-  if (!s) return null;
-  // Defensive: strip common wrappings the model sometimes inserts
-  // despite the explicit system instruction.
-  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (!text.trim()) return null;
+  // Defensive: strip code fences, then a leading greeting line the
+  // model emits despite "produce EXACTLY this JSON and nothing else"
+  // (#8439). The greeting is prepended back onto the validated lead
+  // so the reader still sees the requested open.
+  const { json, greeting } = peelLeadingDigestGreeting(text, expectedGreeting);
+  if (!json) return null;
   let obj;
   try {
-    obj = JSON.parse(s);
+    obj = JSON.parse(json);
   } catch {
     return null;
   }
-  return validateDigestProseShape(obj, stories);
+  const validated = validateDigestProseShape(obj, stories);
+  if (!validated) return null;
+  if (!greeting || leadAlreadyOpensWithGreeting(validated.lead, greeting)) {
+    return validated;
+  }
+  const prefixed = `${normalizeGreetingPrefix(greeting)} ${validated.lead}`;
+  if (prefixed.length > 1500) return validated;
+  return { ...validated, lead: prefixed };
 }
 
 /**
@@ -754,7 +1019,17 @@ export async function generateDigestProse(userId, stories, sensitivity, deps, ct
   // model to lead with ONE primary story when two top stories aren't
   // substantively linked. v7 cache rows would otherwise serve stitched
   // leads for the full 4h TTL. Prompt content change → cache invalidation.
-  const key = `brief:llm:digest:v8:${hashDigestInput(userId, stories, sensitivity, ctx)}`;
+  //
+  // #8438 (2026-09-21): validateDigestProseShape now drops lead sentences
+  // that match a stitching stem. Parser-only; the prompt is unchanged, so
+  // this is not a cache-generation bump. The hit path already revalidates,
+  // and a repairable stitch returns the shortened lead without a re-LLM.
+  //
+  // v9 (2026-09-21): bumped from v8 when the brief's prose model moved from
+  // google/gemini-2.5-flash to google/gemini-3.5-flash-lite (#4944 bakeoff).
+  // v8 rows hold the old model's prose — including the fabricated-actor leads
+  // the move is meant to end — and would serve it for the full 4h TTL.
+  const key = `brief:llm:digest:v9:${hashDigestInput(userId, stories, sensitivity, ctx)}`;
   try {
     const hit = await deps.cacheGet(key);
     // CRITICAL: re-run the shape+grounding validator on cache hits.
@@ -776,7 +1051,8 @@ export async function generateDigestProse(userId, stories, sensitivity, deps, ct
       maxTokens: 900,
       temperature: 0.4,
       timeoutMs: 15_000,
-      skipProviders: BRIEF_LLM_SKIP_PROVIDERS,
+      allowedProviders: BRIEF_LLM_ALLOWED_PROVIDERS,
+      modelOverrides: BRIEF_LLM_MODEL_OVERRIDES,
       stage: 'brief-digest-cron',
     });
   } catch (err) {
@@ -788,7 +1064,14 @@ export async function generateDigestProse(userId, stories, sensitivity, deps, ct
     );
     return null;
   }
-  const parsed = parseDigestProse(text, stories);
+  // Empty string means "do not peel": public / unpersonalised prompts
+  // never ask for a greeting, so a regex fallback would splice
+  // "Good morning." onto a share-URL lead. 2-arg parseDigestProse
+  // callers still use the tight Good-morning regex.
+  const expectedGreeting = ctx?.isPublic === true
+    ? ''
+    : (typeof ctx?.greeting === 'string' ? ctx.greeting : '');
+  const parsed = parseDigestProse(text, stories, expectedGreeting);
   if (!parsed) {
     // LLM returned text but parseDigestProse rejected it. Three sub-
     // failures land here, distinguishable on log search:

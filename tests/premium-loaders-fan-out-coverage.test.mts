@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { transpileModule } from 'typescript';
 
 // REGRESSION GUARD for PR #3828 (Free→Pro hydration race).
 //
@@ -29,7 +30,7 @@ const ALLOWLIST: Record<string, string> = {
   // None today. Format: `loaderName: 'why this is intentionally excluded'`.
 };
 
-/** Pull every `this.loadX()` call that sits inside an `if (hasPremiumAccess(...))` gate. */
+/** Pull every loader that a Free viewer can skip because of a premium gate. */
 function extractGatedLoaders(src: string): Set<string> {
   const loaders = new Set<string>();
   const callRe = /this\.load([A-Z][A-Za-z0-9]+)\(\)/g;
@@ -71,6 +72,12 @@ function extractGatedLoaders(src: string): Set<string> {
       }
     }
   }
+
+  const negativeEarlyReturn = /async\s+(load[A-Z][A-Za-z0-9]+)\([^\n]*\): Promise<void> \{(?:\n.*){0,8}?\n\s*if\s*\(!hasPremiumAccess\(\)\)\s*return;/g;
+  for (const match of src.matchAll(negativeEarlyReturn)) {
+    loaders.add(match[1]!);
+  }
+
   return loaders;
 }
 
@@ -94,6 +101,36 @@ function extractFanOutLoaders(src: string): Set<string> {
 describe('firePremiumLoaders fan-out coverage', () => {
   const gatedLoaders = extractGatedLoaders(DATA_LOADER_TS);
   const fanOutLoaders = extractFanOutLoaders(APP_TS);
+
+  it('reloads premium data for a new principal without repeating unchanged auth events', () => {
+    const start = APP_TS.indexOf('const firePremiumLoaders');
+    const end = APP_TS.indexOf('\n    };', start) + '\n    };'.length;
+    const emitted = transpileModule(APP_TS.slice(start, end), {}).outputText;
+    const calls: string[] = [];
+    let premium = true;
+    const host = {
+      reconcileTierOwnedPreferences() {},
+      connectCorrelationAssessments() {},
+      state: { correlationEngine: { clearAssessments() {} } },
+      dataLoader: new Proxy({}, { get: (_target, name) => () => { calls.push(String(name)); } }),
+    };
+    const fire = new Function('hasPremiumAccess', `let _prevHadPremium = true; ${emitted}; return firePremiumLoaders;`)
+      .call(host, () => premium) as (accountTransition?: boolean) => void;
+    fire();
+    assert.deepEqual(calls, []);
+    fire(true);
+    assert.ok(calls.includes('loadTradePolicy'));
+    const afterSwitch = calls.length;
+    fire();
+    assert.equal(calls.length, afterSwitch);
+    premium = false;
+    fire(true);
+    assert.equal(calls.filter((name) => name === 'loadTradePolicy').length, 1);
+    premium = true;
+    fire();
+    assert.equal(calls.filter((name) => name === 'loadTradePolicy').length, 2);
+    assert.match(APP_TS, /firePremiumLoaders\(accountTransition\)/);
+  });
 
   it('PR #3828 review fix: extracts loaders from single-line gates (no braces)', () => {
     // Synthetic fixture covering all three shapes the production regex must
@@ -122,6 +159,21 @@ describe('firePremiumLoaders fan-out coverage', () => {
     assert.ok(extracted.has('loadDdd'), 'missed shape (c) single-line gate — fan-out coverage would have a blind spot');
   });
 
+  it('extracts negative premium early-return loaders', () => {
+    const fixture = `
+    async loadPhysicalPremiumComparison(signal?: AbortSignal): Promise<void> {
+      signal?.throwIfAborted();
+      if (!hasPremiumAccess()) return;
+      await this.fetchPhysical();
+    }
+    `;
+    const extracted = extractGatedLoaders(fixture);
+    assert.ok(
+      extracted.has('loadPhysicalPremiumComparison'),
+      'missed negative premium early-return loader; transition fan-out would be false-green',
+    );
+  });
+
   it('extracts at least one PRO-gated loader from data-loader.ts (sanity)', () => {
     // If this fails, the regex stopped matching — likely because data-loader.ts
     // changed the gate shape (e.g. `hasPremiumAccess()` got replaced or moved).
@@ -131,10 +183,28 @@ describe('firePremiumLoaders fan-out coverage', () => {
   });
 
   it('extracts at least one fan-out loader from App.ts (sanity)', () => {
-    assert.ok(fanOutLoaders.size > 0, 'firePremiumLoaders has no `void this.dataLoader.loadX()` calls — has the function been renamed?');
+    assert.ok(fanOutLoaders.size > 0, 'firePremiumLoaders has no `void this.dataLoader.loadX()` calls. Has the function been renamed?');
   });
 
-  it('every PRO-gated loader is fanned out on Free→Pro transition', () => {
+  it('reloads Physical comparison on upgrade and clears it on downgrade', () => {
+    // loadPhysicalPremiumComparison is gated by an early `if (!hasPremiumAccess())
+    // return`, not `this.loadX()` inside a hasPremiumAccess if-block, so the
+    // extractor above cannot see it. Pin the transition pair explicitly.
+    assert.ok(
+      fanOutLoaders.has('loadPhysicalPremiumComparison'),
+      'firePremiumLoaders must reload Physical premiums when Pro access resolves',
+    );
+    const start = APP_TS.indexOf('const firePremiumLoaders');
+    const end = APP_TS.indexOf('\n    };', start);
+    const block = APP_TS.slice(start, end);
+    assert.match(
+      block,
+      /(?:void\s+)?this\.dataLoader\.clearPhysicalPremiumComparison\(\)/,
+      'firePremiumLoaders must clear Physical premiums on Pro to free',
+    );
+  });
+
+  it('every PRO-gated loader is fanned out on Free to Pro transition', () => {
     const missing: string[] = [];
     for (const loader of gatedLoaders) {
       if (fanOutLoaders.has(loader)) continue;
@@ -150,5 +220,22 @@ describe('firePremiumLoaders fan-out coverage', () => {
       `If you intentionally do NOT want this loader re-fired (e.g. it has its own entitlement subscription),\n` +
       `add it to the ALLOWLIST in this test with a one-line rationale.`,
     );
+  });
+
+  it('includes the physical and mineral transition reloads in the real fan-out', () => {
+    assert.ok(fanOutLoaders.has('loadPhysicalPremiumComparison'));
+    assert.ok(fanOutLoaders.has('loadMineralProduction'));
+  });
+
+  it('fails when either targeted transition reload is removed', () => {
+    for (const loader of ['loadPhysicalPremiumComparison', 'loadMineralProduction']) {
+      const mutation = APP_TS.replace(`void this.dataLoader.${loader}();`, '');
+      const mutatedFanOut = extractFanOutLoaders(mutation);
+      const missing = [...gatedLoaders].filter((gated) => !mutatedFanOut.has(gated));
+      assert.ok(
+        missing.includes(loader),
+        `removing ${loader} must make the transition coverage guard fail`,
+      );
+    }
   });
 });

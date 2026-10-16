@@ -1,3 +1,4 @@
+import { CountrySectionError } from '@/services/country-brief-error';
 import { Panel } from './Panel';
 import { escapeHtml, sanitizeUrl, unsafeRawHtml } from '@/utils/sanitize';
 import { createLazyClient, getRpcBaseUrl, rpcFetch } from '@/services/rpc-client';
@@ -7,17 +8,18 @@ import type {
   ListStorageFacilitiesResponse,
   StorageFacilityEntry,
   GetStorageFacilityDetailResponse,
-  ListEnergyDisruptionsResponse,
   EnergyDisruptionEntry,
 } from '@/generated/client/worldmonitor/supply_chain/v1/service_client';
 import { formatEventWindow, formatCapacityOffline } from '@/shared/disruption-timeline';
 import { deriveStoragePublicBadge } from '@/shared/storage-evidence';
 import {
+  ensureStorageFacilityRegistryHydrated,
   getCachedStorageFacilityRegistry,
   setCachedStorageFacilityRegistry,
   type RawStorageFacilityRegistry,
 } from '@/shared/storage-facility-registry-store';
 import { SupplyChainServiceClient } from '@/services/generated-rpc-clients';
+import { bindActivationKeys } from '@/utils/activation';
 
 const getSupplyChainClient = createLazyClient(() => new SupplyChainServiceClient(getRpcBaseUrl(), {
   fetch: rpcFetch,
@@ -167,14 +169,16 @@ export class StorageFacilityMapPanel extends Panel {
   private selectedId: string | null = null;
   private detail: GetStorageFacilityDetailResponse | null = null;
   private detailLoading = false;
-  private detailEvents: EnergyDisruptionEntry[] | undefined = undefined;
+  private detailError: string | null = null;
+  private detailEvents: EnergyDisruptionEntry[] | null | undefined = undefined;
+  private usedHydrationPaint = false;
   private openDetailHandler = (ev: Event): void => {
     const id = (ev as CustomEvent<{ facilityId?: string }>).detail?.facilityId;
     if (!id || !this.element?.isConnected) return;
     void this.loadDetail(id);
   };
 
-  constructor() {
+  constructor(private readonly detailSource?: Pick<ReturnType<typeof getSupplyChainClient>, 'getStorageFacilityDetail' | 'listEnergyDisruptions'>) {
     super({
       id: 'storage-facility-map',
       title: 'Strategic Storage Atlas',
@@ -191,7 +195,22 @@ export class StorageFacilityMapPanel extends Panel {
     if (typeof window !== 'undefined') {
       window.addEventListener('energy:open-storage-facility-detail', this.openDetailHandler);
     }
+    this.content.addEventListener('click', this.handleContentClick);
+    bindActivationKeys(this.content, '.sf-row');
   }
+
+  private handleContentClick = (e: Event): void => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('.sf-drawer-close')) {
+      this.closeDetail();
+      return;
+    }
+    const row = target.closest<HTMLTableRowElement>('tr.sf-row');
+    if (!row || !this.content.contains(row)) return;
+    const id = row.dataset.facilityId;
+    if (id) void this.loadDetail(id);
+  };
 
   public destroy(): void {
     if (typeof window !== 'undefined') {
@@ -202,70 +221,98 @@ export class StorageFacilityMapPanel extends Panel {
 
   public async fetchData(): Promise<void> {
     try {
-      // Bootstrap lane via the shared store. Reads once across both
-      // consumers (this panel + DeckGLMap storage layer); returns the
-      // cached value on subsequent calls instead of draining bootstrap.
-      const { registry } = getCachedStorageFacilityRegistry();
+      // Shared store: rolling-deploy leftover first, then one on-demand
+      // fetch. A response that arrives before this panel is inserted still
+      // lands in the store and is replayed via runWhenConnected.
+      // First paint skips RPC. Later fetchData ticks (24h scheduler) ask
+      // the store for a CDN-shielded refresh.
+      let { registry } = getCachedStorageFacilityRegistry();
+      if (!registry) {
+        const hydratedRegistry = await ensureStorageFacilityRegistryHydrated({
+          refresh: this.usedHydrationPaint,
+        });
+        registry = hydratedRegistry.registry;
+      } else if (this.usedHydrationPaint) {
+        const hydratedRegistry = await ensureStorageFacilityRegistryHydrated({ refresh: true });
+        registry = hydratedRegistry.registry;
+      }
       const hydrated = buildBootstrapResponse(registry);
       if (hydrated) {
-        this.data = hydrated;
-        this.render();
-        // Background RPC refresh for post-deploy classifier-version bumps.
-        // When it lands, mirror the fresh shape into the store so the
-        // map's next re-render uses the newer stamps too.
-        void getSupplyChainClient().listStorageFacilities({ facilityType: '' }).then(live => {
-          if (!this.element?.isConnected || !live?.facilities?.length) return;
-          this.data = live;
+        const apply = (): void => {
+          this.data = hydrated;
           this.render();
-          const facilitiesRecord: Record<string, StorageFacilityEntry> =
-            Object.fromEntries(live.facilities.map(f => [f.id, f]));
-          setCachedStorageFacilityRegistry({
-            facilities: facilitiesRecord,
-            classifierVersion: live.classifierVersion,
-            updatedAt: live.fetchedAt,
-          });
-        }).catch(() => {});
+        };
+        if (!this.element?.isConnected) {
+          this.runWhenConnected(apply);
+          this.usedHydrationPaint = true;
+          return;
+        }
+        apply();
+        this.usedHydrationPaint = true;
         return;
       }
 
       const live = await getSupplyChainClient().listStorageFacilities({ facilityType: '' });
-      if (!this.element?.isConnected) return;
-      if (live.upstreamUnavailable || !live.facilities?.length) {
-        this.showError('Storage registry unavailable', () => void this.fetchData());
+      if (live.facilities?.length && !live.upstreamUnavailable) {
+        const facilitiesRecord: Record<string, StorageFacilityEntry> =
+          Object.fromEntries(live.facilities.map(f => [f.id, f]));
+        setCachedStorageFacilityRegistry({
+          facilities: facilitiesRecord,
+          classifierVersion: live.classifierVersion,
+          updatedAt: live.fetchedAt,
+        });
+        this.usedHydrationPaint = true;
+      }
+      const applyLive = (): void => {
+        if (live.upstreamUnavailable || !live.facilities?.length) {
+          this.showError('Storage registry unavailable', () => void this.fetchData());
+          return;
+        }
+        this.data = live;
+        this.render();
+      };
+      if (!this.element?.isConnected) {
+        this.runWhenConnected(applyLive);
         return;
       }
-      this.data = live;
-      this.render();
-      const facilitiesRecord: Record<string, StorageFacilityEntry> =
-        Object.fromEntries(live.facilities.map(f => [f.id, f]));
-      setCachedStorageFacilityRegistry({
-        facilities: facilitiesRecord,
-        classifierVersion: live.classifierVersion,
-        updatedAt: live.fetchedAt,
-      });
+      applyLive();
     } catch (err) {
       if (this.isAbortError(err)) return;
-      if (!this.element?.isConnected) return;
-      this.showError('Storage registry error', () => void this.fetchData());
+      const applyError = (): void => {
+        this.showError('Storage registry error', () => void this.fetchData());
+      };
+      if (!this.element?.isConnected) {
+        this.runWhenConnected(applyError);
+        return;
+      }
+      applyError();
     }
+  }
+
+  public async presentDetail(data: ListStorageFacilitiesResponse, id: string): Promise<void> {
+    this.data = data;
+    await this.loadDetail(id);
   }
 
   private async loadDetail(facilityId: string): Promise<void> {
     this.selectedId = facilityId;
     this.detailLoading = true;
+    this.detailError = null;
     this.detailEvents = undefined;
     this.render();
     try {
-      const [d, events] = await Promise.all([
-        getSupplyChainClient().getStorageFacilityDetail({ facilityId }),
-        getSupplyChainClient().listEnergyDisruptions({ assetId: facilityId, assetType: 'storage', ongoingOnly: false }),
-      ]);
+      const timeline = (this.detailSource ?? getSupplyChainClient()).listEnergyDisruptions({ assetId: facilityId, assetType: 'storage', ongoingOnly: false }).catch(() => undefined);
+      const d = await (this.detailSource ?? getSupplyChainClient()).getStorageFacilityDetail({ facilityId });
       if (!this.element?.isConnected || this.selectedId !== facilityId) return;
       this.detail = d;
-      this.detailEvents = (events as ListEnergyDisruptionsResponse)?.events ?? [];
       this.detailLoading = false;
       this.render();
-    } catch {
+      void timeline.then(events => {
+        if (!this.element?.isConnected || this.selectedId !== facilityId) return;
+        this.detailEvents = events && !events.upstreamUnavailable ? events.events : null;
+        this.render();
+      });
+    } catch (error) {
       if (!this.element?.isConnected) return;
       // Mirror the stale-response guard on the failure path: if the user
       // has clicked a different facility while this request was in flight,
@@ -273,6 +320,7 @@ export class StorageFacilityMapPanel extends Panel {
       if (this.selectedId !== facilityId) return;
       this.detailLoading = false;
       this.detail = null;
+      this.detailError = error instanceof CountrySectionError ? error.message : null;
       this.render();
     }
   }
@@ -285,7 +333,8 @@ export class StorageFacilityMapPanel extends Panel {
   }
 
   private renderDisruptionTimeline(): string {
-    if (this.detailEvents === undefined) return '';
+    if (this.detailEvents === undefined) return this.detailLoading ? '' : '<div class="sf-evidence"><div class="sf-sub">Loading disruption timeline…</div></div>';
+    if (this.detailEvents === null) return '<div class="sf-evidence"><div class="sf-sub">Disruption timeline unavailable. Asset details remain visible.</div></div>';
     if (this.detailEvents.length === 0) {
       return `<div class="sf-evidence">
         <div class="sf-sub" style="margin-bottom:6px">Disruption timeline</div>
@@ -339,15 +388,15 @@ export class StorageFacilityMapPanel extends Panel {
 
     const drawer = this.selectedId ? this.renderDrawer() : '';
 
-    this.setSafeContent(unsafeRawHtml(`
+    const html = unsafeRawHtml(`
       <div class="sf-wrap">
         <table class="sf-table">
           <thead>
             <tr>
-              <th>Facility</th>
-              <th>Country · Type</th>
-              <th>Capacity</th>
-              <th>Status</th>
+              <th scope="col">Facility</th>
+              <th scope="col">Country · Type</th>
+              <th scope="col">Capacity</th>
+              <th scope="col">Status</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -357,42 +406,35 @@ export class StorageFacilityMapPanel extends Panel {
       </div>
       ${ATTRIBUTION_FOOTER_CSS}
       <style>
-        .sf-wrap { position: relative; font-size: 11px; }
+        .sf-wrap { position: relative; font-size: calc(11px * var(--wm-panel-effective-scale, 1)); }
         .sf-table { width: 100%; border-collapse: collapse; }
-        .sf-table th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim, #888); padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .sf-table th { text-align: left; font-size: calc(9px * var(--wm-panel-effective-scale, 1)); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim, #888); padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); }
         .sf-table td { padding: 6px; border-bottom: 1px solid rgba(255,255,255,0.04); }
         .sf-table tr.sf-row { cursor: pointer; }
         .sf-table tr.sf-row:hover td { background: rgba(255,255,255,0.03); }
         .sf-name { font-weight: 600; color: var(--text, #eee); }
-        .sf-sub  { font-size: 9px; color: var(--text-dim, #888); text-transform: uppercase; letter-spacing: 0.04em; }
-        .sf-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 9px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.04em; }
+        .sf-sub  { font-size: calc(9px * var(--wm-panel-effective-scale, 1)); color: var(--text-dim, #888); text-transform: uppercase; letter-spacing: 0.04em; }
+        .sf-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: calc(9px * var(--wm-panel-effective-scale, 1)); font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.04em; }
         .sf-drawer { position: absolute; inset: 0; background: var(--panel-bg, #0f1218); padding: 12px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; }
-        .sf-drawer-close { position: absolute; top: 8px; right: 10px; background: transparent; border: 0; color: var(--text-dim, #888); cursor: pointer; font-size: 14px; }
-        .sf-drawer h3 { margin: 0 0 6px 0; font-size: 13px; color: var(--text, #eee); }
-        .sf-drawer .sf-kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; font-size: 10px; margin-bottom: 10px; }
-        .sf-drawer .sf-kv-key { color: var(--text-dim, #888); text-transform: uppercase; letter-spacing: 0.04em; font-size: 9px; padding-top: 2px; }
+        .sf-drawer-close { position: absolute; top: 8px; right: 10px; background: transparent; border: 0; color: var(--text-dim, #888); cursor: pointer; font-size: calc(14px * var(--wm-panel-effective-scale, 1)); }
+        .sf-drawer h3 { margin: 0 0 6px 0; font-size: calc(13px * var(--wm-panel-effective-scale, 1)); color: var(--text, #eee); }
+        .sf-drawer .sf-kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; font-size: calc(10px * var(--wm-panel-effective-scale, 1)); margin-bottom: 10px; }
+        .sf-drawer .sf-kv-key { color: var(--text-dim, #888); text-transform: uppercase; letter-spacing: 0.04em; font-size: calc(9px * var(--wm-panel-effective-scale, 1)); padding-top: 2px; }
         .sf-evidence { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
-        .sf-ev-item { font-size: 10px; color: var(--text, #eee); margin-bottom: 6px; }
+        .sf-ev-item { font-size: calc(10px * var(--wm-panel-effective-scale, 1)); color: var(--text, #eee); margin-bottom: 6px; }
         .sf-ev-item a { color: #4ade80; text-decoration: none; }
         .sf-ev-item a:hover { text-decoration: underline; }
       </style>
-    `, 'legacy Panel.setContent() migration'));
-
-    const table = this.element?.querySelector('.sf-table') as HTMLTableElement | null;
-    table?.querySelectorAll<HTMLTableRowElement>('tr.sf-row').forEach(tr => {
-      const id = tr.dataset.facilityId;
-      if (!id) return;
-      tr.addEventListener('click', () => void this.loadDetail(id));
-    });
-    const closeBtn = this.element?.querySelector<HTMLButtonElement>('.sf-drawer-close');
-    closeBtn?.addEventListener('click', () => this.closeDetail());
+    `, 'legacy Panel.setContent() migration');
+    if (this.detailSource) this.setSafeContentImmediate(html);
+    else this.setSafeContent(html);
   }
 
   private renderRow(f: StorageFacilityEntry): string {
     const glyph = TYPE_GLYPH[f.facilityType] ?? '🔹';
     const typeLabel = TYPE_LABEL[f.facilityType] ?? f.facilityType;
     return `
-      <tr class="sf-row" data-facility-id="${escapeHtml(f.id)}">
+      <tr class="sf-row" data-facility-id="${escapeHtml(f.id)}" tabindex="${this.selectedId ? '-1' : '0'}">
         <td>
           <div class="sf-name">${glyph} ${escapeHtml(f.name)}</div>
           <div class="sf-sub">${escapeHtml(f.operator || '')}</div>
@@ -409,7 +451,7 @@ export class StorageFacilityMapPanel extends Panel {
     }
     const f = this.detail?.facility;
     if (!f) {
-      return `<div class="sf-drawer"><button class="sf-drawer-close" aria-label="Close">✕</button>Facility detail unavailable.</div>`;
+      return `<div class="sf-drawer"><button class="sf-drawer-close" aria-label="Close">✕</button>${escapeHtml(this.detailError ?? 'Facility detail unavailable.')}</div>`;
     }
 
     const ev = f.evidence;

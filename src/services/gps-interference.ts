@@ -27,12 +27,17 @@ let cachedData: GpsJamData | null = null;
 let cachedAt = 0;
 const CACHE_TTL = 5 * 60 * 1000;
 
+export function getCachedGpsInterference(): GpsJamData | null {
+  return cachedData;
+}
+
 export async function fetchGpsInterference(): Promise<GpsJamData | null> {
   const now = Date.now();
   if (cachedData && now - cachedAt < CACHE_TTL) return cachedData;
 
   try {
     const resp = await fetch(toApiUrl('/api/gpsjam'), {
+      credentials: 'omit',
       signal: AbortSignal.timeout(20_000),
     });
     if (!resp.ok) return cachedData;

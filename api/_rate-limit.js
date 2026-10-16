@@ -9,12 +9,16 @@ import {
 } from './_rate-limit-fallback.js';
 import {
   RATE_LIMIT_DEGRADED_HEADERS,
-  getClientIp,
+  getClientRateLimitKey,
+  hasUnprovenCloudflareClientIp,
 } from './_client-ip.js';
 export {
   RATE_LIMIT_DEGRADED_HEADERS,
   UNKNOWN_CLIENT_IP,
   getClientIp,
+  getClientRateLimitKey,
+  hasCloudflareTransitProof,
+  hasUnprovenCloudflareClientIp,
 } from './_client-ip.js';
 
 // @upstash/redis defaults to 5 retries with exponential backoff (~4.3s total)
@@ -69,13 +73,52 @@ function getRatelimit(policy) {
 // SERVICE_UNAVAILABLE `level: 'warning'` precedent in api/user-prefs.ts). A
 // `missing-config` stage is a real deploy misconfiguration and any novel error
 // is unclassified — both stay at `error` so on-call still sees them.
+//
+// `aborted due to timeout` / `TimeoutError` is our OWN deadline reporting in:
+// getEndpointRatelimit arms `AbortSignal.timeout(ENDPOINT_REDIS_ABORT_TIMEOUT_MS)`
+// on the Upstash client, so a stalled transport rejects with a DOMException
+// phrased "The operation was aborted due to timeout" — no `timed out`, no
+// `network`, so the pre-existing alternation scored it `error`. That split the
+// one condition in two: the SDK-race arm throws `Upstash endpoint rate-limit
+// decision timed out` (already `warning`) while the abort arm paged
+// (WORLDMONITOR-VM). Both are absorbed by the same fail-closed 503.
 // Mirrored verbatim in server/_shared/rate-limit.ts.
-function rateLimitErrorLevel(stage, msg) {
+//
+// Exported purely as a test seam: the classification is only observable through
+// a Sentry capture otherwise, and a source-regex assertion would false-pass on
+// the mirror drifting. tests/rate-limit.test.mts calls both copies directly.
+export function rateLimitErrorLevel(stage, msg) {
   if (stage.includes('missing-config')) return 'error';
-  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|socket hang up|Redis unavailable|Redis unreachable/i.test(msg)) {
+  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|aborted due to timeout|TimeoutError|socket hang up|Redis unavailable|Redis unreachable/i.test(msg)) {
     return 'warning';
   }
   return 'error';
+}
+
+// Failure-mode suffixes worth their own Sentry issue. Closed set — unlike a
+// route or scope, these describe HOW the limiter failed, not who called it.
+// Mirrored verbatim in server/_shared/rate-limit.ts.
+const RATE_LIMIT_FINGERPRINT_SUFFIXES = new Set(['missing-config', 'timeout', 'edge-proof']);
+
+/**
+ * Collapse a limiter stage to the low-cardinality token Sentry should GROUP on.
+ *
+ * Stage strings embed the caller (`checkScopedRateLimit:/api/skills/fetch-agentskills`)
+ * so the `stage` TAG can answer "which routes are affected". That is wrong for a
+ * fingerprint: Sentry groups by fingerprint, so the raw stage mints one issue per
+ * caller for a single Redis slowdown. Keep the head, plus a closed set of
+ * failure-mode suffixes; the full stage stays a tag. Exported as a pure function
+ * so the mapping is unit-testable rather than asserted through a Sentry capture.
+ * Mirrored verbatim in server/_shared/rate-limit.ts. (#6454)
+ *
+ * @param {string} stage
+ * @returns {string}
+ */
+export function rateLimitFingerprintStage(stage) {
+  const parts = String(stage ?? '').split(':');
+  const head = parts[0] || 'rate-limit';
+  const last = (parts.length > 1 ? parts[parts.length - 1] : '') ?? '';
+  return RATE_LIMIT_FINGERPRINT_SUFFIXES.has(last) ? `${head}:${last}` : head;
 }
 
 function logRateLimitDegraded(stage, err, ctx) {
@@ -85,10 +128,29 @@ function logRateLimitDegraded(stage, err, ctx) {
   console.error(`[rate-limit] redis-error stage=${stage} msg=${msg}`);
   captureSilentError(err, {
     tags: { surface: 'api', component: 'rate-limit', stage },
-    fingerprint: ['rate-limit', 'redis-error', stage],
+    fingerprint: ['rate-limit', 'redis-error', rateLimitFingerprintStage(stage)],
     ctx,
     level: rateLimitErrorLevel(stage, msg),
   });
+}
+
+// One-per-isolate latch for edge-proof rejections. Spoofed cf-connecting-ip
+// headers are caller-controlled on a direct origin hit; reporting every 403
+// would create an amplification path (mirrors api/mcp/auth.ts). (#8402)
+const EDGE_PROOF_RATE_LIMIT_LATCH = Symbol.for('worldmonitor.rate-limit.edge-proof-reported.v1');
+
+function reportEdgeProofRequiredOnce(stage, err, ctx) {
+  const existing = Reflect.get(globalThis, EDGE_PROOF_RATE_LIMIT_LATCH);
+  const latch = existing ?? { reported: false };
+  if (!existing) Reflect.set(globalThis, EDGE_PROOF_RATE_LIMIT_LATCH, latch);
+  if (latch.reported) return;
+  latch.reported = true;
+  logRateLimitDegraded(stage, err, ctx);
+}
+
+export function resetEdgeProofRateLimitReportedForTest() {
+  const latch = Reflect.get(globalThis, EDGE_PROOF_RATE_LIMIT_LATCH);
+  if (latch) latch.reported = false;
 }
 
 function rateLimitDegradedResponse(corsHeaders) {
@@ -99,10 +161,20 @@ function rateLimitDegradedResponse(corsHeaders) {
   );
 }
 
+// 403 for IP-scoped budgets when cf-connecting-ip arrives without a valid
+// x-wm-edge-proof. Distinct from the Redis-degraded 503. (#8402)
+function edgeProofRequiredResponse(corsHeaders) {
+  return jsonResponse(
+    { error: 'Cloudflare edge proof required' },
+    403,
+    { 'X-RateLimit-Mode': 'edge-proof', ...corsHeaders },
+  );
+}
+
 /**
  * @param {Request} request
  * @param {Record<string, string>} corsHeaders
- * @param {{ failClosed?: boolean, ctx?: { waitUntil: (p: Promise<unknown>) => void }, scope?: string, limit?: number, window?: import('@upstash/ratelimit').Duration }} [opts]
+ * @param {{ failClosed?: boolean, ctx?: { waitUntil: (p: Promise<unknown>) => void }, scope?: string, identifier?: string, limit?: number, window?: import('@upstash/ratelimit').Duration }} [opts]
  *   When `failClosed` is true and Redis is unavailable, return a 503 with
  *   the `X-RateLimit-Mode: degraded` marker instead of allowing the
  *   request through. Pass `true` for endpoints where the rate-limit IS
@@ -111,11 +183,28 @@ function rateLimitDegradedResponse(corsHeaders) {
  *   doesn't black-hole the whole site. `ctx` is the Vercel handler
  *   context — passing it lets the Sentry envelope dispatch survive
  *   isolate teardown. Top-level Edge handlers may pass `scope`, `limit`,
- *   and `window` for explicit endpoint budgets while retaining the shared
- *   degraded/429 response semantics. (#3531)
+ *   `identifier`, `limit`, and `window` for explicit endpoint budgets while
+ *   retaining the shared degraded/429 response semantics. `identifier`
+ *   defaults to the caller IP; a stable explicit identifier lets sibling
+ *   handlers share one provider-wide Redis bucket. (#3531)
  */
 export async function checkRateLimit(request, corsHeaders, opts = {}) {
   const policy = getRateLimitPolicy(opts);
+
+  // Default identifier is the caller IP. A cf-connecting-ip without proof is
+  // either a direct-origin spoof or a Transform Rule miss — reject rather than
+  // share a Cloudflare PoP bucket (#8402). Explicit non-IP identifiers skip.
+  // Run before the Redis availability gate so fail-open Redis outages cannot
+  // re-admit unproven CF client IPs.
+  if (opts.identifier == null && hasUnprovenCloudflareClientIp(request)) {
+    reportEdgeProofRequiredOnce(
+      'checkRateLimit:edge-proof',
+      new Error('Cloudflare client IP arrived without a valid x-wm-edge-proof'),
+      opts.ctx,
+    );
+    return edgeProofRequiredResponse(corsHeaders);
+  }
+
   const rl = getRatelimit(policy);
   if (!rl) {
     if (opts.failClosed) {
@@ -125,16 +214,32 @@ export async function checkRateLimit(request, corsHeaders, opts = {}) {
     return null;
   }
 
-  const ip = getClientIp(request);
+  const identifier = opts.identifier ?? getClientRateLimitKey(request);
   try {
     const fallbackPrefix = policy.scope === DEFAULT_RATE_LIMIT_SCOPE ? 'rl:fw' : `rl:${policy.scope}:fw`;
-    const { success, limit, reset } = await limitWithFallback(
+    const result = await limitWithFallback(
       rl,
-      ip,
-      `${fallbackPrefix}:${ip}`,
+      identifier,
+      `${fallbackPrefix}:${identifier}`,
       policy.limit,
       durationToSeconds(policy.window),
     );
+
+    // @upstash/ratelimit v2 races the Redis call against its own internal
+    // timeout and RESOLVES `{ success: true, reason: 'timeout' }` rather than
+    // rejecting, so a slow (not down) Redis never reaches the catch below and
+    // is indistinguishable from a genuine allow — the limit vanishes with no
+    // log and no Sentry event. Route it through the same degraded handling as a
+    // thrown Redis error so the bypass window is visible, and so `failClosed`
+    // callers still get their 503. Mirrors checkEndpointRateLimit and
+    // checkScopedRateLimit in server/_shared/rate-limit.ts. (#6412 review)
+    if (result.reason === 'timeout') {
+      logRateLimitDegraded('checkRateLimit:timeout', new Error('Upstash rate-limit decision timed out'), opts.ctx);
+      if (opts.failClosed) return rateLimitDegradedResponse(corsHeaders);
+      return null;
+    }
+
+    const { success, limit, reset } = result;
 
     if (!success) {
       // `reset` is a Unix epoch in MILLISECONDS (Upstash convention). The IETF

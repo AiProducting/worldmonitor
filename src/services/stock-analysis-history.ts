@@ -1,3 +1,4 @@
+import { normalizeStockSymbol } from '../../shared/stock-symbol';
 import { getRpcBaseUrl } from '@/services/rpc-client';
 import type { AnalyzeStockResponse } from '@/generated/client/worldmonitor/market/v1/service_client';
 import { premiumFetch } from '@/services/premium-fetch';
@@ -27,7 +28,9 @@ function isSameSnapshot(a: StockAnalysisSnapshot, b: StockAnalysisSnapshot): boo
   return a.symbol === b.symbol
     && a.generatedAt === b.generatedAt
     && a.signal === b.signal
+    && a.ratingSignal === b.ratingSignal
     && a.signalScore === b.signalScore
+    && a.compositeScore === b.compositeScore
     && a.currentPrice === b.currentPrice;
 }
 
@@ -40,7 +43,8 @@ export function mergeStockAnalysisHistory(
 
   for (const snapshot of incoming) {
     if (!snapshot?.symbol || !snapshot.available) continue;
-    const symbol = snapshot.symbol;
+    const symbol = normalizeStockSymbol(snapshot.symbol);
+    if (!symbol) continue;
     const current = next[symbol] ? [...next[symbol]!] : [];
     if (!current.some((item) => isSameSnapshot(item, snapshot))) {
       current.push(snapshot);
@@ -68,7 +72,24 @@ export function getLatestStockAnalysisSnapshots(history: StockAnalysisHistory, l
 function hasCurrentStockAnalysisSchema(snapshot: StockAnalysisSnapshot | undefined): boolean {
   if (!snapshot) return false;
   const hasAnalystFields = snapshot.analystConsensus !== undefined || snapshot.priceTarget !== undefined;
-  return hasAnalystFields && snapshot.fundamentals !== undefined;
+  const hasCompositeScore = typeof snapshot.compositeScore === 'number'
+    && Number.isFinite(snapshot.compositeScore);
+  const hasRatingNarrative = typeof snapshot.ratingSummary === 'string'
+    && snapshot.ratingSummary.length > 0
+    && typeof snapshot.ratingAction === 'string'
+    && snapshot.ratingAction.length > 0
+    && typeof snapshot.ratingConfidence === 'string'
+    && snapshot.ratingConfidence.length > 0
+    && typeof snapshot.ratingWhyNow === 'string'
+    && snapshot.ratingWhyNow.length > 0
+    && Array.isArray(snapshot.ratingBullishFactors)
+    && Array.isArray(snapshot.ratingRiskFactors);
+  return hasAnalystFields
+    && snapshot.fundamentals !== undefined
+    && hasCompositeScore
+    && typeof snapshot.ratingSignal === 'string'
+    && snapshot.ratingSignal.length > 0
+    && hasRatingNarrative;
 }
 
 function isFreshSnapshot(
@@ -90,7 +111,7 @@ export function hasFreshStockAnalysisHistory(
 ): boolean {
   if (symbols.length === 0) return false;
   const now = Date.now();
-  return symbols.every((symbol) => isFreshSnapshot(history[symbol]?.[0], now, maxAgeMs));
+  return symbols.every((symbol) => isFreshSnapshot(history[normalizeStockSymbol(symbol)]?.[0], now, maxAgeMs));
 }
 
 export function getMissingOrStaleStockAnalysisSymbols(
@@ -99,7 +120,7 @@ export function getMissingOrStaleStockAnalysisSymbols(
   maxAgeMs = STOCK_ANALYSIS_FRESH_MS,
 ): string[] {
   const now = Date.now();
-  return symbols.filter((symbol) => !isFreshSnapshot(history[symbol]?.[0], now, maxAgeMs));
+  return symbols.filter((symbol) => !isFreshSnapshot(history[normalizeStockSymbol(symbol)]?.[0], now, maxAgeMs));
 }
 
 export async function fetchStockAnalysisHistory(
@@ -115,7 +136,9 @@ export async function fetchStockAnalysisHistory(
 
   const history: StockAnalysisHistory = {};
   for (const item of response.items) {
-    history[item.symbol] = [...item.snapshots].sort(compareSnapshots);
+    const symbol = normalizeStockSymbol(item.symbol);
+    if (!symbol) continue;
+    history[symbol] = [...item.snapshots].sort(compareSnapshots);
   }
   return history;
 }

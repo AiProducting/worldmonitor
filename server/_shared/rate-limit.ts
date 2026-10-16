@@ -1,6 +1,7 @@
+import { SUB_REQUEST_MARKER_HEADER } from './sub-request-admission';
 import { Ratelimit, type Duration } from '@upstash/ratelimit';
 import { Redis } from '@upstash/redis';
-import { getClientIp } from './client-ip';
+import { getClientIp, getClientRateLimitKey, hasUnprovenCloudflareClientIp, UNKNOWN_CLIENT_IP } from './client-ip';
 // @ts-expect-error — JS module, no declaration file
 import { captureSilentError } from '../../api/_sentry-edge.js';
 // @ts-expect-error — JS module, no declaration file
@@ -12,7 +13,7 @@ import { durationToSeconds, limitWithFallback, resetRateLimitFallbackForTest } f
 // the helpers' original home and existing callers import them from this
 // module (getClientIp: api/ask.ts, api/a2a.ts, api/mcp-proxy.ts;
 // UNKNOWN_CLIENT_IP: turnstile.ts; plus the rate-limit test suites).
-export { getClientIp, hasCloudflareTransitProof, UNKNOWN_CLIENT_IP } from './client-ip';
+export { getClientIp, getClientRateLimitKey, hasCloudflareTransitProof, hasUnprovenCloudflareClientIp, rateLimitKeyForIp, UNKNOWN_CLIENT_IP } from './client-ip';
 
 // @upstash/redis defaults to 5 retries with exponential backoff (~4.3s total)
 // before surfacing an unreachable-Redis error. The node test runner sets
@@ -23,6 +24,32 @@ export { getClientIp, hasCloudflareTransitProof, UNKNOWN_CLIENT_IP } from './cli
 // resilient default untouched. Mirrors the retry:false already shipped on the
 // MCP limiter to unblock the suite (PR #3963).
 const REDIS_TEST_RETRY_OPTS: { retry?: false } = process.env.NODE_TEST_CONTEXT ? { retry: false } : {};
+// @upstash/ratelimit v2 returns an allow-shaped result with reason="timeout"
+// when this deadline wins the Redis race. Endpoint policies inspect that
+// reason below and fail closed; keeping the SDK timeout enabled bounds the
+// outage latency instead of waiting for the platform function timeout.
+const ENDPOINT_RATE_LIMIT_TIMEOUT_MS = process.env.NODE_TEST_CONTEXT ? 250 : 5_000;
+// Abort the underlying Upstash fetch just before the SDK's availability-first
+// race expires. Without this, the SDK returns its timeout result but leaves the
+// Redis request alive in the isolate for an unbounded transport stall.
+const ENDPOINT_REDIS_ABORT_TIMEOUT_MS = process.env.NODE_TEST_CONTEXT ? 20 : 4_500;
+// The two deadlines are a PAIR, and the NODE_TEST_CONTEXT pair is deliberately
+// not the production ratio scaled down. Production's ordering is safe because
+// its 500ms gap dwarfs the few milliseconds the Upstash client needs to build a
+// request and call the `signal` factory in getEndpointRatelimit() -- the abort
+// timer does not start until then, while the SDK's decision timer starts at
+// limit(). Under the node test runner that arming cost is 8-71ms (tsx compile
+// plus per-test module re-import dominate it), so the original 25/20 pair left
+// as little as 1.1ms of headroom and inverted under `--test-concurrency=16`:
+// the decision resolved first and the transport was still pending when the
+// assertion read it. The gap therefore has to exceed the arming cost rather
+// than mirror the production ratio -- a short abort so the suite still fails
+// fast, with the decision deadline well behind it. Pinned by
+// tests/rate-limit.test.mts.
+export const __ENDPOINT_LIMITER_DEADLINES_FOR_TEST = Object.freeze({
+  decisionMs: ENDPOINT_RATE_LIMIT_TIMEOUT_MS,
+  abortMs: ENDPOINT_REDIS_ABORT_TIMEOUT_MS,
+});
 
 let ratelimit: Ratelimit | null = null;
 const GLOBAL_RATE_LIMIT = 600;
@@ -57,21 +84,80 @@ function getRatelimit(): Ratelimit | null {
 // SERVICE_UNAVAILABLE `level: 'warning'` precedent in api/user-prefs.ts). A
 // `missing-config` stage is a real deploy misconfiguration and any novel error
 // is unclassified — both stay at `error` so on-call still sees them.
+//
+// `aborted due to timeout` / `TimeoutError` is our OWN deadline reporting in:
+// getEndpointRatelimit arms `AbortSignal.timeout(ENDPOINT_REDIS_ABORT_TIMEOUT_MS)`
+// on the Upstash client, so a stalled transport rejects with a DOMException
+// phrased "The operation was aborted due to timeout" — no `timed out`, no
+// `network`, so the pre-existing alternation scored it `error`. That split the
+// one condition in two: the SDK-race arm throws `Upstash endpoint rate-limit
+// decision timed out` (already `warning`) while the abort arm paged
+// (WORLDMONITOR-VM). Both are absorbed by the same fail-closed 503.
 // Mirrored verbatim in api/_rate-limit.js.
-function rateLimitErrorLevel(stage: string, msg: string): 'warning' | 'error' {
+//
+// Exported purely as a test seam: the classification is only observable through
+// a Sentry capture otherwise, and a source-regex assertion would false-pass on
+// the mirror drifting. tests/rate-limit.test.mts calls both copies directly.
+export function rateLimitErrorLevel(stage: string, msg: string): 'warning' | 'error' {
   if (stage.includes('missing-config')) return 'error';
-  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|socket hang up|Redis unavailable|Redis unreachable/i.test(msg)) {
+  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|aborted due to timeout|TimeoutError|socket hang up|Redis unavailable|Redis unreachable/i.test(msg)) {
     return 'warning';
   }
   return 'error';
 }
 
-function logRateLimitDegraded(stage: string, err: unknown): void {
+const RATE_LIMIT_SENTRY_DEDUP_MS = 60_000;
+const lastRateLimitSentryCaptureAt = new Map<string, number>();
+
+// Failure-mode suffixes worth their own Sentry issue. These are a closed set —
+// unlike a route or scope, they describe HOW the limiter failed, not who called
+// it, so they never grow with traffic.
+const RATE_LIMIT_FINGERPRINT_SUFFIXES = new Set(['missing-config', 'timeout', 'edge-proof']);
+
+/**
+ * Collapse a limiter stage to the low-cardinality token Sentry should GROUP on.
+ *
+ * Stage strings deliberately embed the caller so the `stage` tag can answer
+ * "which routes are affected": `checkEndpointRateLimit:/api/market/v1/list-market-quotes`,
+ * `checkScopedRateLimit:/api/skills/fetch-agentskills`. That is right for a tag
+ * and wrong for a fingerprint — Sentry groups by fingerprint, so the raw stage
+ * mints one issue PER ROUTE for a single Redis slowdown. With 213 gateway
+ * routes behind checkEndpointRateLimit, one incident can open 213 issues; the
+ * triage sweep on 2026-08-11 found seven live issues and two ignored ones for
+ * this single condition, three of them created within two minutes of each other.
+ *
+ * Group on the stage's head, keeping only a closed set of failure-mode suffixes.
+ * The full stage stays a tag, so per-route breakdown is preserved inside the one
+ * issue. Exported as a pure function so the mapping is unit-testable rather than
+ * asserted through a Sentry capture. (#6454)
+ */
+export function rateLimitFingerprintStage(stage: string): string {
+  const parts = String(stage ?? '').split(':');
+  const head = parts[0] || 'rate-limit';
+  const last = (parts.length > 1 ? parts[parts.length - 1] : '') ?? '';
+  return RATE_LIMIT_FINGERPRINT_SUFFIXES.has(last) ? `${head}:${last}` : head;
+}
+
+export function reportRateLimitDegraded(
+  stage: string,
+  err: unknown,
+  surface: 'api' | 'server' = 'server',
+): void {
   const msg = err instanceof Error ? err.message : String(err);
   console.error(`[rate-limit] redis-error stage=${stage} msg=${msg}`);
+  // Keep every occurrence in provider logs, but emit at most one Sentry event
+  // per limiter stage per minute from this isolate. A Redis outage otherwise
+  // turns every fail-closed request into another identical ingestion event.
+  // Dedup stays keyed on the FULL stage (not the fingerprint) so an incident
+  // still reports one event per affected route — that is what makes the
+  // per-route `stage` tag breakdown inside the grouped issue meaningful.
+  const now = Date.now();
+  const lastCaptureAt = lastRateLimitSentryCaptureAt.get(stage);
+  if (lastCaptureAt !== undefined && now - lastCaptureAt < RATE_LIMIT_SENTRY_DEDUP_MS) return;
+  lastRateLimitSentryCaptureAt.set(stage, now);
   captureSilentError(err, {
-    tags: { surface: 'server', component: 'rate-limit', stage },
-    fingerprint: ['rate-limit', 'redis-error', stage],
+    tags: { surface, component: 'rate-limit', stage },
+    fingerprint: ['rate-limit', 'redis-error', rateLimitFingerprintStage(stage)],
     level: rateLimitErrorLevel(stage, msg),
   });
 }
@@ -82,7 +168,30 @@ function logScopedRateLimitMissingConfig(scope: string): void {
   const stage = `checkScopedRateLimit:${scope}:missing-config`;
   if (scopedMissingConfigStages.has(stage)) return;
   scopedMissingConfigStages.add(stage);
-  logRateLimitDegraded(stage, new Error('UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN missing'));
+  reportRateLimitDegraded(stage, new Error('UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN missing'));
+}
+
+// One-per-isolate latch for edge-proof rejections. Spoofed cf-connecting-ip
+// headers are caller-controlled on a direct origin hit; reporting every 403
+// would create an amplification path (mirrors api/mcp/auth.ts). (#8402)
+const EDGE_PROOF_RATE_LIMIT_LATCH = Symbol.for('worldmonitor.rate-limit.edge-proof-reported.v1');
+
+function reportEdgeProofRequiredOnce(stage: string, err: Error): void {
+  const existing = Reflect.get(globalThis, EDGE_PROOF_RATE_LIMIT_LATCH) as
+    | { reported: boolean }
+    | undefined;
+  const latch = existing ?? { reported: false };
+  if (!existing) Reflect.set(globalThis, EDGE_PROOF_RATE_LIMIT_LATCH, latch);
+  if (latch.reported) return;
+  latch.reported = true;
+  reportRateLimitDegraded(stage, err);
+}
+
+export function resetEdgeProofRateLimitReportedForTest(): void {
+  const latch = Reflect.get(globalThis, EDGE_PROOF_RATE_LIMIT_LATCH) as
+    | { reported: boolean }
+    | undefined;
+  if (latch) latch.reported = false;
 }
 
 // Marker header set on every degraded (fail-closed) response so observability
@@ -128,10 +237,36 @@ function rateLimitDegradedResponse(corsHeaders: Record<string, string>): Respons
     status: 503,
     headers: {
       'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
       ...RATE_LIMIT_DEGRADED_HEADERS,
       ...corsHeaders,
     },
   });
+}
+
+// 403 for IP-scoped budgets when cf-connecting-ip arrives without a valid
+// x-wm-edge-proof. Distinct from the Redis-degraded 503: the limiter is fine,
+// the Cloudflare transit proof is not. (#8402)
+function edgeProofRequiredResponse(corsHeaders: Record<string, string>): Response {
+  return new Response(JSON.stringify({ error: 'Cloudflare edge proof required' }), {
+    status: 403,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-RateLimit-Mode': 'edge-proof',
+      'Cache-Control': 'no-store',
+      ...corsHeaders,
+    },
+  });
+}
+
+/** Reject unproven Cloudflare IPs before an IP-scoped budget or Redis fallback. */
+export function checkIpScopedEdgeProof(request: Request, corsHeaders: Record<string, string>): Response | null {
+  if (!hasUnprovenCloudflareClientIp(request)) return null;
+  reportEdgeProofRequiredOnce(
+    'ip-scoped:edge-proof',
+    new Error('Cloudflare client IP arrived without a valid x-wm-edge-proof'),
+  );
+  return edgeProofRequiredResponse(corsHeaders);
 }
 
 export interface RateLimitOptions {
@@ -144,32 +279,305 @@ export interface RateLimitOptions {
    * black-hole the whole site. (#3531)
    */
   failClosed?: boolean;
-}
-
-export interface EndpointRateLimitOptions extends RateLimitOptions {
   /**
-   * Optional trusted server-derived user ID for endpoint policies that should
-   * isolate authenticated principals sharing one public IP. Callers must never
-   * pass a raw client-controlled header here. The limiter owns the namespace
-   * prefix so user IDs cannot collide with anonymous IP buckets.
+   * Optional trusted server-derived user ID for policies that should isolate
+   * authenticated principals sharing one public IP. Callers must never pass a
+   * raw client-controlled header here. The limiter owns the namespace prefix
+   * so user IDs cannot collide with anonymous IP buckets.
    */
   principalUserId?: string;
+  /**
+   * Which credential the caller presented. A user's API key and their browser
+   * session resolve to the SAME Clerk user id, so without this they share one
+   * per-minute bucket and programmatic traffic starves the interactive session
+   * behind the same account (WORLDMONITOR-12A: a scraper on an api_starter key
+   * spent 598 of 600, leaving that customer's own dashboard 2 successes and 22
+   * × 429). Defaults to `session`, which keeps the established `user:` key so
+   * in-flight buckets are not reset.
+   *
+   * This separates namespaces; it does not exempt anyone. Each scope is still
+   * capped at the same per-minute limit, so the aggregate a single account can
+   * spend across both credentials doubles by design — programmatic use is
+   * metered by the plan's own `apiRateLimit` + daily allowance, which is the
+   * meter that should bound it.
+   */
+  principalScope?: PrincipalRateLimitScope;
+}
+
+export type PrincipalRateLimitScope = 'session' | 'api_key';
+
+export type EndpointRateLimitOptions = RateLimitOptions;
+
+/**
+ * Header the gateway stamps with the rate-limit principal it RESOLVED for a
+ * request (`<scope>:<userId>`), so a handler that re-dispatches sub-requests
+ * can charge the caller's own budget without re-deriving identity itself.
+ *
+ * A handler cannot do that derivation safely: the credential headers it can
+ * see are raw and unvalidated, so a `wm_` prefix proves nothing about which
+ * bucket the gateway actually charged. Only the gateway knows, and it only
+ * knows after auth resolution completes.
+ *
+ * This is a gateway-internal trusted marker, exactly like
+ * TRUSTED_USER_ID_HEADER: the gateway is the only layer permitted to set it,
+ * and it strips inbound client copies at handler entry.
+ */
+export const TRUSTED_RATE_LIMIT_PRINCIPAL_HEADER = 'x-wm-rl-principal';
+
+/** Opaque single-use admission, authenticated by consumeSubRequestAdmission. */
+export { SUB_REQUEST_MARKER_HEADER } from './sub-request-admission';
+
+export function formatTrustedRateLimitPrincipal(
+  principalUserId: string,
+  scope: PrincipalRateLimitScope,
+): string {
+  return `${scope}:${principalUserId}`;
+}
+
+/**
+ * Reads the gateway-stamped principal back into limiter options. Returns `{}`
+ * for anything unrecognised so the limiter falls back to the caller's IP —
+ * the same default the gateway itself uses when no principal was resolved.
+ */
+export function readTrustedRateLimitPrincipal(headers: Headers): RateLimitOptions {
+  const raw = headers.get(TRUSTED_RATE_LIMIT_PRINCIPAL_HEADER);
+  if (!raw) return {};
+  const separator = raw.indexOf(':');
+  if (separator < 1) return {};
+  const scope = raw.slice(0, separator);
+  const principalUserId = raw.slice(separator + 1);
+  if (!principalUserId) return {};
+  if (scope !== 'session' && scope !== 'api_key') return {};
+  return { principalUserId, principalScope: scope };
+}
+
+/**
+ * RFC 1918 172.16/12 second octets (16-31), as exact dotted prefixes. Kept
+ * explicit rather than a single `'172.2'` prefix: `startsWith('172.2')` also
+ * matches public space (`172.2.0.1`, `172.200.x.x`) and would misclassify
+ * legitimate callers as unattributed.
+ */
+const SUB_REQUEST_UNATTRIBUTED_172_16_12_PREFIXES = Object.freeze([
+  '172.16.',
+  '172.17.',
+  '172.18.',
+  '172.19.',
+  '172.20.',
+  '172.21.',
+  '172.22.',
+  '172.23.',
+  '172.24.',
+  '172.25.',
+  '172.26.',
+  '172.27.',
+  '172.28.',
+  '172.29.',
+  '172.30.',
+  '172.31.',
+]);
+
+/**
+ * Egress-IP prefixes that prove a request was built by OUR OWN edge rather
+ * than by an external caller. `getClientIp` resolves server-initiated fetches
+ * to the platform's egress — the same value repeated for every caller — so the
+ * dispatch path treats a caller identity starting with one of these as
+ * unattributed instead of handing it the shared egress bucket.
+ *
+ * The `10/8`, `192.168/16`, and `169.254/16` ranges cover Vercel's internal /
+ * NAT egress (link-local + RFC 1918). The 172.16/12 range is spelled out
+ * octet-by-octet above.
+ *
+ * NOTE: a routable PUBLIC egress IP is intentionally NOT matched here. This
+ * helper resolves the INBOUND caller's identity (see
+ * `resolveServerSubRequestCharge`); a public IP on the inbound request names
+ * a real external caller and must stay attributed. Detecting the egress side
+ * (a public IP shared by every caller) is the job of the sub-request marker
+ * below, not of this prefix list.
+ */
+const SUB_REQUEST_UNATTRIBUTED_IP_PREFIXES = Object.freeze([
+  '10.',
+  ...SUB_REQUEST_UNATTRIBUTED_172_16_12_PREFIXES,
+  '192.168.',
+  '169.254.',
+]);
+
+/**
+ * True when `identity` cannot name an external caller: the unknown sentinel
+ * or an RFC 1918 / link-local egress range. Matching is exact on the sentinel
+ * (case-insensitive, trimmed — mirroring `getClientIp`'s own normalisation)
+ * and prefix-based on the dotted ranges above. Kept as a pure predicate so
+ * the dispatch-layer test pins the shape without Redis.
+ */
+export function isUnattributedSubRequestIdentity(identity: string): boolean {
+  const normalized = identity.trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized === UNKNOWN_CLIENT_IP) return true;
+  return SUB_REQUEST_UNATTRIBUTED_IP_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+export interface ServerSubRequestCharge {
+  /** Limiter options the caller must spend from — never the egress bucket. */
+  opts: EndpointRateLimitOptions;
+  /**
+   * True when the inbound request carries no initiating principal of its own
+   * (no stamped principal, no usable client IP). The sub-request must be
+   * refused rather than keyed to whatever IP the platform egress resolves to.
+   */
+  unattributed: boolean;
+}
+
+/**
+ * Resolves the rate-limit identity a server-initiated sub-request must be
+ * charged to, from the INBOUND caller request — the shared dispatch path for
+ * every fan-out feature (batch today, any future fan-out tomorrow).
+ *
+ * A same-origin `fetch` re-derives `getClientIp` from the platform's egress,
+ * so charging inside the sub-request hands every caller one shared bucket and
+ * never touches the caller's own. Charge BEFORE dispatch instead, from the
+ * inbound identity this returns:
+ *   1. the gateway-stamped principal when present (the only trustworthy
+ *      source — raw credential headers are unvalidated at the handler), or
+ *   2. the inbound caller's IP, or
+ *   3. `unattributed: true` when neither exists — the caller MUST refuse the
+ *      sub-request rather than fall back to the egress IP.
+ *
+ * INBOUND ONLY: pass the caller's original request, never the re-dispatched
+ * sub-request. A public egress IP on the inbound side names a real external
+ * caller and stays attributed; the sub-request side is recognised by the
+ * `SUB_REQUEST_MARKER_HEADER` admission verified by the gateway, not by this helper.
+ *
+ * The fallback is observable: refusal paths report through
+ * `reportRateLimitDegraded` with the fixed stage
+ * `chargeServerSubRequestOperation:unattributed-sub-request` (pathname travels
+ * in the error message, not the stage, so Sentry grouping and the per-minute
+ * dedup map stay low-cardinality), so the next fan-out that forgets to stamp
+ * the principal surfaces in production logs/Sentry instead of silently
+ * sharing an egress bucket. Prefer `chargeServerSubRequestOperation` below
+ * over calling this directly: it takes the resolved `ServerSubRequestCharge`
+ * as ONE object, so a new fan-out endpoint cannot resolve the identity and
+ * then forget to honour `unattributed`. (#8399)
+ */
+export function resolveServerSubRequestCharge(inbound: Request): ServerSubRequestCharge {
+  // Reject marked callers conservatively, whether the marker is genuine or
+  // forged. Only consumeSubRequestAdmission can authenticate an inner call.
+  if (inbound.headers.has(SUB_REQUEST_MARKER_HEADER)) {
+    return { opts: {}, unattributed: true };
+  }
+  const stamped = readTrustedRateLimitPrincipal(inbound.headers);
+  if (stamped.principalUserId) {
+    return { opts: stamped as EndpointRateLimitOptions, unattributed: false };
+  }
+  const callerIp = getClientIp(inbound);
+  if (callerIp && !isUnattributedSubRequestIdentity(callerIp)) {
+    return { opts: {}, unattributed: false };
+  }
+  return { opts: {}, unattributed: true };
+}
+
+/**
+ * Refusal body for an unattributed sub-request. Carries a distinct `reason`
+ * (`unattributed-sub-request`) so it is greppable in logs and distinguishable
+ * from a genuine 429/503 the caller would have received directly.
+ */
+export interface ServerSubRequestRefusal {
+  status: 429;
+  body: { error: string; reason: 'unattributed-sub-request' };
+}
+
+/**
+ * Charges one server-initiated sub-operation against the CALLER's own budget
+ * BEFORE it is dispatched. This is `chargeCaller` generalised out of the
+ * batch handler so the next fan-out feature inherits it instead of
+ * remembering to add it.
+ *
+ * Takes the `ServerSubRequestCharge` resolved by
+ * `resolveServerSubRequestCharge` as ONE object — callers cannot resolve the
+ * identity and then forget to honour `unattributed`, which the previous
+ * split `(opts, unattributed)` signature allowed by omission.
+ *
+ * Returns `null` when the operation is admitted (the caller must dispatch
+ * it), otherwise a refusal the caller must return WITHOUT dispatching:
+ *   - an unattributed sub-request (no stamped principal AND no usable caller
+ *     IP, or a request that already carries the sub-request marker) is
+ *     refused with 429 `unattributed-sub-request` — fail closed rather than
+ *     keying on the egress IP;
+ *   - an endpoint-policy path charges `checkEndpointRateLimit` (fail-closed
+ *     default preserved), everything else the global `checkRateLimit`,
+ *     mirroring the gateway's two-phase order — a limiter refusal becomes the
+ *     status/body the caller would have received directly.
+ *
+ * Account burst/daily and enterprise-key meters remain enforced by the inner
+ * gateway; this pre-charge covers endpoint/global limits only.
+ */
+export async function chargeServerSubRequestOperation(
+  inbound: Request,
+  pathname: string,
+  charge: ServerSubRequestCharge,
+): Promise<{ status: number; body: unknown } | null> {
+  if (charge.unattributed) {
+    // Fixed stage: `pathname` is attacker-controlled (any documented-RPC
+    // shape passes validation), so it travels in the message — embedding it
+    // in the stage would mint one Sentry dedup entry per distinct path and
+    // defeat the low-cardinality grouping documented above.
+    reportRateLimitDegraded(
+      'chargeServerSubRequestOperation:unattributed-sub-request',
+      new Error(`Server-initiated sub-request for ${pathname} without a stamped principal or caller IP — refused instead of keying on egress IP`),
+    );
+    const refusal: ServerSubRequestRefusal = {
+      status: 429,
+      body: { error: 'Too many requests', reason: 'unattributed-sub-request' },
+    };
+    return refusal;
+  }
+  const refusal = hasEndpointRatePolicy(pathname)
+    ? await checkEndpointRateLimit(inbound, pathname, {}, charge.opts)
+    : await checkRateLimit(inbound, {}, charge.opts);
+  if (!refusal) return null;
+
+  let body: unknown;
+  try {
+    body = await refusal.json();
+  } catch {
+    body = {};
+  }
+  return { status: refusal.status, body };
+}
+
+function getPrincipalRateLimitIdentifier(
+  principalUserId?: string,
+  scope: PrincipalRateLimitScope = 'session',
+): string | null {
+  if (!principalUserId) return null;
+  return scope === 'api_key' ? `apikey-user:${principalUserId}` : `user:${principalUserId}`;
 }
 
 export async function checkRateLimit(request: Request, corsHeaders: Record<string, string>, opts: RateLimitOptions = {}): Promise<Response | null> {
+  const proofDenied = !opts.principalUserId && checkIpScopedEdgeProof(request, corsHeaders);
+  if (proofDenied) return proofDenied;
   const rl = getRatelimit();
   if (!rl) {
     if (opts.failClosed) {
-      logRateLimitDegraded('checkRateLimit:missing-config', new Error('Upstash Redis is not configured'));
+      reportRateLimitDegraded('checkRateLimit:missing-config', new Error('Upstash Redis is not configured'));
       return rateLimitDegradedResponse(corsHeaders);
     }
     return null;
   }
 
-  const ip = getClientIp(request);
+  // Preserve the long-standing raw-IP key for anonymous traffic so an
+  // in-flight 60-second bucket does not reset during rollout. Trusted
+  // principals use a separate namespace.
+  const identifier =
+    getPrincipalRateLimitIdentifier(opts.principalUserId, opts.principalScope) ??
+    getClientRateLimitKey(request);
 
   try {
-    const { success, limit, reset } = await limitWithFallback(rl, ip, `rl:fw:${ip}`, GLOBAL_RATE_LIMIT, GLOBAL_RATE_WINDOW_SECONDS);
+    const { success, limit, reset } = await limitWithFallback(
+      rl,
+      identifier,
+      `rl:fw:${identifier}`,
+      GLOBAL_RATE_LIMIT,
+      GLOBAL_RATE_WINDOW_SECONDS,
+    );
 
     if (!success) {
       return tooManyRequestsResponse(limit, reset, corsHeaders, GLOBAL_RATE_WINDOW_SECONDS);
@@ -177,7 +585,7 @@ export async function checkRateLimit(request: Request, corsHeaders: Record<strin
 
     return null;
   } catch (err) {
-    logRateLimitDegraded('checkRateLimit', err);
+    reportRateLimitDegraded('checkRateLimit', err);
     if (opts.failClosed) return rateLimitDegradedResponse(corsHeaders);
     return null;
   }
@@ -195,18 +603,62 @@ interface EndpointRatePolicy {
 // using checkEndpointRateLimit / hasEndpointRatePolicy below — the export is
 // for tooling, not new runtime callers.
 export const ENDPOINT_RATE_POLICIES: Record<string, EndpointRatePolicy> = {
+  '/api/aviation/v1/track-aircraft': { limit: 30, window: '60 s' },
+  '/api/aviation/v1/list-aircraft-emergencies': { limit: 20, window: '60 s' },
+  '/api/aviation/v1/search-google-flights': { limit: 30, window: '60 s' },
+  '/api/aviation/v1/search-google-dates': { limit: 10, window: '60 s' },
+  '/api/aviation/v1/list-aviation-news': { limit: 30, window: '60 s' },
+  // Public YouTube video lookups call oEmbed on cache misses (channel live
+  // detection is retired) and keep their own fail-closed gateway budget.
+  '/api/aviation/v1/get-youtube-live-stream-info': { limit: 30, window: '60 s' },
+  // Interactive fare searches use one provider request on a cache miss.
+  // 30/min leaves headroom under the provider's 300-600/min shared quota.
+  '/api/aviation/v1/search-flight-prices': { limit: 30, window: '60 s' },
   // LLM article summarization is Pro-gated, but still needs a scoped,
   // fail-closed budget so Redis degradation cannot silently lift the
   // per-endpoint spend control.
+  '/api/news/v1/list-feed-digest': { limit: 30, window: '60 s' },
   '/api/news/v1/summarize-article': { limit: 30, window: '60 s' },
   '/api/news/v1/summarize-article-cache': { limit: 3000, window: '60 s' },
   '/api/intelligence/v1/classify-event': { limit: 600, window: '60 s' },
+  // Full Telegram bodies match the first-party feed's 60/min ceiling. Anonymous
+  // sessions remain IP-scoped; verified paid principals retain user identity.
+  // The endpoint registry fails closed so outages cannot lift this cap.
+  '/api/intelligence/v1/list-telegram-feed': { limit: 60, window: '60 s' },
   // LLM-backed situational deduction (imports callLlmReasoning) can drive
   // provider spend on cache misses, so it must fail closed on Redis outage
   // rather than inherit the global fail-open fallback. Mirror the sibling
   // classify-event budget (same limit/window) — both are AI-backed Intelligence
   // RPCs. (#4676)
   '/api/intelligence/v1/deduct-situation': { limit: 600, window: '60 s' },
+  // Historical intelligence memory (#5694): both semantic routes embed the
+  // caller's free text through the OpenRouter embeddings API on every cache
+  // miss, so they are provider-backed spend, not pure reads. They are also
+  // premium-gated, which means the gateway serves them with no CDN cache — a
+  // The three intel-history reads. All are Pro-gated and reach the function on
+  // every request, but they spend two different budgets, so they are sized
+  // against two different ceilings.
+  //
+  // search + similar-events each embed their input on a paid provider. They
+  // share ONE budget while the registry is keyed per PATH, so a caller
+  // alternating them gets the sum, not the cap — 30/min each holds the
+  // combined worst case at the 60/min per-principal embeddings bill this is
+  // sized for. Still generous for interactive use (a search plus follow-ups),
+  // and far under the LLM routes' 600/min because nothing here runs in a
+  // page-load fan-out.
+  //
+  // timeline embeds nothing, which is why it originally carried no policy at
+  // all. That reasoning was right about money and wrong about the resource
+  // that actually scales with retention: Convex reads whole documents, and
+  // every intelHistory row carries a 512-float embedding the projection
+  // immediately discards. One limit=200 call scoped by both domain and
+  // country scans TIMELINE_MAX_SCAN=800 rows (4x over-fetch for the
+  // post-filter) — roughly 3MB of Convex read budget, which the 600/min
+  // availability-first fallback did not bound. 120/min keeps a timeline read
+  // comfortable while capping that worst case.
+  '/api/intelligence/v1/search-intel-history': { limit: 30, window: '60 s' },
+  '/api/intelligence/v1/get-similar-events': { limit: 30, window: '60 s' },
+  '/api/intelligence/v1/get-intel-timeline': { limit: 120, window: '60 s' },
   // Batch humanitarian-summary fans out to the external HAPI (humdata) provider
   // on cache miss — up to 25 countries per request, 5 concurrent upstream
   // fetches. Batch aircraft-details fans out to the external Wingbits provider —
@@ -215,25 +667,103 @@ export const ENDPOINT_RATE_POLICIES: Record<string, EndpointRatePolicy> = {
   // (sanctions lookup / resilience ranking); conservative because a single
   // request already amplifies into many upstream calls. (#4676)
   '/api/conflict/v1/get-humanitarian-summary-batch': { limit: 30, window: '60 s' },
+  // Single aircraft-details is a caller-controlled Wingbits lookup. Keep it
+  // aligned with the batch sibling so cache misses cannot become an unlimited
+  // paid-provider probe under anonymous or rotating callers.
+  '/api/military/v1/get-aircraft-details': { limit: 30, window: '60 s' },
   '/api/military/v1/get-aircraft-details-batch': { limit: 30, window: '60 s' },
+  // Webcam image resolution proxies Windy on a caller-controlled cache miss.
+  // Keep it at the standard provider-proxy budget instead of the global fallback.
+  '/api/webcam/v1/get-webcam-image': { limit: 30, window: '60 s' },
+  // Live lookups can fan out to position, schedule and photo providers.
+  '/api/military/v1/get-wingbits-live-flight': { limit: 30, window: '60 s' },
+  '/api/imagery/v1/search-imagery': { limit: 30, window: '60 s' },
   // Generic batch fan-out: one request re-dispatches up to 20 gateway GETs, so
   // cap the multiplier at the same 30/min budget as the other batch routes.
   '/api/batch/v1/execute': { limit: 30, window: '60 s' },
   // Legacy /api/sanctions-entity-search rate limit was 30/min per IP. Preserve
   // that budget now that LookupSanctionEntity proxies OpenSanctions live.
   '/api/sanctions/v1/lookup-sanction-entity': { limit: 30, window: '60 s' },
+  // Corporate intelligence (#5695): each cache miss proxies SEC EDGAR and/or
+  // Finnhub on the caller's behalf, and the per-company inputs are effectively
+  // unbounded (any ticker/name/domain), so these cannot inherit the fail-open
+  // global fallback. Same 30/min provider-proxy budget as the sanctions lookup
+  // and batch fan-out routes above.
+  // Country coverage (#7526) fans out per cache miss to two Google News RSS
+  // feeds plus a live military-flights path and an ACLED window whose cache key
+  // moves with the clock, so the miss rate is high. Same shape as the sibling
+  // provider-proxy routes above; it must not inherit the global fail-open
+  // budget on a Redis outage.
+  '/api/intelligence/v1/get-country-coverage': { limit: 30, window: '60 s' },
+  '/api/intelligence/v1/get-company-enrichment': { limit: 30, window: '60 s' },
+  '/api/intelligence/v1/list-company-signals': { limit: 30, window: '60 s' },
+  '/api/intelligence/v1/search-sec-filings': { limit: 30, window: '60 s' },
+  // Public market/economic provider proxies (#6236): caller-controlled symbols,
+  // indicators, and year ranges create unbounded cache-key cardinality; the
+  // country-index and price-history routes are bounded to their tracked
+  // symbol sets but still proxy Yahoo Finance on a cache miss. None may inherit the global
+  // fail-open budget. The dashboard can legitimately fan out across 50 Pro
+  // watchlist symbols, so those three per-symbol routes admit one full load
+  // plus headroom. analyze-stock remains separately constrained by the
+  // fail-closed per-user daily direct-LLM quota. backtest-stock is technical
+  // only, so its cache-miss Yahoo fetches use a separate per-user daily
+  // provider-work budget (`provider:backtest-yahoo:*`) instead of
+  // `llm:direct-usage`.
+  '/api/market/v1/analyze-stock': { limit: 60, window: '60 s' },
+  '/api/market/v1/backtest-stock': { limit: 60, window: '60 s' },
+  '/api/market/v1/get-insider-transactions': { limit: 60, window: '60 s' },
+  '/api/market/v1/get-country-stock-index': { limit: 30, window: '60 s' },
+  '/api/market/v1/get-price-history': { limit: 30, window: '60 s' },
+  // Stablecoins are seed-backed for the DEFAULT request, but naming coins the
+  // snapshot does not carry reaches CoinGecko, and the caller picks the IDs —
+  // unbounded cardinality, so the per-ID-set cache cannot bound spend alone.
+  //
+  // Sized against the dashboard, not the provider: this path is in
+  // PRO_FRESH_CACHE_RPC_PATHS, so it carries a panel that refreshes on a timer
+  // for every open dashboard, and the limit is per-IP for anonymous traffic —
+  // one office NAT is one bucket. 60/min matches the sibling per-symbol market
+  // routes, which are likewise sized to admit a full legitimate load plus
+  // headroom rather than to price the upstream call.
+  //
+  // Note this makes the route fail closed on a Redis outage, which the four
+  // other panels in PRO_FRESH_CACHE_RPC_PATHS are not. That is survivable
+  // because the handler cannot serve data during that outage either (the seed
+  // read is the same Redis) — and it deliberately performs no provider work
+  // when that read fails, so the fail-closed 503 is a second line, not the
+  // only thing standing between a Redis outage and a CoinGecko fan-out. (#6308)
+  '/api/market/v1/list-stablecoin-markets': { limit: 60, window: '60 s' },
+  '/api/market/v1/list-crypto-quotes': { limit: 60, window: '60 s' },
+  '/api/economic/v1/list-world-bank-indicators': { limit: 30, window: '60 s' },
+  // #6305: list-market-quotes stopped being a pure seed read. The fixed seed
+  // still answers the default universe with no upstream call, but a symbol the
+  // seed does not carry (a custom watchlist ticker) now resolves through the
+  // bounded, Redis-cached Finnhub gap fetch — so caller-controlled symbols can
+  // reach a paid provider and this route can no longer inherit the fail-open
+  // global budget. Same 60/min as the sibling per-symbol market routes: the
+  // dashboard issues one multi-symbol call per refresh and the response is
+  // CDN-cached (medium tier), so 60/min is far above any legitimate per-IP
+  // load. Provider spend is separately capped at MARKET_QUOTES_UPSTREAM_LIMIT
+  // lookups per request.
+  '/api/market/v1/list-market-quotes': { limit: 60, window: '60 s' },
+  // Company Monitoring is contract-only and remains unrouted until #6003
+  // passes, but generated mutation routes still need a fail-closed policy
+  // before any later lane can wire them. Import can carry 100 rows, so keep its
+  // request budget lower than the single-company mutations.
+  '/api/company-monitoring/v1/create-monitored-company': { limit: 30, window: '60 s' },
+  '/api/company-monitoring/v1/update-monitored-company': { limit: 30, window: '60 s' },
+  '/api/company-monitoring/v1/set-monitored-company-state': { limit: 30, window: '60 s' },
+  '/api/company-monitoring/v1/import-monitored-company-batch': { limit: 10, window: '60 s' },
   // Lead capture: preserve the 3/hr and 5/hr budgets from legacy api/contact.js
   // and api/register-interest.js. Lower limits than normal IP rate limit since
   // these hit Convex + Resend per request.
   '/api/leads/v1/submit-contact': { limit: 3, window: '1 h' },
   '/api/leads/v1/register-interest': { limit: 5, window: '1 h' },
   // Scenario engine: legacy /api/scenario/v1/run capped at 10 jobs/min/IP via
-  // inline Upstash INCR. Gateway now enforces the same budget with per-IP
-  // keying in checkEndpointRateLimit.
+  // inline Upstash INCR. Gateway preserves the same budget while using a
+  // trusted paid-user principal when available, otherwise the client IP.
   '/api/scenario/v1/run-scenario': { limit: 10, window: '60 s' },
   // #3734: trigger-simulation PRO endpoint, same shape as run-scenario.
-  // Per-IP keying matches run-scenario's production behavior. Pro-identity
-  // primitive deferred (checkScopedRateLimit available if needed).
+  // It follows the same trusted-principal-or-IP attribution contract.
   '/api/forecast/v1/trigger-simulation': { limit: 10, window: '60 s' },
   // Live tanker map (Energy Atlas): one user with 6 chokepoints × 1 call/min
   // = 6 req/min/IP base load. 60/min headroom covers tab refreshes + zoom
@@ -242,6 +772,9 @@ export const ENDPOINT_RATE_POLICIES: Record<string, EndpointRatePolicy> = {
   // Country Resilience ranking can synchronously warm the full country table
   // on cold/stale cache paths; keep it well below the global 600/min fallback.
   '/api/resilience/v1/get-resilience-ranking': { limit: 30, window: '60 s' },
+  // Indicator drill-down fans out across the full scorer source graph on a
+  // cold per-country cache miss. Match the MCP minute ceiling and fail closed.
+  '/api/resilience/v1/get-resilience-indicators': { limit: 60, window: '60 s' },
   // #3805 / PR #3821: MCP proxy is a top-level Vercel Edge Function in
   // `api/mcp-proxy.ts` (registered as `external-protocol` in
   // api/api-route-exceptions.json — JSON-RPC shape dictated by the MCP spec),
@@ -272,7 +805,80 @@ export const ENDPOINT_RATE_POLICIES: Record<string, EndpointRatePolicy> = {
   // response shape dictated by the NLWeb spec, served at /ask). Same anonymous
   // cheap-catalog posture as /api/a2a, same in-handler enforcement.
   '/api/ask': { limit: 60, window: '60 s' },
+  // Agent-skills import proxy (`api/skills/fetch-agentskills.ts`, registered
+  // as `migration-pending` in api/api-route-exceptions.json). Fetches one
+  // skill definition from a fixed three-host allowlist on agentskills.io.
+  // Anonymous by design (the settings importer calls it same-origin before
+  // the user has done anything privileged), so the per-IP minute limit is the
+  // whole abuse defence; 30/min is the provider-proxy budget above, and the
+  // handler also caches the fetched payload so repeat imports never leave our
+  // edge. Enforced in-handler via `checkScopedRateLimit`, same pattern as
+  // /api/docs-mcp. (#6234)
+  '/api/skills/fetch-agentskills': { limit: 30, window: '60 s' },
+  // Legacy `api/*.js` provider proxies (`api/youtube/live.js`,
+  // `api/reverse-geocode.js`), both registered in
+  // api/api-route-exceptions.json. Neither flows through the gateway, and
+  // AGENTS.md forbids `api/*.js` from importing `../server/`, so unlike
+  // /api/mcp-proxy they cannot read this registry at runtime: each handler
+  // carries the same numbers as literal constants and enforces them with
+  // `checkRateLimit` from `api/_rate-limit.js`. The registry stays the single
+  // source of truth for the audit script and the docs, and
+  // tests/rate-limit.test.mts fails if the two copies drift. (#6234)
+  //
+  // youtube/live: a video lookup calls youtube.com oEmbed from our egress IPs
+  // (channel live detection answers 410 without upstream work), so it keeps
+  // the same 30/min provider-proxy budget as the batch fan-out routes above.
+  '/api/youtube/live': { limit: 30, window: '60 s' },
+  // reverse-geocode: already Upstash-cached on a 0.001-degree grid and memoized
+  // per cell in the browser (src/utils/reverse-geocode.ts), so 60/min is a
+  // per-caller floor against scripted coordinate sweeps rather than a throttle
+  // on real map use. Nominatim's usage policy is the strictest in our stack and
+  // is enforced by egress-IP ban, and there are two callers sharing one egress:
+  // the legacy `api/reverse-geocode.js` edge function (which carries these
+  // same numbers as literal constants and enforces them in-handler via
+  // checkRateLimit — api/*.js cannot import ../server/) and the gateway RPC
+  // below. Both use the shared `geocode:` cache namespace (604800 s TTL), so
+  // a hit on either serves the other. Cache misses also pass through one
+  // fail-closed provider-wide bucket, `rl:scope:reverse-geocode:global`, capped
+  // at 1 request/second across both handlers. (#6234, #6432, #7279)
+  '/api/reverse-geocode': { limit: 60, window: '60 s' },
+  // Gateway reverse-geocode RPC (#6432): the second Nominatim caller. Same
+  // provider, same shared 0.001-degree grid cache, same egress IPs — must carry
+  // the same 60/min budget as the legacy edge route, and it now does. Both are
+  // per-IP budgets. After a shared-cache miss, each handler also applies the
+  // same fail-closed `reverse-geocode:global` scoped bucket at 1 request/second
+  // before Nominatim. Redis outage therefore 503s instead of inheriting a
+  // fail-open path that could expose the provider to unbounded aggregate load.
+  '/api/infrastructure/v1/reverse-geocode': { limit: 60, window: '60 s' },
+  // Partner embed entitlement (#6599): keyed panels look up wm_ keys in Convex.
+  // Cap per-IP so a stolen snippet cannot amplify validation traffic.
+  '/api/embed/entitlement': { limit: 60, window: '60 s' },
+  // Grant exchange: validates a wme_ key in Convex, so it amplifies the same
+  // way the entitlement lookup does. A frame mints once per 30-minute grant,
+  // which leaves this budget almost entirely as headroom for shared egress IPs.
+  '/api/embed/session': { limit: 60, window: '60 s' },
+  // Partner map frame. Public traffic uses the client IP; a verified grant uses
+  // its account owner so every display for one partner shares the same budget.
+  // The CDN absorbs most canonical public requests before this policy runs.
+  '/api/embed/map-frame': { limit: 120, window: '60 s' },
+  // Widget agent is a top-level edge proxy (api/widget-agent.ts) that spends a
+  // frontier-model call on every POST. It does not flow through the gateway, so
+  // the handler enforces this budget in-process, keyed on the validated
+  // user/key identity rather than the edge egress IP. 20/hour matches the
+  // relay's pro bucket; basic callers are still capped tighter on the relay.
+  '/api/widget-agent': { limit: 20, window: '1 h' },
+  // Checkout session creation (api/create-checkout.ts) relays to Dodo. Same
+  // per-user 5/min fail-closed budget as the customer portal, enforced
+  // in-handler after JWT validation. A Redis outage must not lift it.
+  '/api/create-checkout': { limit: 5, window: '60 s' },
 };
+
+// Second, per-client-IP checkout budget on top of the per-user one above. Dodo
+// rate-limits our shared API key (#6027), so one client cycling many free
+// accounts could otherwise spend it and block real buyers. Higher than the
+// per-user cap so a single buyer retrying always hits that first; a shared
+// office NAT still gets 10 sessions per 10 minutes.
+export const CHECKOUT_PER_IP_RATE_POLICY = { limit: 10, window: '10 m' } as const;
 
 interface RateLimitPolicyDecision {
   reason: string;
@@ -282,20 +888,110 @@ interface RateLimitPolicyDecision {
 // defence. scripts/enforce-rate-limit-policies.mjs fails if any route listed
 // here can drift back to the gateway's availability-first global fallback.
 export const FAIL_CLOSED_ENDPOINT_RATE_POLICY_REQUIRED: Record<string, RateLimitPolicyDecision> = {
+  '/api/news/v1/list-feed-digest': { reason: 'Cold digest builds fan out to RSS providers and require a fail-closed caller budget.' },
+  '/api/aviation/v1/track-aircraft': {
+    reason: 'Distinct aircraft viewports call Wingbits on cache misses and can fall back to authenticated OpenSky quota.',
+  },
+  '/api/aviation/v1/list-aircraft-emergencies': {
+    reason: 'Public emergency aircraft reads fan out to three provider queries on shared cache misses.',
+  },
+  '/api/aviation/v1/search-google-flights': { reason: 'Public flight searches perform a live Google shopping request on each cache miss.' },
+  '/api/aviation/v1/search-google-dates': { reason: 'Public date searches can trigger up to six Google calendar requests per cache miss.' },
+  '/api/aviation/v1/list-aviation-news': {
+    reason: 'Public aviation news can fan out to nine RSS feeds when the shared snapshot is unavailable.',
+  },
+  '/api/aviation/v1/get-youtube-live-stream-info': {
+    reason: 'Public YouTube video lookups call oEmbed on cache misses; channel live detection is retired.',
+  },
+  '/api/aviation/v1/search-flight-prices': {
+    reason: 'Caller-selected fare searches consume Travelpayouts request quota on cache misses.',
+  },
   '/api/news/v1/summarize-article': {
     reason: 'LLM-backed summarization can drive provider spend on cache misses.',
   },
   '/api/intelligence/v1/classify-event': {
     reason: 'AI classification performs expensive provider-backed analysis.',
   },
+  '/api/intelligence/v1/list-telegram-feed': {
+    reason: 'Full Telegram message extraction must retain the endpoint cap during Redis outages.',
+  },
   '/api/intelligence/v1/deduct-situation': {
     reason: 'LLM-backed situational deduction can drive provider spend on cache misses.',
+  },
+  '/api/intelligence/v1/search-intel-history': {
+    reason: 'Semantic history search embeds the caller\'s query through a paid embeddings provider on every request.',
+  },
+  '/api/intelligence/v1/get-similar-events': {
+    reason: 'Precedent lookup embeds the caller\'s situation text through a paid embeddings provider on every request.',
   },
   '/api/conflict/v1/get-humanitarian-summary-batch': {
     reason: 'Batch summary fans out to the external HAPI (humdata) provider on cache miss.',
   },
+  '/api/intelligence/v1/get-country-coverage': {
+    reason: 'Country coverage fans out to two Google News feeds and the live military-flights path on cache miss.',
+  },
+  '/api/intelligence/v1/get-company-enrichment': {
+    reason: 'Per-company composite fans out to SEC EDGAR and Finnhub on cache miss.',
+  },
+  '/api/intelligence/v1/list-company-signals': {
+    reason: 'Per-company signal discovery fans out to SEC EDGAR and Finnhub on cache miss.',
+  },
+  '/api/intelligence/v1/search-sec-filings': {
+    reason: 'Full-text filing search proxies SEC EDGAR on cache miss with unbounded query cardinality.',
+  },
+  '/api/market/v1/analyze-stock': {
+    reason: 'Per-symbol analysis can fan out to Finnhub plus the Exa, Brave, and SerpAPI search ladder on cache miss.',
+  },
+  '/api/market/v1/backtest-stock': {
+    reason: 'Per-symbol backtests proxy scraped Yahoo Finance data with unbounded symbol cardinality. Cache misses also consume a per-user daily provider-work budget separate from dashboard AI.',
+  },
+  '/api/market/v1/get-insider-transactions': {
+    reason: 'Per-symbol insider lookups proxy the paid Finnhub provider on cache miss.',
+  },
+  '/api/market/v1/get-country-stock-index': {
+    reason: 'Per-country stock-index lookups proxy Yahoo Finance on cache miss.',
+  },
+  '/api/market/v1/get-price-history': {
+    reason: 'Per-symbol daily-close history proxies Yahoo Finance on cache miss, up to four symbols per request.',
+  },
+  '/api/market/v1/list-crypto-quotes': {
+    reason: 'Caller-named coin IDs absent from the seed snapshot fan out to CoinGecko on cache miss.',
+  },
+  '/api/market/v1/list-stablecoin-markets': {
+    reason: 'Caller-named coin IDs absent from the seed snapshot fan out to CoinGecko on cache miss with unbounded ID cardinality.',
+  },
+  '/api/market/v1/list-market-quotes': {
+    reason: 'Custom watchlist symbols the fixed seed does not carry resolve through the paid Finnhub provider on cache miss (#6305).',
+  },
+  '/api/economic/v1/list-world-bank-indicators': {
+    reason: 'Caller-controlled indicator, country, and year inputs proxy World Bank on cache miss.',
+  },
+  '/api/company-monitoring/v1/create-monitored-company': {
+    reason: 'Account-scoped portfolio mutation must not become fail-open when its dark contract is wired.',
+  },
+  '/api/company-monitoring/v1/update-monitored-company': {
+    reason: 'Account-scoped portfolio mutation must not become fail-open when its dark contract is wired.',
+  },
+  '/api/company-monitoring/v1/set-monitored-company-state': {
+    reason: 'Account-scoped lifecycle mutation must not become fail-open when its dark contract is wired.',
+  },
+  '/api/company-monitoring/v1/import-monitored-company-batch': {
+    reason: 'A bounded import can write up to 100 portfolio rows and must fail closed when its dark contract is wired.',
+  },
   '/api/military/v1/get-aircraft-details-batch': {
     reason: 'Batch enrichment fans out to the external Wingbits provider on cache miss.',
+  },
+  '/api/military/v1/get-aircraft-details': {
+    reason: 'Single aircraft enrichment proxies the external Wingbits provider on cache miss.',
+  },
+  '/api/webcam/v1/get-webcam-image': {
+    reason: 'Webcam image resolution proxies the Windy provider on cache miss.',
+  },
+  '/api/military/v1/get-wingbits-live-flight': {
+    reason: 'Live aircraft lookups fan out to external providers on short-lived cache misses.',
+  },
+  '/api/imagery/v1/search-imagery': {
+    reason: 'Imagery searches proxy the external STAC catalog on cache misses.',
   },
   '/api/batch/v1/execute': {
     reason: 'Generic batch fan-out multiplies one request into up to 20 gateway sub-requests.',
@@ -321,6 +1017,27 @@ export const FAIL_CLOSED_ENDPOINT_RATE_POLICY_REQUIRED: Record<string, RateLimit
   '/api/resilience/v1/get-resilience-ranking': {
     reason: 'Cold/stale cache paths can synchronously warm the full country table.',
   },
+  '/api/resilience/v1/get-resilience-indicators': {
+    reason: 'Cold per-country diagnostic builds fan out across the full resilience source graph.',
+  },
+  '/api/infrastructure/v1/reverse-geocode': {
+    reason: 'Proxies Nominatim (egress-IP ban enforcement), same provider and egress IPs as the legacy edge route. Must fail closed on a Redis outage rather than inherit the fail-open 600/min fallback.',
+  },
+  '/api/embed/entitlement': {
+    reason: 'Keyed-panel entitlement lookups amplify into Convex user-key validation; fail closed so a Redis outage cannot lift the per-IP budget.',
+  },
+  '/api/embed/session': {
+    reason: 'Grant minting amplifies into Convex embed-key validation and hands back a bearer credential; fail closed so a Redis outage cannot lift the per-IP budget on a credential-issuing path.',
+  },
+  '/api/embed/map-frame': {
+    reason: 'The keyless map frame is fully anonymous and fans out across four seed reads. Fail closed rather than inherit the availability-first global fallback: those reads come from the same Redis that would be degraded, so a fail-open origin would serve empty layers at unbounded volume while the CDN copy keeps real data on screen for the stale-while-revalidate window.',
+  },
+  '/api/widget-agent': {
+    reason: 'Each POST proxies a frontier-model widget generation. The edge must keep a per-identity cap when Redis is down instead of spending uncapped.',
+  },
+  '/api/create-checkout': {
+    reason: 'Checkout session creation relays to the paid Dodo provider. A Redis outage must not lift the per-user cap.',
+  },
 };
 
 // Explicit examples of read-only gateway routes where the global per-IP
@@ -330,6 +1047,9 @@ export const FAIL_CLOSED_ENDPOINT_RATE_POLICY_REQUIRED: Record<string, RateLimit
 export const GLOBAL_RATE_LIMIT_FALLBACK_READ_ROUTES: Record<string, RateLimitPolicyDecision> = {
   '/api/aviation/v1/list-airport-delays': {
     reason: 'Read-only cache-backed airport delay listing; availability-first fallback is acceptable.',
+  },
+  '/api/intelligence/v1/list-material-events': {
+    reason: 'Read-only Redis read of the seeded 8-K stream; no upstream fetch on miss, so availability-first fallback carries no spend risk.',
   },
 };
 
@@ -349,7 +1069,7 @@ export const RATE_LIMIT_MUTATION_FALLBACK_EXEMPT: Record<string, RateLimitPolicy
   },
   '/api/infrastructure/v1/record-baseline-snapshot': {
     reason:
-      'Redis-only write (setCachedJson) with no external provider or LLM call; if Redis is degraded the write itself cannot land, so the fail-open fallback carries no spend/abuse risk.',
+      'Deprecated compatibility route that rejects client-supplied baseline writes before Redis; the fail-open fallback cannot admit a mutation.',
   },
   '/api/v2/shipping/webhooks': {
     reason:
@@ -371,10 +1091,16 @@ function getEndpointRatelimit(pathname: string): Ratelimit | null {
   if (!url || !token) return null;
 
   const rl = new Ratelimit({
-    redis: new Redis({ url, token, ...REDIS_TEST_RETRY_OPTS }),
+    redis: new Redis({
+      url,
+      token,
+      ...REDIS_TEST_RETRY_OPTS,
+      signal: () => AbortSignal.timeout(ENDPOINT_REDIS_ABORT_TIMEOUT_MS),
+    }),
     limiter: Ratelimit.slidingWindow(policy.limit, policy.window),
     prefix: 'rl:ep',
     analytics: false,
+    timeout: ENDPOINT_RATE_LIMIT_TIMEOUT_MS,
   });
   endpointLimiters.set(pathname, rl);
   return rl;
@@ -384,22 +1110,68 @@ export function hasEndpointRatePolicy(pathname: string): boolean {
   return pathname in ENDPOINT_RATE_POLICIES;
 }
 
+let nativeGoogleDatesAdmissions: number[] = [];
+let nativeGoogleFlightsAdmissions: number[] = [];
+let nativeAviationNewsAdmissions: number[] = [];
+
 export async function checkEndpointRateLimit(request: Request, pathname: string, corsHeaders: Record<string, string>, opts: EndpointRateLimitOptions = {}): Promise<Response | null> {
   if (!hasEndpointRatePolicy(pathname)) return null;
+  // Native transport authentication happens before this gateway. Use one
+  // bounded local budget with the in-process cache; cloud and Docker use Redis.
+  if ((pathname === '/api/aviation/v1/search-google-dates'
+    || pathname === '/api/aviation/v1/search-google-flights')
+    && process.env.LOCAL_API_MODE === 'tauri-sidecar') {
+    const policy = ENDPOINT_RATE_POLICIES[pathname]!;
+    const windowSeconds = durationToSeconds(policy.window);
+    const now = Date.now();
+    const admissions = pathname === '/api/aviation/v1/search-google-dates'
+      ? nativeGoogleDatesAdmissions
+      : nativeGoogleFlightsAdmissions;
+    const activeAdmissions = admissions.filter(time => time > now - windowSeconds * 1000);
+    if (activeAdmissions.length >= policy.limit) {
+      return tooManyRequestsResponse(policy.limit, activeAdmissions[0]! + windowSeconds * 1000, corsHeaders, windowSeconds);
+    }
+    activeAdmissions.push(now);
+    if (pathname === '/api/aviation/v1/search-google-dates') nativeGoogleDatesAdmissions = activeAdmissions;
+    else nativeGoogleFlightsAdmissions = activeAdmissions;
+    return null;
+  }
+  if (pathname === '/api/aviation/v1/list-aviation-news'
+    && process.env.LOCAL_API_MODE === 'tauri-sidecar') {
+    const policy = ENDPOINT_RATE_POLICIES[pathname]!;
+    const windowSeconds = durationToSeconds(policy.window);
+    const now = Date.now();
+    nativeAviationNewsAdmissions = nativeAviationNewsAdmissions.filter(time => time > now - windowSeconds * 1000);
+    if (nativeAviationNewsAdmissions.length >= policy.limit) {
+      return tooManyRequestsResponse(policy.limit, nativeAviationNewsAdmissions[0]! + windowSeconds * 1000, corsHeaders, windowSeconds);
+    }
+    nativeAviationNewsAdmissions.push(now);
+    return null;
+  }
+
+  // IP-scoped endpoint budgets depend on a real client IP. A cf-connecting-ip
+  // without x-wm-edge-proof is either a direct-origin spoof or a Transform Rule
+  // miss — reject rather than share a Cloudflare PoP bucket (#8402). Principal-
+  // scoped budgets do not need the edge proof. Report the deploy drift once per
+  // isolate; logging every rejection would amplify under spoofed headers.
+  // Run before the Redis availability gate so a missing Upstash config cannot
+  // re-admit unproven CF client IPs under fail-open callers.
+  const proofDenied = !opts.principalUserId && checkIpScopedEdgeProof(request, corsHeaders);
+  if (proofDenied) return proofDenied;
 
   const rl = getEndpointRatelimit(pathname);
   if (!rl) {
     const failClosed = opts.failClosed ?? true;
     if (failClosed) {
-      logRateLimitDegraded(`checkEndpointRateLimit:${pathname}:missing-config`, new Error('Upstash Redis is not configured'));
+      reportRateLimitDegraded(`checkEndpointRateLimit:${pathname}:missing-config`, new Error('Upstash Redis is not configured'));
       return rateLimitDegradedResponse(corsHeaders);
     }
     return null;
   }
 
-  const identifier = opts.principalUserId
-    ? `user:${opts.principalUserId}`
-    : `ip:${getClientIp(request)}`;
+  const identifier =
+    getPrincipalRateLimitIdentifier(opts.principalUserId, opts.principalScope) ??
+    `ip:${getClientRateLimitKey(request)}`;
   const policy = ENDPOINT_RATE_POLICIES[pathname];
   // hasEndpointRatePolicy(pathname) above already guarantees this — the
   // extra check exists only to satisfy noUncheckedIndexedAccess, since TS
@@ -407,7 +1179,14 @@ export async function checkEndpointRateLimit(request: Request, pathname: string,
   if (!policy) return null;
 
   try {
-    const { success, limit, reset } = await limitWithFallback(rl, `${pathname}:${identifier}`, `rl:ep:fw:${pathname}:${identifier}`, policy.limit, durationToSeconds(policy.window));
+    const result = await limitWithFallback(rl, `${pathname}:${identifier}`, `rl:ep:fw:${pathname}:${identifier}`, policy.limit, durationToSeconds(policy.window));
+    // @upstash/ratelimit v2's timeout is intentionally availability-first:
+    // it resolves { success: true, reason: 'timeout' }. Explicit endpoint
+    // policies are the abuse defence, so that result is degraded, not an allow.
+    if (result.reason === 'timeout') {
+      throw new Error('Upstash endpoint rate-limit decision timed out');
+    }
+    const { success, limit, reset } = result;
 
     if (!success) {
       return tooManyRequestsResponse(limit, reset, corsHeaders, durationToSeconds(policy.window));
@@ -415,7 +1194,7 @@ export async function checkEndpointRateLimit(request: Request, pathname: string,
 
     return null;
   } catch (err) {
-    logRateLimitDegraded(`checkEndpointRateLimit:${pathname}`, err);
+    reportRateLimitDegraded(`checkEndpointRateLimit:${pathname}`, err);
     // Per-endpoint policies exist precisely because the limit IS the abuse
     // defence — an LLM endpoint or a 3/hr lead-capture endpoint is the
     // worst place to silently fall through during a Redis outage. Default
@@ -484,6 +1263,18 @@ export async function checkScopedRateLimit(scope: string, limit: number, window:
   }
   try {
     const result = await limitWithFallback(rl, `${scope}:${identifier}`, `rl:scope:fw:${scope}:${identifier}`, limit, durationToSeconds(window));
+    // @upstash/ratelimit v2 races the Redis call against its own internal
+    // timeout and RESOLVES `{ success: true, reason: 'timeout' }` instead of
+    // rejecting, so this outcome never reaches the catch below. Left unhandled
+    // it is indistinguishable from a genuine allow — no log, no Sentry,
+    // `degraded: false` — and the limit silently disappears under exactly the
+    // slow-Redis conditions the limit exists for. Report it as degraded so
+    // callers gating on `degraded` can escalate and the bypass window is
+    // visible in logs. Mirrors checkEndpointRateLimit's handling above.
+    if (result.reason === 'timeout') {
+      reportRateLimitDegraded(`checkScopedRateLimit:${scope}`, new Error('Upstash scoped rate-limit decision timed out'));
+      return { allowed: true, limit, reset: 0, degraded: true };
+    }
     return {
       allowed: result.success,
       limit: result.limit,
@@ -491,9 +1282,26 @@ export async function checkScopedRateLimit(scope: string, limit: number, window:
       degraded: false,
     };
   } catch (err) {
-    logRateLimitDegraded(`checkScopedRateLimit:${scope}`, err);
+    reportRateLimitDegraded(`checkScopedRateLimit:${scope}`, err);
     return { allowed: true, limit, reset: 0, degraded: true };
   }
+}
+
+/**
+ * Builds the standard 429 for an availability-first in-handler `checkScopedRateLimit`
+ * caller (a top-level edge function that enforces its own budget, e.g.
+ * api/skills/fetch-agentskills.ts). Hand-rolling the response drops the IETF
+ * RateLimit-* fields that api/_cors.js exposes cross-origin specifically so
+ * agents can self-throttle, which is how the same 429 condition ends up with
+ * two different header shapes across sibling routes. Takes the Duration rather
+ * than seconds so callers do not have to reach for durationToSeconds. (#6412 review)
+ */
+export function scopedTooManyRequestsResponse(
+  result: ScopedRateLimitResult,
+  window: Duration,
+  corsHeaders: Record<string, string>,
+): Response {
+  return tooManyRequestsResponse(result.limit, result.reset, corsHeaders, durationToSeconds(window));
 }
 
 /**
@@ -509,7 +1317,9 @@ export async function checkFailClosedScopedIpRateLimit(
   window: Duration,
   corsHeaders: Record<string, string>,
 ): Promise<Response | null> {
-  const result = await checkScopedRateLimit(scope, limit, window, getClientIp(request));
+  const proofDenied = checkIpScopedEdgeProof(request, corsHeaders);
+  if (proofDenied) return proofDenied;
+  const result = await checkScopedRateLimit(scope, limit, window, getClientRateLimitKey(request));
   if (result.degraded) return rateLimitDegradedResponse(corsHeaders);
   if (!result.allowed) {
     return tooManyRequestsResponse(result.limit, result.reset, corsHeaders, durationToSeconds(window));
@@ -518,9 +1328,13 @@ export async function checkFailClosedScopedIpRateLimit(
 }
 
 export function __resetRateLimitForTest(): void {
+  nativeGoogleDatesAdmissions = [];
+  nativeGoogleFlightsAdmissions = [];
+  nativeAviationNewsAdmissions = [];
   ratelimit = null;
   endpointLimiters.clear();
   scopedLimiters.clear();
   scopedMissingConfigStages.clear();
+  lastRateLimitSentryCaptureAt.clear();
   resetRateLimitFallbackForTest();
 }

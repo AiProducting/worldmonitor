@@ -9,7 +9,7 @@ import type {
 } from '../../../../src/generated/server/worldmonitor/intelligence/v1/service_server';
 
 import iso3ToIso2Json from '../../../../shared/iso3-to-iso2.json';
-import { getCachedJson, setCachedJson, cachedFetchJsonWithMeta } from '../../../_shared/redis';
+import { getCachedJson, readCachedJson, setCachedJson, cachedFetchJsonWithMeta } from '../../../_shared/redis';
 import { CLIMATE_ANOMALIES_KEY } from '../../../_shared/cache-keys';
 import { TIER1_COUNTRIES } from './_shared';
 import { fetchAcledCached } from '../../../_shared/acled';
@@ -28,6 +28,7 @@ import {
   DEFAULT_CII_BASELINE_RISK,
   DEFAULT_CII_EVENT_MULTIPLIER,
 } from '../../../../shared/cii-weights';
+import { CII_CLIMATE_ZONE_COUNTRIES } from '../../../../shared/cii-climate-zones';
 
 // ========================================================================
 // Country risk baselines and multipliers
@@ -41,6 +42,8 @@ import {
 //   1. Bump CII_FORMULA_VERSION in ./_risk-config.ts if server/API scores shift.
 //   2. Update docs/methodology/cii-risk-scores.mdx in the SAME commit.
 //   3. Mention the change in CHANGELOG.md (public-facing section).
+// Climate-zone attribution has the same protocol when it changes server/API
+// scores; its canonical map documents that ownership in shared/cii-climate-zones.ts.
 // ========================================================================
 
 // Exported so tests and any internal diagnostics can assert the published
@@ -109,22 +112,13 @@ export const COUNTRY_BBOX: Record<string, { minLat: number; maxLat: number; minL
   MX: { minLat: 14.5, maxLat: 32.7, minLon: -118.4, maxLon: -86.7 },
   BR: { minLat: -33.7, maxLat: 5.3, minLon: -73.9, maxLon: -34.8 },
   AE: { minLat: 22.6, maxLat: 26.1, minLon: 51.6, maxLon: 56.4 },
-};
-
-export const ZONE_COUNTRY_MAP: Record<string, string[]> = {
-  'North America': ['US'], 'Europe': ['DE', 'FR', 'GB', 'PL', 'TR', 'UA'],
-  'East Asia': ['CN', 'TW', 'KP', 'KR', 'JP'], 'South Asia': ['IN', 'PK', 'MM', 'AF'],
-  'Middle East': ['IR', 'IL', 'SA', 'SY', 'YE', 'AE', 'IQ', 'LB', 'QA'], 'Russia': ['RU'],
-  'Latin America': ['VE', 'CU', 'MX', 'BR'], 'North Africa': ['EG'],
-  Ukraine: ['UA'],
-  California: ['US'],
-  Amazon: ['BR'],
-  'Taiwan Strait': ['TW', 'CN'],
-  Myanmar: ['MM'],
-  Caribbean: ['CU', 'MX'],
-  Mediterranean: ['TR', 'IL', 'SY', 'LB', 'EG'],
-  Arctic: ['RU'],
-  'Tibetan Plateau': ['CN', 'IN'],
+  KR: { minLat: 33.1, maxLat: 38.6, minLon: 125.1, maxLon: 131.9 },
+  IQ: { minLat: 29.1, maxLat: 37.4, minLon: 38.8, maxLon: 48.6 },
+  AF: { minLat: 29.4, maxLat: 38.5, minLon: 60.5, maxLon: 75.0 },
+  LB: { minLat: 33.1, maxLat: 34.7, minLon: 35.1, maxLon: 36.6 },
+  EG: { minLat: 22.0, maxLat: 31.7, minLon: 24.7, maxLon: 36.9 },
+  JP: { minLat: 24.4, maxLat: 45.5, minLon: 122.9, maxLon: 153.0 },
+  QA: { minLat: 24.5, maxLat: 26.2, minLon: 50.7, maxLon: 51.7 },
 };
 
 const ADVISORY_LEVELS_FALLBACK: Record<string, 'do-not-travel' | 'reconsider' | 'caution'> = {
@@ -132,7 +126,7 @@ const ADVISORY_LEVELS_FALLBACK: Record<string, 'do-not-travel' | 'reconsider' | 
   // must go through a formula-version/docs changelog batch.
   UA: 'do-not-travel', SY: 'do-not-travel', YE: 'do-not-travel', MM: 'do-not-travel',
   IL: 'reconsider', IR: 'reconsider', PK: 'reconsider', VE: 'reconsider', CU: 'reconsider', MX: 'reconsider',
-  RU: 'caution', TR: 'caution',
+  RU: 'caution', TR: 'caution', IQ: 'reconsider', AF: 'do-not-travel', LB: 'reconsider',
 };
 
 type AdvisoryLevel = 'do-not-travel' | 'reconsider' | 'caution';
@@ -331,7 +325,7 @@ function getClimateAnomalyCoordinateCountry(anomaly: any): string | null {
 
 export function climateCountriesForAnomaly(anomaly: any): string[] {
   const zone = anomaly?.zone || anomaly?.region || '';
-  const countries = new Set<string>(ZONE_COUNTRY_MAP[zone] || []);
+  const countries = new Set<string>(CII_CLIMATE_ZONE_COUNTRIES[zone] || []);
   const coordinateCountry = getClimateAnomalyCoordinateCountry(anomaly);
   if (coordinateCountry) countries.add(coordinateCountry);
   return [...countries].filter((code) => code in TIER1_COUNTRIES);
@@ -410,7 +404,10 @@ export function deriveCiiTrendDelta(
     priorAgeMs < CII_TREND_PRIOR_MIN_AGE_MS ||
     priorAgeMs > CII_TREND_PRIOR_MAX_AGE_MS
   ) {
-    return { dynamicScore: 0, trend: 'TREND_DIRECTION_STABLE' as TrendDirection };
+    // No usable prior reading means the movement is unknown, not zero. STABLE
+    // is reserved for a real comparison inside the deadband; readers render
+    // UNSPECIFIED as "no earlier reading" instead of "unchanged".
+    return { dynamicScore: 0, trend: 'TREND_DIRECTION_UNSPECIFIED' as TrendDirection };
   }
 
   const dynamicScore = roundCiiDelta(combinedScore - previous);
@@ -548,7 +545,7 @@ interface CountrySignals {
   sanctionsNewEntryCount: number;
   temporalAnomalyCount: number;
   temporalAnomalyCriticalCount: number;
-  // Phase 2 (CII unification) — military activity, gathered, not yet scored.
+  // Phase 2 (CII unification) — gathered here and scored in the security component below.
   militaryOwnFlights: number;
   militaryForeignFlights: number;
   militaryOwnVessels: number;
@@ -715,34 +712,86 @@ function emptyAuxiliarySources(): AuxiliarySources {
 // restore. Mirrors the *_ENABLED env idiom in resilience/v1/_shared.ts.
 const IRAN_EVENTS_ENABLED = (process.env.IRAN_EVENTS_ENABLED ?? 'false').toLowerCase() === 'true';
 
+/** A Redis key the build consumes. `raw` is explicit because seeder keys are bare and app-owned keys are prefixed (#7674). */
+interface RiskInput {
+  readonly key: string;
+  readonly raw: boolean;
+}
+
+/** Only the class is kept: a JSON SyntaxError message quotes the stored payload. */
+type RiskInputFailureClass = 'timeout' | 'redis' | 'parse';
+
+interface RiskInputReadFailure {
+  readonly key: string;
+  readonly failure: RiskInputFailureClass;
+}
+
+/**
+ * Thrown by readRiskInputs when any input read errored, so no payload can be
+ * computed from a failed read. getRiskScores' catch serves the stale payload.
+ */
+export class RiskInputsUnavailableError extends Error {
+  constructor(readonly failures: readonly RiskInputReadFailure[]) {
+    super(`risk-scores build rejected: ${failures.map((f) => `${f.key}(${f.failure})`).join(', ')}`);
+    this.name = 'RiskInputsUnavailableError';
+  }
+}
+
+function classifyReadFailure(error: unknown): RiskInputFailureClass {
+  if (error instanceof SyntaxError) return 'parse';
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return 'timeout';
+  return 'redis';
+}
+
+/**
+ * Reads every input in parallel and resolves positionally: a hit to its value,
+ * a genuine miss (or a disabled `null` input) to null. If any read errored it
+ * waits for the rest to settle and throws, naming every failed key.
+ */
+async function readRiskInputs(inputs: ReadonlyArray<RiskInput | null>): Promise<unknown[]> {
+  const results = await Promise.all(inputs.map((input) => (input ? readCachedJson(input.key, input.raw) : null)));
+  const failures = inputs.flatMap((input, i) => {
+    const result = results[i];
+    return input && result?.status === 'error' ? [{ key: input.key, failure: classifyReadFailure(result.error) }] : [];
+  });
+  if (failures.length > 0) throw new RiskInputsUnavailableError(failures);
+  return results.map((result) => (result?.status === 'hit' ? result.value : null));
+}
+
 async function fetchAuxiliarySources(): Promise<AuxiliarySources> {
   const currentYear = new Date().getFullYear();
-  const [ucdpRaw, outagesRaw, climateRaw, cyberRaw, firesRaw, gpsRaw, iranRaw, orefRaw, advisoriesRaw, displacementRaw, insightsRaw, threatSummaryRaw, aviationRaw, earthquakesRaw, sanctionsRaw, sanctionsCountsRaw, temporalRaw, militaryCiiRaw] = await Promise.all([
-    getCachedJson('conflict:ucdp-events:v1', true).catch(() => null),
-    getCachedJson('infra:outages:v1', true).catch(() => null),
-    getCachedJson(CLIMATE_ANOMALIES_KEY, true).catch(() => null),
-    getCachedJson('cyber:threats-bootstrap:v2', true).catch(() => null),
-    getCachedJson('wildfire:fires:v1', true).catch(() => null),
-    getCachedJson('intelligence:gpsjam:v2', true).catch(() => null),
-    IRAN_EVENTS_ENABLED ? getCachedJson('conflict:iran-events:v1', true).catch(() => null) : Promise.resolve(null),
-    getCachedJson('relay:oref:history:v1', true).catch(() => null),
-    getCachedJson('intelligence:advisories:v1', true).catch(() => null),
-    // Try current year, fall back to previous year if not yet seeded
-    getCachedJson(`displacement:summary:v1:${currentYear}`, true)
-      .catch(() => null)
-      .then(d => d ?? getCachedJson(`displacement:summary:v1:${currentYear - 1}`, true).catch(() => null)),
-    getCachedJson('news:insights:v1', true).catch(() => null),
-    getCachedJson('news:threat:summary:v1', true).catch(() => null),
+  const [ucdpRaw, outagesRaw, climateRaw, cyberRaw, firesRaw, gpsRaw, iranRaw, orefRaw, advisoriesRaw, displacementCurrentRaw, insightsRaw, threatSummaryRaw, aviationRaw, earthquakesRaw, sanctionsRaw, sanctionsCountsRaw, temporalRaw, militaryCiiRaw] = await readRiskInputs([
+    { key: 'conflict:ucdp-events:v1', raw: true },
+    { key: 'infra:outages:v1', raw: true },
+    { key: CLIMATE_ANOMALIES_KEY, raw: true },
+    { key: 'cyber:threats-bootstrap:v2', raw: true },
+    { key: 'wildfire:fires:v1', raw: true },
+    { key: 'intelligence:gpsjam:v2', raw: true },
+    IRAN_EVENTS_ENABLED ? { key: 'conflict:iran-events:v1', raw: true } : null,
+    { key: 'relay:oref:history:v1', raw: true },
+    { key: 'intelligence:advisories:v1', raw: true },
+    { key: `displacement:summary:v1:${currentYear}`, raw: true },
+    { key: 'news:insights:v1', raw: true },
+    { key: 'news:threat:summary:v1', raw: true },
     // Pre-merged bootstrap (seed-aviation.mjs writes it after merging FAA + intl +
     // NOTAM-synthesized closures). Reading the intl-only key here silently dropped US
     // FAA delays and NOTAM closures from aviationScore.
-    getCachedJson('aviation:delays-bootstrap:v2', true).catch(() => null),
-    getCachedJson('seismology:earthquakes:v1', true).catch(() => null),
-    getCachedJson('sanctions:pressure:v1', true).catch(() => null),
-    getCachedJson('sanctions:country-counts:v1', true).catch(() => null),
-    getCachedJson('temporal:anomalies:v1', true).catch(() => null),
-    getCachedJson('intelligence:military-cii:v1', true).catch(() => null),
+    { key: 'aviation:delays-bootstrap:v2', raw: true },
+    { key: 'seismology:earthquakes:v1', raw: true },
+    { key: 'sanctions:pressure:v1', raw: true },
+    { key: 'sanctions:country-counts:v1', raw: true },
+    // App-owned snapshot (#7674): the temporal-anomalies route stamps
+    // temporal:anomalies:v1 through the prefix-aware helpers, so unlike the
+    // seeder-owned sources around it this read must ride the deployment
+    // prefix — otherwise a preview deployment's risk scores consume the
+    // production snapshot instead of the one this deployment rebuilt.
+    { key: 'temporal:anomalies:v1', raw: false },
+    { key: 'intelligence:military-cii:v1', raw: true },
   ]);
+  // The previous year covers a year not yet seeded. An errored current-year
+  // read has already thrown above, so it never masquerades as that.
+  const displacementRaw = displacementCurrentRaw
+    ?? (await readRiskInputs([{ key: `displacement:summary:v1:${currentYear - 1}`, raw: true }]))[0];
   const arr = (v: any, field?: string, maxLen = 10000) => {
     let a: any[];
     if (field && v && Array.isArray(v[field])) a = v[field];
@@ -821,7 +870,7 @@ async function fetchAuxiliarySources(): Promise<AuxiliarySources> {
 }
 
 export function computeCIIScores(
-  acled: Array<{ country: string; event_type: string; fatalities: number }>,
+  acled: Array<{ country: string; event_type: string; fatalities: number; daysAgo?: number }>,
   aux: AuxiliarySources,
   trendOptions: CiiTrendComparisonOptions = {},
 ): CiiScore[] {
@@ -838,7 +887,17 @@ export function computeCIIScores(
     data[code].advisoryProvenance = liveLevel ? 'live' : fallbackLevel ? 'fallback' : 'absent';
   }
 
-  // --- ACLED ingestion with fatality split ---
+  // --- Displacement ingestion (UNHCR — persists after ceasefires) ---
+  for (const [iso3, totalDisplaced] of Object.entries(aux.displacedByIso3 ?? {})) {
+    const iso2 = ISO3_TO_ISO2[iso3];
+    if (iso2 && data[iso2]) {
+      data[iso2].totalDisplaced = Math.max(data[iso2].totalDisplaced, totalDisplaced);
+    }
+  }
+
+  // --- ACLED ingestion with fatality split and time decay ---
+  // Events 0-7 days old: weight 1.0 (full impact)
+  // Events 8-30 days old: weight 0.4 (partial — captures post-ceasefire/post-conflict tail)
   for (const ev of acled) {
     const code = normalizeCountryName(ev.country);
     if (!code || !data[code]) continue;
@@ -847,23 +906,23 @@ export function computeCIIScores(
     const fatalities = safeNonNegativeNum(ev.fatalities);
     const fat = fatalities * weight;
     if (type.includes('protest')) {
-      data[code].protests++;
+      data[code].protests += weight;
       data[code].protestFatalities += fat;
       // High-severity = the event killed someone (classifySeverity rule).
       if (fatalities > 0) data[code].highSeverityUnrest += weight;
     } else if (type.includes('riot')) {
-      data[code].riots++;
+      data[code].riots += weight;
       data[code].protestFatalities += fat;
       // A riot is always high-severity (classifySeverity rule).
       data[code].highSeverityUnrest += weight;
     } else if (type.includes('battle')) {
-      data[code].battles++;
+      data[code].battles += weight;
       data[code].conflictFatalities += fat;
     } else if (type.includes('explosion') || type.includes('remote')) {
-      data[code].explosions++;
+      data[code].explosions += weight;
       data[code].conflictFatalities += fat;
     } else if (type.includes('violence')) {
-      data[code].civilianViolence++;
+      data[code].civilianViolence += weight;
       data[code].conflictFatalities += fat;
     }
     data[code].fatalities += fat;
@@ -1019,9 +1078,9 @@ export function computeCIIScores(
   }
 
   // --- OREF (IL only) ---
-  if (aux.orefData && data['IL']) {
-    data['IL'].orefAlertCount = aux.orefData.activeAlertCount;
-    data['IL'].orefHistoryCount24h = aux.orefData.historyCount24h;
+  if (aux.orefData && data.IL) {
+    data.IL.orefAlertCount = aux.orefData.activeAlertCount;
+    data.IL.orefHistoryCount24h = aux.orefData.historyCount24h;
   }
 
   // --- News insights threat scoring ---
@@ -1241,7 +1300,9 @@ export function computeStrategicRisks(ciiScores: CiiScore[]): StrategicRisk[] {
           : 'SEVERITY_LEVEL_LOW') as SeverityLevel,
       score: overallScore,
       factors: topN.map((s) => s.region),
-      trend: 'TREND_DIRECTION_STABLE' as TrendDirection,
+      // The global roll-up is never compared with a prior roll-up, so there is
+      // no measured direction to report.
+      trend: 'TREND_DIRECTION_UNSPECIFIED' as TrendDirection,
     },
   ];
 }
@@ -1393,12 +1454,15 @@ export function filterRiskScoresResponse(
 const RISK_CACHE_KEY = `risk:scores:sebuf:${CII_FORMULA_VERSION}`;
 const RISK_STALE_CACHE_KEY = `risk:scores:sebuf:stale:${CII_FORMULA_VERSION}`;
 const RISK_TREND_HISTORY_CACHE_KEY_PREFIX = `risk:scores:sebuf:trend-history:${CII_FORMULA_VERSION}`;
+// Latest rejected build, for operators: function logs do not survive in prod.
+const RISK_REJECTED_BUILD_KEY = `risk:scores:sebuf:rejected:${CII_FORMULA_VERSION}`;
 // `region` is deliberately excluded from the Redis key: this endpoint caches
 // the all-country payload once and applies any region filter as a read-only
 // projection at return time, so per-region requests cannot poison global cache.
 const RISK_CACHE_TTL = 600;
 const RISK_STALE_TTL = 3600;
 const CII_TREND_HISTORY_TTL = 3 * 24 * 60 * 60;
+const RISK_REJECTED_BUILD_TTL = 7 * 24 * 60 * 60;
 
 export function getCiiTrendHistoryBucket(capturedAtMs: number): number {
   const capturedAt = finiteNumber(capturedAtMs);
@@ -1464,10 +1528,13 @@ function ciiTrendSnapshotFromResponse(response: GetRiskScoresResponse): CiiTrend
   return { capturedAt: latestComputedAt, ciiScores: response.ciiScores };
 }
 
+// Not a readRiskInputs input: the prior only sets movement labels, and a
+// missing prior already degrades to "stable". getCachedJson logs an errored
+// bucket and treats it as absent.
 async function readCiiTrendPriorScores(nowMs: number): Promise<CiiScore[] | null> {
   const snapshots = await Promise.all(
     getCiiTrendPriorCandidateBuckets(nowMs).map(async (bucket) => {
-      const value = await getCachedJson(ciiTrendHistoryCacheKey(bucket)).catch(() => null);
+      const value = await getCachedJson(ciiTrendHistoryCacheKey(bucket));
       return isCiiTrendSnapshot(value) ? value : null;
     }),
   );
@@ -1499,6 +1566,19 @@ async function persistCiiTrendSnapshot(response: GetRiskScoresResponse): Promise
   );
 }
 
+/**
+ * Awaited because a serverless runtime may drop a promise still pending after
+ * the response; it runs only on the rejection path and never throws.
+ */
+async function recordRejectedRiskScoresBuild(err: RiskInputsUnavailableError): Promise<void> {
+  console.error('[cii] risk-scores build rejected; input reads failed', { failedReads: err.failures });
+  await setCachedJson(
+    RISK_REJECTED_BUILD_KEY,
+    { at: Date.now(), failedReads: err.failures },
+    RISK_REJECTED_BUILD_TTL,
+  ).catch(() => undefined);
+}
+
 async function buildRiskScoresPayload(): Promise<{
   response: GetRiskScoresResponse;
   realtimeSignalDensityCoverageCount: number;
@@ -1508,7 +1588,10 @@ async function buildRiskScoresPayload(): Promise<{
     fetchACLEDEvents(),
     fetchAuxiliarySources(),
     readCiiTrendPriorScores(nowMs),
-  ]);
+  ]).catch(async (err: unknown) => {
+    if (err instanceof RiskInputsUnavailableError) await recordRejectedRiskScoresBuild(err);
+    throw err;
+  });
   if (!priorCiiScores?.length) recordCiiTrendPriorGap(nowMs);
   const realtimeSignalDensityCoverageCount = countCiiRealtimeSignalDensityCoverage(acled, aux, nowMs);
   const ciiScores = computeCIIScores(acled, aux, { priorScores: priorCiiScores, nowMs });
@@ -1556,6 +1639,10 @@ export async function getRiskScores(
         realtimeSignalDensityCoverageCount = built.realtimeSignalDensityCoverageCount;
         return built.response;
       },
+      undefined,
+      // A rejected build must leave RISK_CACHE_KEY untouched: no NEG_SENTINEL,
+      // only the helper's short isolate-local backoff before the next rebuild.
+      { cacheFetcherErrors: false },
     );
     if (result) {
       let freshResult = withRiskScoreRuntimeState(result, { degraded: false, stale: false });

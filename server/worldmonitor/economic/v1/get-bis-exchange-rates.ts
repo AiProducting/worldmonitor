@@ -1,20 +1,18 @@
 /**
- * RPC: getBisExchangeRates -- BIS SDMX API (WS_EER)
- * Effective exchange rate indices (real + nominal) for major economies.
+ * RPC: getBisExchangeRates -- reads BIS exchange rate data from Railway seed cache.
+ * All external BIS SDMX API calls happen in seed-bis-data.mjs on Railway.
  */
 
 import type {
   ServerContext,
   GetBisExchangeRatesRequest,
   GetBisExchangeRatesResponse,
-  BisExchangeRate,
 } from '../../../../src/generated/server/worldmonitor/economic/v1/service_server';
 
 import { getCachedJson } from '../../../_shared/redis';
 import { markNoStoreFallbackResponse } from '../../../_shared/response-headers';
 
-const REDIS_CACHE_KEY = 'economic:bis:eer:v1';
-const REDIS_CACHE_TTL = 21600; // 6 hours — monthly data
+const SEED_CACHE_KEY = 'economic:bis:eer:v1';
 
 export async function getBisExchangeRates(
   ctx: ServerContext,

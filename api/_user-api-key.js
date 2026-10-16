@@ -2,7 +2,7 @@ import { sha256Hex } from './_crypto.js';
 import { redisPipeline } from './_upstash-json.js';
 import {
   RATE_LIMIT_DEGRADED_HEADERS,
-  getClientIp,
+  getClientRateLimitKey,
 } from './_client-ip.js';
 
 const USER_API_KEY_RE = /^wm_[a-f0-9]{40}$/;
@@ -16,16 +16,21 @@ const RATE_LIMIT_REDIS_TIMEOUT_MS = 1_000;
 const USER_KEY_CACHE_TTL_SECONDS = 60;
 const USER_KEY_NEGATIVE_CACHE_TTL_SECONDS = 60;
 const USER_KEY_CACHE_PREFIX = 'user-api-key:';
+// Self-contained Edge entry: keep this local mirror pinned by API-key and
+// Company Monitoring contract tests rather than importing TypeScript here.
+const COMPANY_MONITORING_SCOPES = new Set(['company_monitoring:read', 'company_monitoring:write']);
 const BOOTSTRAP_USER_KEY_NEGATIVE_CACHE_PREFIX = 'bootstrap-user-api-key-invalid:';
 const ENTITLEMENT_CACHE_TTL_SECONDS = 900;
 // Mirrors server/_shared/entitlement-check.ts (this .js file cannot import the
 // .ts module under node --test; tests/billing-marker-ttl-parity.test.mjs pins
-// the two copies together): lapsed markers stay short because their TTL is
-// the worst-case wrongful-denial window; not_applicable markers get the full
-// default TTL because syncEntitlementCache unconditionally overwrites the key
-// on any tier change.
+// the two copies together): both marker TTLs stay short because each is the
+// worst-case wrongful-denial window for its cohort. The not_applicable marker
+// is stamped only for a user with NO subscription row — which is also what a
+// buyer looks like between checkout return and the Dodo webhook landing, so a
+// long TTL turns a lost cache-write race into minutes of 403s for a paying
+// customer (#5600). See the fuller note in entitlement-check.ts.
 const LAPSED_BILLING_MARKER_TTL_SECONDS = 60;
-const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 900;
+const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 60;
 const ENTITLEMENT_ENV_PREFIX = process.env.DODO_PAYMENTS_ENVIRONMENT === 'live_mode' ? 'live' : 'test';
 const NEG_SENTINEL = '__WM_NEG__';
 
@@ -41,6 +46,24 @@ function getServerRedisKeyPrefix() {
 
 function userApiKeyCacheKey(keyHash) {
   return `${getServerRedisKeyPrefix()}${USER_KEY_CACHE_PREFIX}${keyHash}`;
+}
+
+function isUserKeyResult(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!Object.prototype.hasOwnProperty.call(value, 'userId')) return false;
+  if (typeof value.userId !== 'string' || value.userId.length === 0) return false;
+  if (value.scopes === undefined && value.companyMonitoringAccountId === undefined) return true;
+  if (!Array.isArray(value.scopes) || value.scopes.length === 0) return false;
+  if (typeof value.companyMonitoringAccountId !== 'string' || value.companyMonitoringAccountId.length === 0) {
+    return false;
+  }
+  return new Set(value.scopes).size === value.scopes.length &&
+    value.scopes.every((scope) => typeof scope === 'string' && COMPANY_MONITORING_SCOPES.has(scope));
+}
+
+// Generic bootstrap auth accepts only legacy, unscoped user API keys.
+function isGenericUserKeyResult(value) {
+  return value.scopes === undefined && value.companyMonitoringAccountId === undefined;
 }
 
 function bootstrapUserApiKeyNegativeCacheKey(keyHash) {
@@ -101,8 +124,13 @@ function cacheUnavailable(stage) {
   console.warn(`[bootstrap-user-api-key] auth-cache unavailable stage=${stage}`);
 }
 
+// Both cache helpers below receive keys that are already final:
+// user-api-key:<hash> and bootstrap-user-api-key-invalid:<hash> carry the
+// deployment prefix from getServerRedisKeyPrefix(), and entitlements:<env>:
+// <userId> is deliberately cross-deployment (server/_shared/entitlement-check.ts
+// reads it raw too, P2-3). Send the commands verbatim (#7674).
 async function readCachedJson(key) {
-  const result = await redisPipeline([['GET', key]], 1_000);
+  const result = await redisPipeline([['GET', key]], 1_000, true);
   if (!result) return { status: 'unavailable' };
 
   const raw = result[0]?.result;
@@ -119,7 +147,7 @@ async function readCachedJson(key) {
 async function writeCachedJson(key, value, ttlSeconds) {
   const result = await redisPipeline([
     ['SET', key, JSON.stringify(value), 'EX', String(ttlSeconds)],
-  ], 1_000);
+  ], 1_000, true);
   if (!result) cacheUnavailable('write-failed');
 }
 
@@ -141,8 +169,11 @@ export function isCanonicalUserApiKey(key) {
 }
 
 export async function checkBootstrapUserApiKeyRateLimit(req) {
-  const identifier = getClientIp(req);
+  const identifier = getClientRateLimitKey(req);
   const cacheKey = `${RATE_LIMIT_PREFIX}${identifier}`;
+  // App-owned rate-limit counter (#7674): rides the deployment-prefixed
+  // default, matching the server layer's own prefixed rate-limit keys
+  // (server/_shared/api-key-rate-limit.ts).
   const result = await redisPipeline([
     ['INCR', cacheKey],
     ['EXPIRE', cacheKey, String(RATE_LIMIT_WINDOW_SECONDS), 'NX'],
@@ -214,6 +245,14 @@ export async function validateBootstrapUserApiKey(key) {
   }
 
   const keyHash = await sha256Hex(key);
+  return validateUserApiKeyHash(keyHash);
+}
+
+// OAuth stores only the key hash. Reuse the same revocation and scope checks.
+export async function validateUserApiKeyHash(keyHash) {
+  if (typeof keyHash !== 'string' || !/^[a-f0-9]{64}$/.test(keyHash)) {
+    return { ok: false, status: 401, error: 'Invalid API key', reason: 'malformed' };
+  }
   return coalesce(userKeyInFlight, keyHash, () => validateBootstrapUserApiKeyHash(keyHash));
 }
 
@@ -221,7 +260,10 @@ async function validateBootstrapUserApiKeyHash(keyHash) {
   const cacheKey = userApiKeyCacheKey(keyHash);
   const cached = await readCachedJson(cacheKey);
   if (cached.status === 'hit') {
-    if (cached.value && typeof cached.value === 'object' && typeof cached.value.userId === 'string' && cached.value.userId.length > 0) {
+    if (isUserKeyResult(cached.value)) {
+      if (!isGenericUserKeyResult(cached.value)) {
+        return { ok: false, status: 401, error: 'Invalid API key', reason: 'invalid' };
+      }
       return { ok: true, userId: cached.value.userId };
     }
   }
@@ -241,21 +283,38 @@ async function validateBootstrapUserApiKeyHash(keyHash) {
   }
 
   const value = result.value;
-  if (!value || typeof value !== 'object' || typeof value.userId !== 'string' || value.userId.length === 0) {
+  if (!isUserKeyResult(value)) {
     await writeCachedJson(negativeCacheKey, NEG_SENTINEL, USER_KEY_NEGATIVE_CACHE_TTL_SECONDS);
     return { ok: false, status: 401, error: 'Invalid API key', reason: 'invalid' };
   }
 
-  // Cache the full gateway-shared shape ({ userId, keyId, name }) so the
+  // Cache the full gateway-shared shape, including immutable Company
+  // Monitoring scope/account binding when present, so both validators see the
+  // same principal contract.
   // gateway's validateUserApiKey (server/_shared/user-api-key.ts) — which reads
   // and writes the same `user-api-key:<hash>` key typed as UserKeyResult — never
   // reads back a value with keyId/name undefined when bootstrap won the cache
   // race. Convex validateKeyByHash returns `id`, so map it to `keyId` here.
   await writeCachedJson(
     cacheKey,
-    { userId: value.userId, keyId: value.id, name: value.name },
+    {
+      userId: value.userId,
+      keyId: value.id,
+      name: value.name,
+      ...(value.scopes === undefined ? {} : { scopes: value.scopes }),
+      ...(value.companyMonitoringAccountId === undefined
+        ? {}
+        : { companyMonitoringAccountId: value.companyMonitoringAccountId }),
+    },
     USER_KEY_CACHE_TTL_SECONDS,
   );
+  // Company Monitoring keys are bound to an account and exact RPC scopes.
+  // Generic bootstrap callers do not enforce either constraint, so deny the
+  // principal after preserving its full positive cache entry for a future
+  // dedicated validator.
+  if (!isGenericUserKeyResult(value)) {
+    return { ok: false, status: 401, error: 'Invalid API key', reason: 'invalid' };
+  }
   return {
     ok: true,
     userId: value.userId,
@@ -343,7 +402,7 @@ async function validateBootstrapUserApiAccessUncached(userId) {
   const cacheKey = `entitlements:${ENTITLEMENT_ENV_PREFIX}:${userId}`;
   const cached = await readCachedJson(cacheKey);
   if (cached.status === 'hit' && cached.value && typeof cached.value === 'object') {
-    if (hasCurrentApiAccess(cached.value)) return { ok: true };
+    if (hasCurrentApiAccess(cached.value)) return { ok: true, entitlement: cached.value };
     const cachedBillingFailure = billingVerificationFailure(cached.value);
     if (cachedBillingFailure) return cachedBillingFailure;
     if (notApplicableVerificationTtlSeconds(cached.value) !== null) {
@@ -379,7 +438,7 @@ async function validateBootstrapUserApiAccessUncached(userId) {
     await writeCachedJson(cacheKey, result.value, entitlementCacheTtlSeconds(result.value));
   }
 
-  if (hasCurrentApiAccess(result.value)) return { ok: true };
+  if (hasCurrentApiAccess(result.value)) return { ok: true, entitlement: result.value };
   const billingFailure = billingVerificationFailure(result.value);
   if (billingFailure) return billingFailure;
 

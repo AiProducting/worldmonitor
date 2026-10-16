@@ -1,20 +1,17 @@
 /**
- * ListFireDetections RPC -- proxies the NASA FIRMS CSV API.
- *
- * Fetches active fire detections from all 9 monitored regions in parallel
- * and transforms the FIRMS CSV rows into proto-shaped FireDetection objects.
- *
- * Gracefully degrades to empty results when NASA_FIRMS_API_KEY is not set.
+ * ListFireDetections RPC -- reads seeded wildfire data from Railway seed cache.
+ * All external NASA FIRMS API calls happen in seed-wildfires.mjs on Railway.
  */
+
 import type {
   WildfireServiceHandler,
   ServerContext,
   ListFireDetectionsRequest,
   ListFireDetectionsResponse,
-  FireConfidence,
 } from '../../../../src/generated/server/worldmonitor/wildfire/v1/service_server';
 
 import { getCachedJson } from '../../../_shared/redis';
+import { resolveFireDetectionTotalCount } from '../../../../src/services/wildfires/payload';
 import { limitFireDetectionsForDashboard } from '../../../../api/_wildfire-dashboard.js';
 export { WILDFIRE_DASHBOARD_DETECTION_LIMIT, limitFireDetectionsForDashboard } from '../../../../api/_wildfire-dashboard.js';
 
@@ -50,15 +47,18 @@ export const listFireDetections: WildfireServiceHandler['listFireDetections'] = 
     const rawDetections = result.fireDetections ?? [];
     const fireDetections = limitFireDetectionsForDashboard(rawDetections);
     const capped = fireDetections.length < rawDetections.length;
+    // The canonical key is itself capped at WILDFIRE_CANONICAL_DETECTION_LIMIT (#5866) and
+    // carries the pre-cap FIRMS total in `pagination`. Re-deriving the count from the array we
+    // received would silently report the seeder's cap as the number of fires burning.
+    const totalCount = resolveFireDetectionTotalCount({ fireDetections: rawDetections, pagination: result.pagination });
 
     return {
       fireDetections,
-      pagination: capped ? { nextCursor: '', totalCount: rawDetections.length } : result.pagination,
+      pagination: capped ? { nextCursor: '', totalCount } : result.pagination,
       fetchedAt: Number(result.fetchedAt || meta?.fetchedAt || 0),
       dataAvailable: true,
     };
   } catch {
     return { fireDetections: [], pagination: undefined, fetchedAt: 0, dataAvailable: false };
   }
-  return result || { fireDetections: [], pagination: undefined };
 };

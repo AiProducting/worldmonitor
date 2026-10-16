@@ -38,10 +38,22 @@ export function parseYesPrice(market) {
     const prices = JSON.parse(market.outcomePrices || '[]');
     if (prices.length >= 1) {
       const p = parseFloat(prices[0]);
-      if (!isNaN(p) && p >= 0 && p <= 1) return +(p * 100).toFixed(1);
+      if (!Number.isNaN(p) && p >= 0 && p <= 1) return +(p * 100).toFixed(1);
     }
   } catch {}
   return null;
+}
+
+export function parsePredictionMarketVolume(market) {
+  const value = Number(market?.volumeNum ?? market?.volume);
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+export function kalshiMarketUrl(seriesTicker) {
+  const ticker = String(seriesTicker ?? '').trim();
+  return /^[A-Za-z0-9_-]+$/.test(ticker)
+    ? `https://kalshi.com/markets/${ticker.toLowerCase()}`
+    : '';
 }
 
 // Kalshi mirror of parseYesPrice: null for unreadable prices — a fabricated
@@ -100,14 +112,14 @@ export function scoreMarket(m) {
   return (conviction * 0.5) + (Math.min(vol, 1) * 0.5);
 }
 
-export function isExpired(endDate) {
+export function isExpired(endDate, now = Date.now()) {
   if (!endDate) return false;
   const ms = Date.parse(endDate);
-  return Number.isFinite(ms) && ms < Date.now();
+  return Number.isFinite(ms) && ms < now;
 }
 
-export function filterAndScore(candidates, tagFilter, limit = 25) {
-  let filtered = candidates.filter(m => !isExpired(m.endDate));
+export function filterAndScore(candidates, tagFilter, limit = 25, now = Date.now()) {
+  let filtered = candidates.filter(m => !isExpired(m.endDate, now));
   if (tagFilter) filtered = filtered.filter(tagFilter);
 
   let result = filtered.filter(m => shouldInclude(m));

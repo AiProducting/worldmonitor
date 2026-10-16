@@ -5,15 +5,22 @@ import { THREAT_PRIORITY } from '@/services/threat-classifier';
 import { formatTime, getCSSColor } from '@/utils';
 import { escapeHtml, sanitizeUrl, unsafeRawHtml } from '@/utils/sanitize';
 import { computeNewSinceVisit } from '@/utils/new-since-visit';
+import { assessCorroboration, badgePublisherCount, corroborationFlagHtml, evidenceFromCluster, evidenceFromItem, publisherRoster } from '@/utils/corroboration-flag';
 import { analysisWorker, enrichWithVelocityML, getClusterAssetContext, MAX_DISTANCE_KM, activityTracker, generateSummary, translateText, preloadRelatedAssetTables } from '@/services';
 import { SITE_VARIANT } from '@/config';
-import { t, getCurrentLanguage } from '@/services/i18n';
+import { t, getCurrentLanguage, getCurrentLanguageTag } from '@/services/i18n';
 import { track } from '@/services/analytics';
 import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
 import {
-  renderCorroboratingSourceRisk,
+  renderCredibilityBadge,
   renderPrimarySourceProvenance,
 } from './news/source-provenance';
+import { describePublisherRoster, renderPublisherRosterHtml } from './news/publisher-roster';
+import {
+  coverageBadgeString,
+  type CoverageStringKey,
+  type SourceCoverage,
+} from './news/source-coverage';
 
 
 type SortMode = 'relevance' | 'newest';
@@ -32,7 +39,14 @@ interface PreparedCluster {
   showNewTag: boolean;
 }
 
+export interface NewsPanelServices {
+  clusterNews: (items: NewsItem[]) => Promise<ClusteredEvent[]>;
+  generateSummary: typeof generateSummary;
+  translateText: typeof translateText;
+}
+
 export class NewsPanel extends Panel {
+  private readonly newsServices: NewsPanelServices;
   private clusteredMode = true;
   private deviationEl: HTMLElement | null = null;
   private relatedAssetContext = new Map<string, RelatedAssetContext>();
@@ -56,6 +70,21 @@ export class NewsPanel extends Panel {
   private lastRawItems: NewsItem[] | null = null;
   private relatedAssetTableRefreshPending = false;
 
+  /**
+   * How much of this category's enabled source list the panel is actually
+   * showing, or `null` when it shows all of it (#5873).
+   *
+   * Only a CUSTOM category sets this. It is never in the per-variant server
+   * digest, so it rotates through its sources a capped window at a time and
+   * accumulates — which means that for the first few refresh cycles the panel
+   * is genuinely incomplete while the Sources manager lists every source as
+   * enabled. Saying so on the badge is the difference between a panel that is
+   * partial and a panel that lies about being complete.
+   */
+  private sourceCoverage: SourceCoverage | null = null;
+  private refreshDegraded = false;
+  private renderedBadgeState: 'none' | 'live' | 'cached' | 'unavailable' = 'none';
+
   // Panel summary feature
   private summaryBtn: HTMLButtonElement | null = null;
   private summaryContainer: HTMLElement | null = null;
@@ -74,8 +103,16 @@ export class NewsPanel extends Panel {
     this.riskScoreGetter = fn;
   }
 
-  constructor(id: string, title: string, infoTooltip?: string) {
+  constructor(id: string, title: string, infoTooltip?: string,
+    services: Partial<NewsPanelServices> = {},
+  ) {
     super({ id, title, showCount: true, trackActivity: true, infoTooltip });
+    this.newsServices = {
+      clusterNews: items => analysisWorker.clusterNews(items),
+      generateSummary,
+      translateText,
+      ...services,
+    };
     this.sortMode = this.loadSortMode();
     this.createDeviationIndicator();
     this.createSortToggle();
@@ -166,6 +203,7 @@ export class NewsPanel extends Panel {
     this.updateSortButtonLabel();
     this.sortBtn.addEventListener('click', () => {
       this.sortMode = this.sortMode === 'relevance' ? 'newest' : 'relevance';
+      track('news-sort-toggle', { mode: this.sortMode });
       this.saveSortMode();
       this.updateSortButtonLabel();
       // Re-render with cached data
@@ -219,7 +257,10 @@ export class NewsPanel extends Panel {
     this.summaryBtn.className = 'panel-summarize-btn';
     setTrustedHtml(this.summaryBtn, trustedHtml('✨', "legacy direct innerHTML migration"));
     this.summaryBtn.title = t('components.newsPanel.summarize');
-    this.summaryBtn.addEventListener('click', () => this.handleSummarize());
+    this.summaryBtn.addEventListener('click', () => {
+      track('news-summarize', { panelId: this.panelId });
+      this.handleSummarize();
+    });
 
     // Insert before count element (use inherited this.header directly)
     const countEl = this.header.querySelector('.panel-count');
@@ -235,7 +276,11 @@ export class NewsPanel extends Panel {
     if (this.currentHeadlines.length === 0) return;
 
     // Check cache first (include variant, version, and language)
-    const currentLang = getCurrentLanguage();
+    // The full tag, not the stripped code: this is the language the model is
+    // asked to WRITE in, and a Traditional reader asking for `zh` gets
+    // Simplified prose back. It keys the cache too, so the two scripts cannot
+    // serve each other's summary.
+    const currentLang = getCurrentLanguageTag();
     const cacheKey = `panel_summary_v3_${SITE_VARIANT}_${this.panelId}_${currentLang}`;
     const cached = this.getCachedSummary(cacheKey);
     if (cached) {
@@ -253,7 +298,7 @@ export class NewsPanel extends Panel {
     const sigAtStart = this.lastHeadlineSignature;
 
     try {
-      const result = await generateSummary(
+      const result = await this.newsServices.generateSummary(
         this.currentHeadlines.slice(0, 8),
         undefined,
         this.panelId,
@@ -286,7 +331,10 @@ export class NewsPanel extends Panel {
   }
 
   private async handleTranslate(element: HTMLElement, text: string): Promise<void> {
-    const currentLang = getCurrentLanguage();
+    // Target language for the translation, so the full tag — same reason as
+    // handleSummarize above. The `en` short-circuit is unaffected: no tag that
+    // resolves to a Chinese catalogue equals 'en'.
+    const currentLang = getCurrentLanguageTag();
     if (currentLang === 'en') return; // Assume news is mostly English, no need to translate if UI is English (or add detection later)
 
     const titleEl = element.closest('.item')?.querySelector('.item-title') as HTMLElement;
@@ -299,7 +347,7 @@ export class NewsPanel extends Panel {
     element.style.pointerEvents = 'none';
 
     try {
-      const translated = await translateText(text, currentLang);
+      const translated = await this.newsServices.translateText(text, currentLang);
       if (!this.element?.isConnected) return;
       if (translated) {
         titleEl.textContent = translated;
@@ -400,18 +448,56 @@ export class NewsPanel extends Panel {
   public override showError(message?: string, onRetry?: () => void, autoRetrySeconds?: number): void {
     this.lastRawClusters = null;
     this.lastRawItems = null;
+    this.renderedBadgeState = 'unavailable';
     super.showError(message, onRetry, autoRetrySeconds);
+  }
+
+  /**
+   * Declare how many of the category's enabled sources this panel is showing.
+   *
+   * Pass `null` for the normal case (digest-backed, or every source fetched) —
+   * the badge then reads plain `LIVE` as before. The value is stored rather
+   * than painted directly so it survives the re-renders that don't reload data
+   * (time-range filter changes, sort toggles).
+   */
+  public setSourceCoverage(coverage: SourceCoverage | null): void {
+    this.sourceCoverage = coverage;
+    if (this.renderedBadgeState === 'live' || this.renderedBadgeState === 'cached') {
+      this.renderCurrentDataBadge();
+    }
+  }
+
+  /**
+   * Retained headlines remain useful when a refresh window fails, but they
+   * must not be relabelled LIVE by time-range or sort re-renders.
+   */
+  public setRefreshDegraded(degraded: boolean): void {
+    this.refreshDegraded = degraded;
+    if (this.renderedBadgeState === 'live' || this.renderedBadgeState === 'cached') {
+      this.renderCurrentDataBadge();
+    }
+  }
+
+  private coverageString(key: CoverageStringKey): string | undefined {
+    return coverageBadgeString(this.sourceCoverage, key, (path, vars) => t(path, vars));
+  }
+
+  private renderCurrentDataBadge(): void {
+    const state = this.refreshDegraded ? 'cached' : 'live';
+    this.renderedBadgeState = state;
+    this.setDataBadge(state, this.coverageString('sourceCoverage'), this.coverageString('sourceCoverageHint'));
   }
 
   public renderNews(items: NewsItem[]): void {
     if (items.length === 0) {
       this.renderRequestId += 1; // Cancel in-flight clustering from previous renders.
+      this.renderedBadgeState = 'unavailable';
       this.setDataBadge('unavailable');
       this.showError(t('common.noNewsAvailable'));
       return;
     }
 
-    this.setDataBadge('live');
+    this.renderCurrentDataBadge();
 
     // Always show flat items immediately for instant visual feedback,
     // then upgrade to clustered view in the background when ready.
@@ -426,7 +512,7 @@ export class NewsPanel extends Panel {
     this.renderRequestId += 1; // Cancel in-flight clustering from previous renders.
     this.lastRawClusters = null;
     this.lastRawItems = null;
-    this.setDataBadge('live');
+    this.renderCurrentDataBadge();
     this.setCount(0);
     this.relatedAssetContext.clear();
     this.currentHeadlines = [];
@@ -439,7 +525,7 @@ export class NewsPanel extends Panel {
     const requestId = ++this.renderRequestId;
 
     try {
-      const clusters = await analysisWorker.clusterNews(items);
+      const clusters = await this.newsServices.clusterNews(items);
       if (requestId !== this.renderRequestId) return;
       const enriched = await enrichWithVelocityML(clusters);
       this.renderClusters(enriched);
@@ -478,11 +564,16 @@ export class NewsPanel extends Panel {
     this.updateHeadlineSignature();
 
     const html = sorted
-      .map(
-        (item) => `
+      .map((item) => {
+        const provenance = renderPrimarySourceProvenance(item.source);
+        return `
       <div class="item ${item.isAlert ? 'alert' : ''}" ${item.monitorColor ? `style="border-inline-start-color: ${escapeHtml(item.monitorColor)}"` : ''}>
         <div class="item-source">
           ${escapeHtml(item.source)}
+          ${renderCredibilityBadge(item.source, item)}
+          ${provenance.riskBadge}
+          ${provenance.facts}
+          ${corroborationFlagHtml(assessCorroboration(evidenceFromItem(item)))}
           ${item.lang && item.lang !== getCurrentLanguage() ? `<span class="lang-badge">${item.lang.toUpperCase()}</span>` : ''}
           ${item.storyMeta?.phase === 'breaking' ? '<span class="phase-badge breaking">BREAKING</span>' : ''}
           ${item.storyMeta?.phase === 'developing' ? `<span class="phase-badge developing">DEVELOPING${item.storyMeta.mentionCount > 1 ? ` ×${item.storyMeta.mentionCount}` : ''}</span>` : ''}
@@ -496,8 +587,8 @@ export class NewsPanel extends Panel {
           ${getCurrentLanguage() !== 'en' ? `<button class="item-translate-btn" title="Translate" data-text="${escapeHtml(item.title)}">文</button>` : ''}
         </div>
       </div>
-    `
-      )
+    `;
+      })
       .join('');
 
     this.setSafeContent(unsafeRawHtml(html, 'legacy Panel.setContent() migration'));
@@ -634,8 +725,15 @@ export class NewsPanel extends Panel {
     shouldHighlight: boolean,
     showNewTag: boolean
   ): string {
-    const sourceBadge = cluster.sourceCount > 1
-      ? `<span class="source-count">${t('components.newsPanel.sources', { count: String(cluster.sourceCount) })}</span>`
+    // #6428: "N sources" is a corroboration claim, so it counts PUBLISHERS.
+    // cluster.sourceCount is the article count, which read nine reprints of
+    // one wire across one newsroom's feeds as nine sources. The velocity
+    // badge below keeps sourceCount — velocity IS about article volume.
+    const evidence = evidenceFromCluster(cluster);
+    const corroboration = assessCorroboration(evidence);
+    const publisherCount = badgePublisherCount(corroboration, cluster.uniquePublisherCount ?? 0);
+    const sourceBadge = publisherCount > 1
+      ? `<span class="source-count">${t('components.newsPanel.sources', { count: String(publisherCount) })}</span>`
       : '';
 
     const velocity = cluster.velocity;
@@ -657,18 +755,10 @@ export class NewsPanel extends Panel {
     const {
       riskBadge: primaryPropBadge,
       tierBadge,
+      facts: primaryProvenanceFacts,
     } = renderPrimarySourceProvenance(cluster.primarySource);
 
-    // Build "Also reported by" section for multi-source confirmation
-    const otherSources = cluster.topSources.filter(s => s.name !== cluster.primarySource);
-    const topSourcesHtml = otherSources.length > 0
-      ? `<span class="also-reported">Also:</span>` + otherSources
-        .map(s => {
-          const propBadge = renderCorroboratingSourceRisk(s.name);
-          return `<span class="top-source tier-${s.tier}">${escapeHtml(s.name)}${propBadge}</span>`;
-        })
-        .join('')
-      : '';
+    const rosterView = describePublisherRoster(corroboration, publisherRoster(evidence));
 
     const assetContext = getClusterAssetContext(cluster);
     if (assetContext && assetContext.assets.length > 0) {
@@ -701,7 +791,7 @@ export class NewsPanel extends Panel {
     const threatVarMap: Record<string, string> = { critical: '--threat-critical', high: '--threat-high', medium: '--threat-medium', low: '--threat-low', info: '--threat-info' };
     const catColor = cluster.threat ? getCSSColor(threatVarMap[cluster.threat.level] || '--text-dim') : '';
     const categoryBadge = catLabel
-      ? `<span class="category-tag" style="--category-color:${catColor};--category-background:${catColor}20">${catLabel}</span>`
+      ? `<span class="category-tag" style="--category-color:${catColor};--category-background:${catColor}20">${escapeHtml(catLabel)}</span>`
       : '';
 
     // Numeric risk score badge (0-100): from external getter or fallback to threat-level derivation
@@ -731,10 +821,13 @@ export class NewsPanel extends Panel {
         <div class="item-source">
           ${tierBadge}
           ${escapeHtml(cluster.primarySource)}
+          ${renderCredibilityBadge(cluster.primarySource, cluster.allItems.find(item => item.source === cluster.primarySource) ?? cluster.allItems[0])}
           ${primaryPropBadge}
+          ${primaryProvenanceFacts}
           ${langBadge}
           ${newTag}
           ${sourceBadge}
+          ${corroborationFlagHtml(corroboration)}
           ${velocityBadge}
           ${sentimentBadge}
           ${cluster.isAlert ? '<span class="alert-tag">ALERT</span>' : ''}
@@ -743,7 +836,7 @@ export class NewsPanel extends Panel {
         </div>
         <a class="item-title" href="${sanitizeUrl(cluster.primaryLink)}" target="_blank" rel="noopener">${escapeHtml(cluster.primaryTitle)}</a>
         <div class="cluster-meta">
-          <span class="top-sources">${topSourcesHtml}</span>
+          <div class="cluster-roster">${rosterView ? renderPublisherRosterHtml(rosterView) : ''}</div>
           <span class="item-time">${formatTime(cluster.lastUpdated)}</span>
           ${getCurrentLanguage() !== 'en' ? `<button class="item-translate-btn" title="Translate" data-text="${escapeHtml(cluster.primaryTitle)}">文</button>` : ''}
         </div>
@@ -810,6 +903,58 @@ export class NewsPanel extends Panel {
       nuclear: 'modals.countryBrief.infra.nuclear',
     };
     return t(keyMap[type]);
+  }
+
+  /**
+   * Returns true if this panel contains a news item with the given link
+   * (either as a cluster primary or secondary article).
+   */
+  public hasNewsItem(link: string): boolean {
+    if (this.lastRawClusters) {
+      return this.lastRawClusters.some(
+        c => c.primaryLink === link || c.allItems.some(i => i.link === link)
+      );
+    }
+    if (this.lastRawItems) {
+      return this.lastRawItems.some(i => i.link === link);
+    }
+    return false;
+  }
+
+  /**
+   * Scroll the panel to the item with the given link and flash-highlight it.
+   * For virtual-scrolled panels, renders the containing chunk first.
+   */
+  public scrollToNewsItem(link: string): void {
+    // In clustered mode, scroll via windowedList so off-screen chunks are rendered first
+    if (this.lastRawClusters && this.windowedList) {
+      const found = this.windowedList.scrollToItem(
+        (p: { cluster: ClusteredEvent }) =>
+          p.cluster.primaryLink === link || p.cluster.allItems.some((i: { link: string }) => i.link === link)
+      );
+      if (found) {
+        setTimeout(() => {
+          const el = this.content.querySelector(`[data-news-id="${CSS.escape(link)}"]`)
+            ?? this.content.querySelector(`a[href="${CSS.escape(link)}"]`);
+          if (el) this.flashHighlight(el);
+        }, 350);
+        return;
+      }
+    }
+    // Flat mode or small lists rendered directly in DOM
+    const el = this.content.querySelector(`[data-news-id="${CSS.escape(link)}"]`)
+      ?? this.content.querySelector(`a[href="${CSS.escape(link)}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      this.flashHighlight(el);
+    }
+  }
+
+  private flashHighlight(el: Element): void {
+    el.classList.remove('search-highlight');
+    void (el as HTMLElement).offsetWidth;
+    el.classList.add('search-highlight');
+    setTimeout(() => el.classList.remove('search-highlight'), 3100);
   }
 
   /**

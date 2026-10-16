@@ -1,49 +1,50 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { listTrackedApiSourceFiles } from '../scripts/check-edge-function-bundles.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const apiDir = join(root, 'api');
-const apiOauthDir = join(root, 'api', 'oauth');
+const apiOauthDir = join(apiDir, 'oauth');
 const sharedDir = join(root, 'shared');
 const scriptsSharedDir = join(root, 'scripts', 'shared');
 
-// All .js files in api/ except underscore-prefixed helpers (_cors.js, _api-key.js)
-const edgeFunctions = readdirSync(apiDir)
-  .filter((f) => f.endsWith('.js') && !f.startsWith('_'))
-  .map((f) => ({ name: f, path: join(apiDir, f) }));
+const trackedApiSources = listTrackedApiSourceFiles(root);
 
-// Also include api/oauth/ subdir edge functions
-const oauthEdgeFunctions = readdirSync(apiOauthDir)
-  .filter((f) => f.endsWith('.js') && !f.startsWith('_'))
-  .map((f) => ({ name: `oauth/${f}`, path: join(apiOauthDir, f) }));
+// Both api-wide guards below register one `it()` PER DISCOVERED FILE, so an
+// empty discovery makes them emit zero assertions and this suite reports green
+// while checking nothing — a `node:` import smuggled into an edge function
+// would ship unnoticed. `git ls-files` exits 0 with empty output whenever the
+// pathspec matches nothing, so that is reachable; the previous readdirSync
+// implementation threw instead. Fail closed, mirroring the checker's own
+// zero-entry guard.
+describe('tracked api/ discovery', () => {
+  it('finds at least one tracked api/ source', () => {
+    assert.ok(
+      trackedApiSources.length > 0,
+      'listTrackedApiSourceFiles returned nothing — the guards below would pass vacuously',
+    );
+  });
+});
 
-const allEdgeFunctions = [...edgeFunctions, ...oauthEdgeFunctions];
+// Legacy JS entrypoints at api/ and api/oauth/ have stricter isolation rules.
+const allEdgeFunctions = trackedApiSources
+  .filter((file) => file.endsWith('.js'))
+  .filter((file) => ['api', 'api/oauth'].includes(dirname(file)))
+  .map((file) => ({ name: file.slice('api/'.length), path: join(root, file) }));
 
-// ALL .js AND .ts files under api/ (recursively) — used for node: built-in checks.
+// All tracked .js and .ts files under api/ are used for node: built-in checks.
 // Note: .ts edge functions are intentionally excluded from the
 // module-isolation describe below because Vercel bundles them at build time, so
 // imports from '../server/' are valid. The node: built-in check still applies
 // regardless of depth, since Vercel Edge Runtime rejects node: imports at runtime.
-function walkApi(dir, relPrefix = '') {
-  const out = [];
-  for (const entry of readdirSync(dir)) {
-    if (entry.startsWith('_')) continue; // underscore helpers are not routed
-    const full = join(dir, entry);
-    const rel = relPrefix ? `${relPrefix}/${entry}` : entry;
-    if (statSync(full).isDirectory()) {
-      out.push(...walkApi(full, rel));
-    } else if (entry.endsWith('.js') || entry.endsWith('.ts')) {
-      out.push({ name: rel, path: full });
-    }
-  }
-  return out;
-}
-
-const allApiFiles = walkApi(apiDir);
+const allApiFiles = trackedApiSources.map((file) => ({
+  name: file.slice('api/'.length),
+  path: join(root, file),
+}));
 
 describe('scripts/shared/ stays in sync with shared/', () => {
   // Historical scope: .json (data) + .cjs (helpers).
@@ -54,12 +55,36 @@ describe('scripts/shared/ stays in sync with shared/', () => {
   const explicitMirroredFiles = new Set([
     'brief-llm-core.js',
     'brief-llm-core.d.ts',
+    'correlation-runtime-mode.js',
+    'physical-divergence-contract.js',
+    'physical-divergence-contract.d.ts',
+    'physical-divergence-staleness.js',
+    'physical-divergence-staleness.d.ts',
+    // #6428: publisher-family resolution for corroboration counting, consumed
+    // by scripts/_clustering.mjs (Railway rootDirectory=scripts) and by the
+    // edge digest. Must stay byte-identical.
+    'publisher-families.js',
+    'publisher-families.d.ts',
     // U6/U7: pure URL classifier consumed by the brief filter (edge) AND
     // by the audit script under scripts/. Must stay byte-identical.
     'url-classifier.js',
+    // Railway seed-wb-indicators.mjs writes the same v2 keys the Edge RPC reads.
+    'world-bank-rpc-cache.js',
+    // #8867: market-alert detectors and their import graph, consumed by
+    // scripts/seed-market-alert-ledger.mjs (Railway nixpacks-root-scripts).
+    'text-analysis-core.js',
+    'entity-registry.js',
+    'entity-extraction-core.js',
+    'market-alert-core.js',
+    'news-clustering-core.js',
   ]);
+  // The attribution manifest is canonical at shared/ and is consumed by
+  // repository-rooted build tooling. It is not a scripts-runtime input, so a
+  // second committed copy would recreate the shared-file merge hotspot.
+  const canonicalOnlyFiles = new Set(['source-attribution-manifest.json']);
   const sharedFiles = readdirSync(sharedDir).filter(
-    (f) => f.endsWith('.json') || f.endsWith('.cjs') || explicitMirroredFiles.has(f),
+    (f) => !canonicalOnlyFiles.has(f)
+      && (f.endsWith('.json') || f.endsWith('.cjs') || explicitMirroredFiles.has(f)),
   );
   for (const file of sharedFiles) {
     it(`scripts/shared/${file} matches shared/${file}`, () => {
@@ -103,6 +128,20 @@ describe('Edge Function no node: built-ins', () => {
         !match,
         `${name}: imports node:${match?.[1]} — Vercel Edge Runtime does not support node: built-in modules. Use an edge-compatible alternative.`,
       );
+    });
+  }
+});
+
+// AGENTS.md: legacy JS entries share code only through `_*.js` helpers or
+// packages. Importing another route entry couples two deployables and bundles
+// the whole sibling handler (#8305 briefly had authorize.js import register.js).
+describe('Legacy JS entries import only _-prefixed relative modules', () => {
+  for (const { name, path } of allEdgeFunctions) {
+    it(`${name} imports no sibling route entry`, () => {
+      const src = readFileSync(path, 'utf-8');
+      const specs = [...src.matchAll(/(?:from|import\()\s*['"](\.[^'"]+)['"]/g)].map((m) => m[1]);
+      const routes = specs.filter((spec) => !spec.split('/').pop().startsWith('_'));
+      assert.deepEqual(routes, [], `${name}: move shared code into a _-prefixed helper`);
     });
   }
 });
@@ -232,13 +271,16 @@ describe('api/slack/oauth/start.ts safety', () => {
 describe('api/slack/oauth/callback.ts safety', () => {
   const callbackPath = join(root, 'api', 'slack', 'oauth', 'callback.ts');
 
-  it("uses '*' as postMessage targetOrigin (works on all WM subdomains and previews)", () => {
+  it('posts the success message only to the opener origin stored with the state', () => {
     const src = readFileSync(callbackPath, 'utf-8');
     assert.ok(
-      src.includes("APP_ORIGIN = '*'"),
-      "callback.ts: postMessage targetOrigin must be '*' so it works on tech/finance/happy subdomains and " +
-      'preview deployments — a hardcoded origin would silently drop messages on all other origins. ' +
-      "Security comes from the e.origin check in the listener, not from targetOrigin.",
+      src.includes('postMessage(${msg},${safeJsonInScript(openerOrigin)})'),
+      'callback.ts: the connected message carries channel and workspace names, so it must target the ' +
+      "opener origin recorded by start (server/_shared/channel-oauth-state.ts), not '*'.",
+    );
+    assert.ok(
+      src.includes("callbackMatchesBrowser('slack', req, oauthState)"),
+      'callback.ts: must refuse a callback from a browser that did not call start',
     );
   });
 
@@ -250,15 +292,19 @@ describe('api/slack/oauth/callback.ts safety', () => {
     );
   });
 
-  it('consumes CSRF state from Upstash after validation (prevents replay)', () => {
+  it('atomically consumes CSRF state from Upstash (prevents concurrent replay)', () => {
     const src = readFileSync(callbackPath, 'utf-8');
-    const getIdx = src.indexOf('upstashGet');
-    const delIdx = src.indexOf('upstashDel');
-    assert.ok(getIdx !== -1, 'callback.ts: must call upstashGet to validate state');
-    assert.ok(delIdx !== -1, 'callback.ts: must call upstashDel to consume state after validation');
     assert.ok(
-      getIdx < delIdx,
-      'callback.ts: must validate state (upstashGet) before consuming it (upstashDel)',
+      src.includes('upstashGetDel'),
+      'callback.ts: must use a single atomic upstashGetDel operation to validate and consume state',
+    );
+    assert.ok(
+      src.includes('/getdel/'),
+      'callback.ts: state consumption must use Upstash GETDEL, not separate GET and DEL requests',
+    );
+    assert.ok(
+      !src.includes('/get/') && !src.includes('/del/'),
+      'callback.ts: split GET/DEL state consumption permits concurrent replay',
     );
   });
 
@@ -297,7 +343,9 @@ describe('vercel.json CSP: Slack OAuth callback has unsafe-inline override', () 
 
   it('/api/slack/oauth/callback CSP override appears after the global CSP rule (must override it)', () => {
     const headers = vercelJson.headers ?? [];
-    const globalIdx = headers.findIndex((r) => r.source === '/((?!docs|embed|embed\\.html).*)');
+    const globalIdx = headers.findIndex((rule) => rule.headers?.some(
+      (header) => header.key === 'X-Frame-Options' && header.value === 'SAMEORIGIN',
+    ));
     const callbackIdx = headers.findIndex((r) => r.source === '/api/slack/oauth/callback');
     assert.ok(globalIdx !== -1, 'vercel.json: global CSP rule not found');
     assert.ok(callbackIdx !== -1, 'vercel.json: callback CSP override not found');

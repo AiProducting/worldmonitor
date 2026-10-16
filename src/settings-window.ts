@@ -12,6 +12,7 @@ import {
   isPanelEntitled,
   FREE_MAX_PANELS,
   countFreePanelCapUsage,
+  userSetPanelEnabled,
   isFreePanelCapCounted,
 } from '@/config';
 import { isProUser } from '@/services/widget-store';
@@ -40,7 +41,7 @@ export function initSettingsWindow(): void {
   // This window shows only "which panels to display" (panel display settings).
   document.title = `${t('header.settings')} - World Monitor`;
 
-  let panelSettings = loadFromStorage<Record<string, PanelConfig>>(
+  const panelSettings = loadFromStorage<Record<string, PanelConfig>>(
     STORAGE_KEYS.panels,
     DEFAULT_PANELS
   );
@@ -60,7 +61,7 @@ export function initSettingsWindow(): void {
 
   function render(): void {
     const panelEntries = Object.entries(panelSettings).filter(
-      ([key]) => key !== 'runtime-config' || isDesktopApp
+      ([key]) => (key !== 'runtime-config' || isDesktopApp) && (!key.startsWith('cw-') || isProUser())
     );
     const panelHtml = panelEntries
       .map(
@@ -94,7 +95,7 @@ export function initSettingsWindow(): void {
               const enabledCount = countFreePanelCapUsage(panelSettings);
               if (enabledCount >= FREE_MAX_PANELS) return;
             }
-            config.enabled = !config.enabled;
+            userSetPanelEnabled(config, !config.enabled);
             saveToStorage(STORAGE_KEYS.panels, panelSettings);
             render();
           }
@@ -110,7 +111,7 @@ export function initSettingsWindow(): void {
           <span class="settings-window-title">${escapeHtml(t('header.settings'))}</span>
           <p class="settings-window-caption">${escapeHtml(t('header.panelDisplayCaption'))}</p>
         </div>
-        <button type="button" class="modal-close" id="settingsWindowClose">×</button>
+        <button type="button" class="modal-close" id="settingsWindowClose" aria-label="${escapeHtml(t('common.close'))}">×</button>
       </div>
       <div class="panel-toggle-grid" id="panelToggles"></div>
     </div>

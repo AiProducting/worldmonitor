@@ -26,6 +26,7 @@ import {
   type WaitUntilCtx,
 } from '../../server/_shared/usage';
 import type { AuthKind } from '../../server/_shared/usage-identity';
+import { TOOL_REGISTRY } from './registry/index';
 import type { McpAuthContext } from './types';
 
 // Which stage of the /mcp funnel produced the terminal Response. Set by the
@@ -35,11 +36,45 @@ export type McpPhase =
   | 'auth'       // credential resolution rejected (invalid key/bearer, backend down)
   | 'precheck'   // identity ok, entitlement/token pre-check rejected
   | 'billing'    // pre-check rejected with a billing-verification denial (#4770)
-  | 'limit'      // per-minute rate limit
+  | 'limit'      // per-minute rate limit or fail-closed free-tier limiter outage
   | 'dispatch'   // tools/call quota (429) / reservation unavailable (503)
-  | 'malformed'  // unparseable JSON-RPC envelope
+  // Unparseable JSON-RPC envelope (HTTP 200 + -32600) OR an over-cap request
+  // body rejected before parsing (HTTP 413 + -32600, #7406). Both map to
+  // `malformed_request`, matching server/gateway.ts's F14 convention for
+  // body-size rejections; the HTTP status on the same event separates them.
+  | 'malformed'
   | 'transport'  // method/SSE-transport level (405, replay 4xx)
+  | 'migration'  // a product-host alias was refused before auth or dispatch
   | 'ok';        // served (JSON-RPC-level errors still ride HTTP 200 → ok)
+
+/** Registry name lookup — cardinality bound for tool_name (#8403). */
+const REGISTERED_TOOL_NAMES: ReadonlySet<string> = new Set(
+  TOOL_REGISTRY.map((tool) => tool.name),
+);
+
+/**
+ * JSON-RPC methods this transport serves — cardinality bound for rpc_method
+ * (#8403 / Strix). Anything else collapses to `_unregistered` so client-minted
+ * strings cannot inflate the Axiom dimension.
+ */
+const SERVED_RPC_METHODS: ReadonlySet<string> = new Set([
+  'initialize',
+  'notifications/initialized',
+  'ping',
+  'tools/list',
+  'tools/call',
+  'prompts/list',
+  'prompts/get',
+  'skills/list',
+  'skills/get',
+  'resources/list',
+  'resources/templates/list',
+  'resources/read',
+  'logging/setLevel',
+]);
+
+/** Fixed bucket for methods outside SERVED_RPC_METHODS — one cardinality slot. */
+const UNREGISTERED_RPC_METHOD = '_unregistered';
 
 export interface McpUsage {
   phase: McpPhase;
@@ -48,10 +83,46 @@ export interface McpUsage {
   principalId: string | null;
   /** Set true for surfaces that must not emit (OPTIONS/HEAD, manifest GET). */
   skip: boolean;
+  /** Served JSON-RPC method, or `_unregistered` / null (#8403 cardinality). */
+  rpcMethod: string | null;
+  /** tools/call name when it matches TOOL_REGISTRY; never raw client input (#8403). */
+  toolName: string | null;
 }
 
 export function createMcpUsage(): McpUsage {
-  return { phase: 'ok', authKind: 'anon', customerId: null, principalId: null, skip: false };
+  return {
+    phase: 'ok',
+    authKind: 'anon',
+    customerId: null,
+    principalId: null,
+    skip: false,
+    rpcMethod: null,
+    toolName: null,
+  };
+}
+
+/**
+ * Record the JSON-RPC method (and, for tools/call, a registry-bounded tool
+ * name) on the usage accumulator. Call once the envelope has been parsed —
+ * before auth branches that may return early — so Axiom can distinguish
+ * initialize / tools/list / tools/call without joining anything (#8403).
+ *
+ * Both fields are cardinality-bounded: methods outside SERVED_RPC_METHODS map
+ * to `_unregistered`; tool names outside TOOL_REGISTRY stay null.
+ */
+export function setUsageRpc(
+  usage: McpUsage,
+  method: string,
+  toolCallName?: unknown,
+): void {
+  usage.rpcMethod = SERVED_RPC_METHODS.has(method) ? method : UNREGISTERED_RPC_METHOD;
+  if (usage.rpcMethod !== 'tools/call') {
+    usage.toolName = null;
+    return;
+  }
+  usage.toolName = typeof toolCallName === 'string' && REGISTERED_TOOL_NAMES.has(toolCallName)
+    ? toolCallName
+    : null;
 }
 
 /** Attribute the resolved principal. env_key principals are operator keys —
@@ -70,6 +141,16 @@ export function setUsageContext(usage: McpUsage, context: McpAuthContext): void 
     usage.principalId = context.userId;
     return;
   }
+  if (context.kind === 'free') {
+    // U7: a free-tier caller is anonymous — no customer, no principal. Without
+    // this arm it would fall through to `enterprise_api_key` below and every
+    // free call would report as enterprise traffic in Axiom, corrupting the
+    // one dataset the free tier is supposed to be measured by.
+    usage.authKind = 'anon';
+    usage.customerId = null;
+    usage.principalId = null;
+    return;
+  }
   usage.authKind = 'enterprise_api_key';
 }
 
@@ -86,7 +167,7 @@ export function mcpReasonFor(phase: McpPhase, status: number): RequestReason {
       // stops Axiom outage alerts from paging on ordinary billing states.
       return status === 503 ? 'billing_verification_503' : 'tier_403';
     case 'limit':
-      return 'rate_limit_429';
+      return status === 503 ? 'rate_limit_degraded' : 'rate_limit_429';
     case 'dispatch':
       if (status === 429) return 'rate_limit_429';
       if (status === 503) return 'rate_limit_degraded';
@@ -95,9 +176,25 @@ export function mcpReasonFor(phase: McpPhase, status: number): RequestReason {
       return 'malformed_request';
     case 'transport':
       return status === 405 ? 'method_not_allowed' : 'malformed_request';
+    case 'migration':
+      return 'canonical_endpoint_required';
     default:
       return 'ok';
   }
+}
+
+/**
+ * Resolve response size for telemetry. A missing/invalid Content-Length is
+ * unknown — return null. Never treat `Number(null) === 0` as a real size
+ * (#8403): streamed/SSE MCP responses omit the header and used to land as
+ * fake zeros next to genuinely empty bodies.
+ */
+export function resolveMcpResBytes(res: Response): number | null {
+  const raw = res.headers.get('content-length');
+  if (raw === null || raw === '') return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
 }
 
 /**
@@ -118,7 +215,6 @@ export function emitMcpRequestEvent(
     const pathname = (() => {
       try { return new URL(req.url).pathname; } catch { return '/mcp'; }
     })();
-    const resBytesRaw = Number(res.headers.get('content-length'));
     const event = buildRequestEvent({
       requestId: deriveRequestId(req),
       domain: 'mcp',
@@ -127,7 +223,7 @@ export function emitMcpRequestEvent(
       status: res.status,
       durationMs,
       reqBytes: deriveReqBytes(req),
-      resBytes: Number.isFinite(resBytesRaw) && resBytesRaw >= 0 ? resBytesRaw : 0,
+      resBytes: resolveMcpResBytes(res),
       customerId: usage.customerId,
       principalId: usage.principalId,
       authKind: usage.authKind,
@@ -151,6 +247,8 @@ export function emitMcpRequestEvent(
       host: deriveHost(req),
       sentryTraceId: deriveSentryTraceId(req),
       reason: mcpReasonFor(usage.phase, res.status),
+      rpcMethod: usage.rpcMethod,
+      toolName: usage.toolName,
     });
     emitUsageEvents(ctx, [event]);
   } catch {

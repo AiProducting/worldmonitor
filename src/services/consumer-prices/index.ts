@@ -1,6 +1,6 @@
 import { getRpcBaseUrl } from '@/services/rpc-client';
 import type { GetConsumerPriceOverviewResponse, GetConsumerPriceBasketSeriesResponse, ListConsumerPriceCategoriesResponse, ListConsumerPriceMoversResponse, ListRetailerPriceSpreadsResponse, GetConsumerPriceFreshnessResponse, CategorySnapshot, PriceMover, RetailerSpread, BasketPoint, RetailerFreshnessInfo } from '@/generated/client/worldmonitor/consumer_prices/v1/service_client';
-import { createCircuitBreaker } from '@/utils';
+import { createCircuitBreaker } from '@/utils/circuit-breaker';
 import { getHydratedData } from '@/services/bootstrap';
 import { ConsumerPricesServiceClient } from '@/services/generated-rpc-clients';
 
@@ -132,6 +132,8 @@ const emptyFreshness: GetConsumerPriceFreshnessResponse = {
   upstreamUnavailable: true,
 };
 
+const isAvailable = <T extends { upstreamUnavailable: boolean }>(response: T): boolean => !response.upstreamUnavailable;
+
 export async function fetchConsumerPriceOverview(
   marketCode = DEFAULT_MARKET,
   basketSlug = DEFAULT_BASKET,
@@ -139,14 +141,22 @@ export async function fetchConsumerPriceOverview(
   // Bootstrap hydration only valid for the default market
   if (marketCode === DEFAULT_MARKET) {
     const hydrated = getHydratedData('consumerPricesOverview') as GetConsumerPriceOverviewResponse | undefined;
-    if (hydrated?.asOf && !hydrated.upstreamUnavailable) return hydrated;
+    if (hydrated?.asOf && !hydrated.upstreamUnavailable) {
+      // The bootstrap payload IS the default-market snapshot, so warm the
+      // breaker only under the default basket's exact later cache key
+      // (#7048); other baskets keep their own fetch path.
+      if (basketSlug === DEFAULT_BASKET) {
+        overviewBreaker.recordSuccess(hydrated, `${DEFAULT_MARKET}:${DEFAULT_BASKET}`);
+      }
+      return hydrated;
+    }
   }
 
   try {
     return await overviewBreaker.execute(
       () => client.getConsumerPriceOverview({ marketCode, basketSlug }),
       emptyOverview,
-      { cacheKey: `${marketCode}:${basketSlug}` },
+      { cacheKey: `${marketCode}:${basketSlug}`, shouldCache: isAvailable },
     );
   } catch {
     return emptyOverview;
@@ -162,7 +172,7 @@ export async function fetchConsumerPriceBasketSeries(
     return await seriesBreaker.execute(
       () => client.getConsumerPriceBasketSeries({ marketCode, basketSlug, range }),
       emptySeries,
-      { cacheKey: `${marketCode}:${basketSlug}:${range}` },
+      { cacheKey: `${marketCode}:${basketSlug}:${range}`, shouldCache: isAvailable },
     );
   } catch {
     return { ...emptySeries, range };
@@ -174,16 +184,19 @@ export async function fetchConsumerPriceCategories(
   basketSlug = DEFAULT_BASKET,
   range = '30d',
 ): Promise<ListConsumerPriceCategoriesResponse> {
-  if (marketCode === DEFAULT_MARKET) {
+  if (marketCode === DEFAULT_MARKET && basketSlug === DEFAULT_BASKET && range === '30d') {
     const hydrated = getHydratedData('consumerPricesCategories') as ListConsumerPriceCategoriesResponse | undefined;
-    if (hydrated?.categories?.length) return hydrated;
+    if (hydrated && Array.isArray(hydrated.categories) && isAvailable(hydrated)) {
+      categoriesBreaker.recordSuccess(hydrated, `${DEFAULT_MARKET}:${DEFAULT_BASKET}:30d`);
+      return hydrated;
+    }
   }
 
   try {
     return await categoriesBreaker.execute(
       () => client.listConsumerPriceCategories({ marketCode, basketSlug, range }),
       emptyCategories,
-      { cacheKey: `${marketCode}:${basketSlug}:${range}` },
+      { cacheKey: `${marketCode}:${basketSlug}:${range}`, shouldCache: isAvailable },
     );
   } catch {
     return emptyCategories;
@@ -195,16 +208,19 @@ export async function fetchConsumerPriceMovers(
   range = '30d',
   categorySlug?: string,
 ): Promise<ListConsumerPriceMoversResponse> {
-  if (marketCode === DEFAULT_MARKET) {
+  if (marketCode === DEFAULT_MARKET && range === '30d' && !categorySlug) {
     const hydrated = getHydratedData('consumerPricesMovers') as ListConsumerPriceMoversResponse | undefined;
-    if (hydrated?.risers?.length || hydrated?.fallers?.length) return hydrated;
+    if (hydrated && Array.isArray(hydrated.risers) && Array.isArray(hydrated.fallers) && isAvailable(hydrated)) {
+      moversBreaker.recordSuccess(hydrated, `${DEFAULT_MARKET}:30d:`);
+      return hydrated;
+    }
   }
 
   try {
     return await moversBreaker.execute(
       () => client.listConsumerPriceMovers({ marketCode, range, categorySlug: categorySlug ?? '', limit: 10 }),
       emptyMovers,
-      { cacheKey: `${marketCode}:${range}:${categorySlug ?? ''}` },
+      { cacheKey: `${marketCode}:${range}:${categorySlug ?? ''}`, shouldCache: isAvailable },
     );
   } catch {
     return emptyMovers;
@@ -215,16 +231,19 @@ export async function fetchRetailerPriceSpreads(
   marketCode = DEFAULT_MARKET,
   basketSlug = DEFAULT_BASKET,
 ): Promise<ListRetailerPriceSpreadsResponse> {
-  if (marketCode === DEFAULT_MARKET) {
+  if (marketCode === DEFAULT_MARKET && basketSlug === DEFAULT_BASKET) {
     const hydrated = getHydratedData('consumerPricesSpread') as ListRetailerPriceSpreadsResponse | undefined;
-    if (hydrated?.retailers?.length) return hydrated;
+    if (hydrated && Array.isArray(hydrated.retailers) && isAvailable(hydrated)) {
+      spreadBreaker.recordSuccess(hydrated, `${DEFAULT_MARKET}:${DEFAULT_BASKET}`);
+      return hydrated;
+    }
   }
 
   try {
     return await spreadBreaker.execute(
       () => client.listRetailerPriceSpreads({ marketCode, basketSlug }),
       emptySpread,
-      { cacheKey: `${marketCode}:${basketSlug}` },
+      { cacheKey: `${marketCode}:${basketSlug}`, shouldCache: isAvailable },
     );
   } catch {
     return emptySpread;
@@ -238,7 +257,7 @@ export async function fetchConsumerPriceFreshness(
     return await freshnessBreaker.execute(
       () => client.getConsumerPriceFreshness({ marketCode }),
       emptyFreshness,
-      { cacheKey: marketCode },
+      { cacheKey: marketCode, shouldCache: isAvailable },
     );
   } catch {
     return emptyFreshness;
@@ -257,5 +276,6 @@ export async function fetchAllMarketsOverview(): Promise<GetConsumerPriceOvervie
       SINGLE_MARKETS.map((m) => fetchConsumerPriceOverview(m.code, `essentials-${m.code}`)),
     ),
     [],
+    { shouldCache: (responses) => responses.length > 0 && responses.every(isAvailable) },
   );
 }

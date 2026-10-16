@@ -6,18 +6,14 @@ export type ThemePreference = 'auto' | 'dark' | 'light';
 const STORAGE_KEY = 'worldmonitor-theme';
 const DEFAULT_THEME: Theme = 'dark';
 
-/**
- * Read the stored theme preference from localStorage.
- * Returns 'dark' or 'light' if valid, otherwise DEFAULT_THEME.
- */
-export function getStoredTheme(): Theme {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'dark' || stored === 'light') return stored;
-  } catch {
-    // localStorage unavailable (e.g., sandboxed iframe, private browsing)
-  }
-  return DEFAULT_THEME;
+function resolveThemeColor(theme: Theme, variant: string | undefined): string {
+  if (theme === 'dark') return variant === 'happy' ? '#1A2332' : '#0a0f0a';
+  return variant === 'happy' ? '#FAFAF5' : '#f8f9fa';
+}
+
+function updateThemeMetaColor(theme: Theme, variant = document.documentElement.dataset.variant): void {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (meta) meta.content = resolveThemeColor(theme, variant);
 }
 
 export function getThemePreference(): ThemePreference {
@@ -46,16 +42,19 @@ function teardownAutoListener(): void {
   }
 }
 
-export function setThemePreference(pref: ThemePreference): void {
-  try { localStorage.setItem(STORAGE_KEY, pref); } catch { /* noop */ }
+function updateAutoListener(pref: ThemePreference): void {
   teardownAutoListener();
-  const effective: Theme = pref === 'auto' ? resolveAutoTheme() : pref;
-  setTheme(effective);
   if (pref === 'auto' && typeof window !== 'undefined' && window.matchMedia) {
     autoMediaQuery = window.matchMedia('(prefers-color-scheme: light)');
-    autoMediaHandler = () => setTheme(resolveAutoTheme());
+    autoMediaHandler = () => applyTheme(resolveAutoTheme());
     autoMediaQuery.addEventListener('change', autoMediaHandler);
   }
+}
+
+export function setThemePreference(pref: ThemePreference): void {
+  try { localStorage.setItem(STORAGE_KEY, pref); } catch { /* noop */ }
+  updateAutoListener(pref);
+  applyTheme(pref === 'auto' ? resolveAutoTheme() : pref);
 }
 
 /**
@@ -72,18 +71,13 @@ export function getCurrentTheme(): Theme {
  * persist to localStorage, update meta theme-color, and dispatch event.
  */
 export function setTheme(theme: Theme): void {
+  setThemePreference(theme);
+}
+
+function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme;
   invalidateColorCache();
-  try {
-    localStorage.setItem(STORAGE_KEY, theme);
-  } catch {
-    // localStorage unavailable
-  }
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (meta) {
-    const variant = document.documentElement.dataset.variant;
-    meta.content = theme === 'dark' ? (variant === 'happy' ? '#1A2332' : '#0a0f0a') : (variant === 'happy' ? '#FAFAF5' : '#f8f9fa');
-  }
+  updateThemeMetaColor(theme);
   window.dispatchEvent(new CustomEvent('theme-changed', { detail: { theme } }));
 }
 
@@ -109,17 +103,16 @@ export function applyStoredTheme(): void {
   } else if (hasExplicitPreference) {
     effective = raw as Theme;
   } else {
-    // No stored preference: happy defaults to light, others to dark
-    effective = variant === 'happy' ? 'light' : DEFAULT_THEME;
+    // No stored preference: match index.html prepaint and stored `'auto'`.
+    // Happy stays light; every other variant follows prefers-color-scheme
+    // instead of snapping first-visit light OS users back to DEFAULT_THEME (dark).
+    effective = variant === 'happy' ? 'light' : resolveAutoTheme();
   }
 
+  // No stored preference reads as Auto in settings, so it follows the system
+  // theme too, except on Happy, which stays light.
+  const followsSystem = raw === 'auto' || (!hasExplicitPreference && variant !== 'happy');
+  updateAutoListener(followsSystem ? 'auto' : effective);
   document.documentElement.dataset.theme = effective;
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (meta) {
-    if (effective === 'dark') {
-      meta.content = variant === 'happy' ? '#1A2332' : '#0a0f0a';
-    } else {
-      meta.content = variant === 'happy' ? '#FAFAF5' : '#f8f9fa';
-    }
-  }
+  updateThemeMetaColor(effective, variant);
 }

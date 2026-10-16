@@ -2,18 +2,19 @@ import type {
   ServerContext,
   GetAircraftDetailsBatchRequest,
   GetAircraftDetailsBatchResponse,
-  AircraftDetails,
 } from '../../../../src/generated/server/worldmonitor/military/v1/service_server';
 
-import { mapWingbitsDetails } from './_shared';
-import { CHROME_UA } from '../../../_shared/constants';
 import { getCachedJsonBatch, cachedFetchJson } from '../../../_shared/redis';
 import { toUniqueSortedLimited } from '../../../_shared/normalize-list';
-
-interface CachedAircraftDetails {
-  details: AircraftDetails | null;
-  configured: boolean;
-}
+import { AIRCRAFT_DETAILS_BATCH_LIMIT } from '../../../_shared/aircraft-details-batch';
+import {
+  AIRCRAFT_DETAILS_CACHE_KEY,
+  AIRCRAFT_DETAILS_CACHE_TTL,
+  isValidAircraftIcao24,
+  type CachedAircraftDetails,
+  fetchWingbitsAircraftDetails,
+} from './_wingbits-aircraft-details';
+import { getTrackedAircraftIcao24s } from './_tracked-aircraft';
 
 export async function getAircraftDetailsBatch(
   _ctx: ServerContext,
@@ -26,22 +27,28 @@ export async function getAircraftDetailsBatch(
     const normalized = req.icao24s
       .map((id) => id.trim().toLowerCase())
       .filter((id) => id.length > 0);
-    const limitedList = toUniqueSortedLimited(normalized, 10);
+    const limitedList = toUniqueSortedLimited(normalized, AIRCRAFT_DETAILS_BATCH_LIMIT);
+    // Shape filter applies to what we LOOK UP, not to the `requested` count
+    // below. A malformed address must never reach a Redis key or the Wingbits
+    // URL, but `requested` is a prefix length over the caller's own sorted
+    // keys (src/services/wingbits.ts negative-caches `batchKeys.slice(0,
+    // requested)`), so shortening it by this filter would shift that boundary
+    // and leave a VALID key past it re-fetched from the paid provider on every
+    // refresh.
+    const lookupList = limitedList.filter((id) => isValidAircraftIcao24(id));
 
     // Redis shared cache — batch GET all keys in a single pipeline round-trip
-    const SINGLE_KEY = 'military:aircraft:v1';
-    const SINGLE_TTL = 24 * 60 * 60;
-    const results: Record<string, AircraftDetails> = {};
+    const results: Record<string, NonNullable<CachedAircraftDetails['details']>> = {};
     const toFetch: string[] = [];
 
-    const cacheKeys = limitedList.map((icao24) => `${SINGLE_KEY}:${icao24}`);
+    const cacheKeys = lookupList.map((icao24) => `${AIRCRAFT_DETAILS_CACHE_KEY}:${icao24}`);
     const cachedMap = await getCachedJsonBatch(cacheKeys);
 
-    for (let i = 0; i < limitedList.length; i++) {
-      const icao24 = limitedList[i]!;
+    for (let i = 0; i < lookupList.length; i++) {
+      const icao24 = lookupList[i]!;
       const cached = cachedMap.get(cacheKeys[i]!);
       if (cached && typeof cached === 'object' && 'details' in cached) {
-        const details = (cached as { details?: AircraftDetails | null }).details;
+        const details = (cached as { details?: CachedAircraftDetails['details'] }).details;
         if (details) {
           results[icao24] = details;
         }
@@ -51,27 +58,39 @@ export async function getAircraftDetailsBatch(
       }
     }
 
+    // The single-aircraft route is Pro-gated because a cache miss spends the
+    // Wingbits credential. This route stays anonymous for the map, so a miss is
+    // only fetched for an aircraft in the published flight snapshot; otherwise
+    // any caller could look up arbitrary addresses on the server's key.
+    //
+    // A skipped address is not a negative result: an aircraft that entered the
+    // snapshot after the tracked set was read is looked up on a later refresh.
+    // So `requested` stops before the first skipped address (see below).
+    let requested = limitedList.length;
+    if (toFetch.length > 0) {
+      const tracked = await getTrackedAircraftIcao24s();
+      if (tracked) {
+        const skipped = toFetch.filter((id) => !tracked.has(id));
+        if (skipped.length > 0) {
+          const skippedSet = new Set(skipped);
+          requested = limitedList.findIndex((id) => skippedSet.has(id));
+          for (let i = toFetch.length - 1; i >= 0; i--) {
+            if (skippedSet.has(toFetch[i]!)) toFetch.splice(i, 1);
+          }
+        }
+      }
+    }
+
     const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     for (let i = 0; i < toFetch.length; i++) {
       const icao24 = toFetch[i]!;
       const cacheResult = await cachedFetchJson<CachedAircraftDetails>(
-        `${SINGLE_KEY}:${icao24}`,
-        SINGLE_TTL,
+        `${AIRCRAFT_DETAILS_CACHE_KEY}:${icao24}`,
+        AIRCRAFT_DETAILS_CACHE_TTL,
         async () => {
           try {
-            const resp = await fetch(`https://customer-api.wingbits.com/v1/flights/details/${icao24}`, {
-              headers: { 'x-api-key': apiKey, Accept: 'application/json', 'User-Agent': CHROME_UA },
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (resp.status === 404) {
-              return { details: null, configured: true };
-            }
-            if (resp.ok) {
-              const data = (await resp.json()) as Record<string, unknown>;
-              const details = mapWingbitsDetails(icao24, data);
-              return { details, configured: true };
-            }
+            return await fetchWingbitsAircraftDetails(icao24, apiKey);
           } catch { /* skip failed lookups */ }
           return null;
         },
@@ -83,7 +102,7 @@ export async function getAircraftDetailsBatch(
     return {
       results,
       fetched: Object.keys(results).length,
-      requested: limitedList.length,
+      requested,
       configured: true,
     };
   } catch {

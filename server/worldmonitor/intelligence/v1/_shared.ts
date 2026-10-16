@@ -9,6 +9,23 @@ import { hashString, sha256Hex } from '../../../_shared/hash';
 // ========================================================================
 
 export const UPSTREAM_TIMEOUT_MS = 25_000;
+
+// The classify cache (`classify:sebuf:v6`) is written by this handler and by
+// the relay's classify seed, and read by classify-event and the feed digest.
+// Every reader validates a hit against these lists: the value is Redis-backed
+// JSON that any writer with the shared token could replace, and `category`
+// reaches a NewsPanel badge.
+export const CLASSIFY_VALID_LEVELS = ['critical', 'high', 'medium', 'low', 'info'] as const;
+export const CLASSIFY_VALID_CATEGORIES = [
+  'conflict', 'protest', 'disaster', 'diplomatic', 'economic',
+  'terrorism', 'cyber', 'health', 'environmental', 'military',
+  'crime', 'infrastructure', 'tech', 'general',
+] as const;
+
+export function isValidClassifyHit(hit: { level: string; category: string }): boolean {
+  return (CLASSIFY_VALID_LEVELS as readonly string[]).includes(hit.level)
+    && (CLASSIFY_VALID_CATEGORIES as readonly string[]).includes(hit.category);
+}
 // v5 (2026-04-28): bumped from v4 to evict entries that landed under
 // the pre-publisher-prefix-fix classifier (PR #3480). Brand-prefixed
 // retrospective titles like "CBS News Radio flashback: D-Day, Invasion
@@ -41,6 +58,8 @@ export const TIER1_COUNTRIES: Record<string, string> = {
   PL: 'Poland', DE: 'Germany', FR: 'France', GB: 'United Kingdom', IN: 'India',
   PK: 'Pakistan', SY: 'Syria', YE: 'Yemen', MM: 'Myanmar', VE: 'Venezuela',
   CU: 'Cuba', MX: 'Mexico', BR: 'Brazil', AE: 'United Arab Emirates',
+  KR: 'South Korea', IQ: 'Iraq', AF: 'Afghanistan', LB: 'Lebanon',
+  EG: 'Egypt', JP: 'Japan', QA: 'Qatar',
 };
 
 // ========================================================================

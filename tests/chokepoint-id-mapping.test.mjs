@@ -6,6 +6,9 @@ import {
   portwatchNameToId,
   corridorRiskNameToId,
 } from '../server/worldmonitor/supply-chain/v1/_chokepoint-ids.ts';
+import { CHOKEPOINTS } from '../server/worldmonitor/supply-chain/v1/get-chokepoint-status.ts';
+import { THREAT_LEVEL } from '../server/worldmonitor/supply-chain/v1/_scoring.mjs';
+import { CHOKEPOINT_THREAT_LEVELS } from '../shared/chokepoint-threat-levels.js';
 
 describe('CANONICAL_CHOKEPOINTS registry', () => {
   it('contains exactly 13 canonical chokepoints', () => {
@@ -66,6 +69,42 @@ describe('portwatchNameToId', () => {
   it('is case-insensitive', () => {
     assert.equal(portwatchNameToId('suez canal'), 'suez');
     assert.equal(portwatchNameToId('MALACCA STRAIT'), 'malacca_strait');
+  });
+});
+
+import { readFileSync } from 'node:fs';
+const relaySrc = readFileSync('scripts/ais-relay.cjs', 'utf8');
+const handlerSrc = readFileSync('server/worldmonitor/supply-chain/v1/get-chokepoint-status.ts', 'utf8');
+
+describe('chokepoint threat levels', () => {
+  // The relay reads shared/chokepoint-threat-levels.js; the RPC handler
+  // declares the same levels beside their prose descriptions. Both are
+  // imported and compared. The previous version scraped both files with
+  // regexes and wrapped the comparison in `if (relayMatch && handlerMatch)`,
+  // so a rename on either side skipped the assertion and stayed green.
+  it('cover every canonical chokepoint on both sides', () => {
+    const canonical = CANONICAL_CHOKEPOINTS.map((c) => c.id).sort();
+    assert.deepEqual(Object.keys(CHOKEPOINT_THREAT_LEVELS).sort(), canonical);
+    assert.deepEqual(CHOKEPOINTS.map((c) => c.id).sort(), canonical);
+  });
+
+  it('agree on the level for each chokepoint', () => {
+    const handlerLevels = new Map(CHOKEPOINTS.map((c) => [c.id, c.threatLevel]));
+    for (const [id, level] of Object.entries(CHOKEPOINT_THREAT_LEVELS)) {
+      assert.equal(handlerLevels.get(id), level, `threat level mismatch for ${id}`);
+    }
+  });
+
+  it('only use levels the scoring table can price', () => {
+    for (const [id, level] of Object.entries(CHOKEPOINT_THREAT_LEVELS)) {
+      assert.ok(level in THREAT_LEVEL, `${id} has unknown threat level ${level}`);
+    }
+  });
+
+  it('relay RELAY_NAME_TO_ID covers all canonical chokepoints', () => {
+    for (const cp of CANONICAL_CHOKEPOINTS) {
+      assert.match(relaySrc, new RegExp(`'${cp.relayName}':\\s*'${cp.id}'`), `Missing relay name mapping for ${cp.relayName} -> ${cp.id}`);
+    }
   });
 });
 

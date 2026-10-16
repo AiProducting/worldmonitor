@@ -1,15 +1,12 @@
 import { Panel } from './Panel';
-import type { FredSeries, OilAnalytics, BisData } from '@/services/economic';
+import type { FredSeries, BisData } from '@/services/economic';
+import { BLS_METRO_IDS } from '@/services/economic';
 import { t } from '@/services/i18n';
 import { escapeHtml, unsafeRawHtml } from '@/utils/sanitize';
 import { isDesktopRuntime } from '@/services/runtime';
 import { isFeatureAvailable } from '@/services/runtime-config';
 import type { SpendingSummary } from '@/services/usa-spending';
-import { getChangeClass, formatChange, formatOilValue, getTrendIndicator, getTrendColor } from '@/services/economic';
 import { formatAwardAmount, getAwardTypeIcon } from '@/services/usa-spending';
-import { escapeHtml } from '@/utils/sanitize';
-import { isFeatureAvailable } from '@/services/runtime-config';
-import { isDesktopRuntime } from '@/services/runtime';
 import { getCSSColor } from '@/utils';
 import { sparkline } from '@/utils/sparkline';
 import type { GetEconomicStressResponse, EconomicStressComponent } from '@/generated/client/worldmonitor/economic/v1/service_client';
@@ -53,10 +50,10 @@ function stressComponentCard(c: EconomicStressComponent): string {
   if (c.missing) {
     return `<div style="background:rgba(255,255,255,0.02);border-radius:6px;padding:8px 10px;border:1px solid rgba(255,255,255,0.05)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <span style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em">${escapeHtml(c.label)}</span>
-        <span style="font-size:10px;color:#888">N/A</span>
+        <span style="font-size:calc(9px * var(--wm-panel-effective-scale, 1));color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em">${escapeHtml(c.label)}</span>
+        <span style="font-size:calc(10px * var(--wm-panel-effective-scale, 1));color:#888">N/A</span>
       </div>
-      <div style="font-size:9px;color:#666;font-style:italic">Data unavailable</div>
+      <div style="font-size:calc(9px * var(--wm-panel-effective-scale, 1));color:#666;font-style:italic">Data unavailable</div>
     </div>`;
   }
   const color = stressScoreColor(c.score);
@@ -64,14 +61,14 @@ function stressComponentCard(c: EconomicStressComponent): string {
   const rawDisplay = stressFormatRaw(c.id, c.rawValue);
   return `<div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:8px 10px;border:1px solid rgba(255,255,255,0.07)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-      <span style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em">${escapeHtml(c.label)}</span>
-      <span style="font-size:10px;color:var(--text-dim)">${escapeHtml(rawDisplay)}</span>
+      <span style="font-size:calc(9px * var(--wm-panel-effective-scale, 1));color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em">${escapeHtml(c.label)}</span>
+      <span style="font-size:calc(10px * var(--wm-panel-effective-scale, 1));color:var(--text-dim)">${escapeHtml(rawDisplay)}</span>
     </div>
     <div style="display:flex;align-items:center;gap:6px">
       <div style="flex:1;background:rgba(255,255,255,0.07);border-radius:3px;height:5px;overflow:hidden">
         <div style="height:100%;width:${barWidth}%;background:${color};border-radius:3px;transition:width 0.3s"></div>
       </div>
-      <span style="font-size:10px;font-weight:600;color:${color};min-width:28px;text-align:right">${c.score.toFixed(0)}</span>
+      <span style="font-size:calc(10px * var(--wm-panel-effective-scale, 1));font-weight:600;color:${color};min-width:28px;text-align:right">${c.score.toFixed(0)}</span>
     </div>
   </div>`;
 }
@@ -139,15 +136,22 @@ type FredLoadState = 'loading' | 'ok' | 'error' | 'retrying';
 
 export class EconomicPanel extends Panel {
   private fredData: FredSeries[] = [];
-  private oilData: OilAnalytics | null = null;
+  private blsData: FredSeries[] = [];
   private spendingData: SpendingSummary | null = null;
   private bisData: BisData | null = null;
   private stressData: GetEconomicStressResponse | null = null;
   private lastUpdate: Date | null = null;
   private activeTab: TabId = 'indicators';
+  private fredState: FredLoadState = 'loading';
+  private fredErrorMsg = '';
 
   constructor() {
-    super({ id: 'economic', title: t('panels.economic'), defaultRowSpan: 2, infoTooltip: t('components.economic.infoTooltip') });
+    super({
+      id: 'economic',
+      title: t('panels.economic'),
+      defaultRowSpan: 2,
+      infoTooltip: t('components.economic.infoTooltip'),
+    });
     this.content.addEventListener('click', (e) => {
       const tab = (e.target as HTMLElement).closest('.panel-tab') as HTMLElement | null;
       if (tab?.dataset.tab) {
@@ -159,12 +163,23 @@ export class EconomicPanel extends Panel {
 
   public update(data: FredSeries[]): void {
     this.fredData = data;
+    this.fredState = 'ok';
+    this.fredErrorMsg = '';
     this.lastUpdate = new Date();
     this.render();
   }
 
-  public updateOil(data: OilAnalytics): void {
-    this.oilData = data;
+  public setFredError(message: string): void {
+    this.fredState = 'error';
+    this.fredErrorMsg = message;
+    this.render();
+  }
+
+  public setFredRetrying(remainingSeconds?: number): void {
+    this.fredState = 'retrying';
+    this.fredErrorMsg = remainingSeconds !== undefined
+      ? `${t('common.retrying')} (${remainingSeconds}s)`
+      : t('common.retrying');
     this.render();
   }
 
@@ -191,26 +206,21 @@ export class EconomicPanel extends Panel {
 
   public setLoading(loading: boolean): void {
     if (loading) {
-      this.showLoading();
+      this.fredState = 'loading';
+      this.fredErrorMsg = '';
     }
   }
 
   private render(): void {
-    const hasOil = this.oilData && (this.oilData.wtiPrice || this.oilData.brentPrice);
     const hasSpending = this.spendingData && this.spendingData.awards?.length > 0;
     const hasBis = this.bisData && this.bisData.policyRates?.length > 0;
+    const hasBls = this.blsData.length > 0;
 
-    // Build tabs HTML
     const tabsHtml = `
       <div class="panel-tabs">
         <button class="panel-tab ${this.activeTab === 'indicators' ? 'active' : ''}" data-tab="indicators">
-          📊 ${t('components.economic.indicators')}
+          ${t('components.economic.indicators')}
         </button>
-        ${hasOil ? `
-          <button class="panel-tab ${this.activeTab === 'oil' ? 'active' : ''}" data-tab="oil">
-            🛢️ ${t('components.economic.oil')}
-          </button>
-        ` : ''}
         ${hasSpending ? `
           <button class="panel-tab ${this.activeTab === 'spending' ? 'active' : ''}" data-tab="spending">
             Recent awards
@@ -218,7 +228,12 @@ export class EconomicPanel extends Panel {
         ` : ''}
         ${hasBis ? `
           <button class="panel-tab ${this.activeTab === 'centralBanks' ? 'active' : ''}" data-tab="centralBanks">
-            🏦 ${t('components.economic.centralBanks')}
+            ${t('components.economic.centralBanks')}
+          </button>
+        ` : ''}
+        ${hasBls ? `
+          <button class="panel-tab ${this.activeTab === 'labor' ? 'active' : ''}" data-tab="labor">
+            ${t('components.economic.laborMarket')}
           </button>
         ` : ''}
         <button class="panel-tab ${this.activeTab === 'stress' ? 'active' : ''}" data-tab="stress">
@@ -228,13 +243,9 @@ export class EconomicPanel extends Panel {
     `;
 
     let contentHtml = '';
-
     switch (this.activeTab) {
       case 'indicators':
         contentHtml = this.renderIndicators();
-        break;
-      case 'oil':
-        contentHtml = this.renderOil();
         break;
       case 'spending':
         contentHtml = this.renderSpending();
@@ -268,7 +279,6 @@ export class EconomicPanel extends Panel {
   private getSourceLabel(): string {
     switch (this.activeTab) {
       case 'indicators': return 'FRED';
-      case 'oil': return 'EIA';
       case 'spending': return 'USASpending.gov';
       case 'centralBanks': return 'BIS';
       case 'labor': return 'BLS';
@@ -300,71 +310,47 @@ export class EconomicPanel extends Panel {
       return `<div class="economic-empty">${t('components.economic.noIndicatorData')}</div>`;
     }
 
-    return `
-      <div class="economic-indicators">
-        ${this.fredData.map(series => {
-      const changeClass = getChangeClass(series.change);
-      const changeStr = formatChange(series.change, series.unit);
-      const arrow = series.change !== null
-        ? (series.change > 0 ? '▲' : series.change < 0 ? '▼' : '–')
-        : '';
+    const pressure = getMacroPressure(this.fredData);
+    const summaryIds = ['VIXCLS', 'T10Y2Y', 'FEDFUNDS', 'UNRATE'];
+    const summarySeries = this.fredData.filter((series) => summaryIds.includes(series.id));
+    const detailSeries = this.fredData.filter((series) => !summaryIds.includes(series.id));
+    const orderedSeries = [...summarySeries, ...detailSeries];
 
-      return `
+    return `
+      <div class="economic-content-macro">
+        <div class="macro-pressure-card ${pressure.className}">
+          <div class="macro-pressure-label">${t('components.economic.pressure.label')}</div>
+          <div class="macro-pressure-value">${escapeHtml(pressure.label)}</div>
+          <div class="macro-pressure-detail">${escapeHtml(pressure.detail)}</div>
+        </div>
+        <div class="macro-summary-grid">
+          ${summarySeries.map((series) => `
+            <div class="macro-summary-card">
+              <div class="macro-summary-head">
+                <span class="indicator-name">${escapeHtml(series.name)}</span>
+                <span class="indicator-id">${escapeHtml(series.id)}</span>
+              </div>
+              <div class="macro-summary-value">${escapeHtml(formatSeriesValue(series))}</div>
+              <div class="macro-summary-change ${getSeriesChangeClass(series.change)}">${escapeHtml(formatSeriesChange(series))}</div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="economic-indicators">
+          ${orderedSeries.map((series) => `
             <div class="economic-indicator" data-series="${escapeHtml(series.id)}">
               <div class="indicator-header">
                 <span class="indicator-name">${escapeHtml(series.name)}</span>
                 <span class="indicator-id">${escapeHtml(series.id)}</span>
               </div>
               <div class="indicator-value">
-                <span class="value">${escapeHtml(String(series.value !== null ? series.value : 'N/A'))}${escapeHtml(series.unit)}</span>
-                <span class="change ${escapeHtml(changeClass)}">${escapeHtml(arrow)} ${escapeHtml(changeStr)}</span>
+                <span class="value">${escapeHtml(formatSeriesValue(series))}</span>
+                <span class="change ${getSeriesChangeClass(series.change)}">${escapeHtml(formatSeriesChange(series))}</span>
               </div>
               <div class="indicator-date">${escapeHtml(series.date)}</div>
+              ${sparkline(series.observations?.map(o => o.value) ?? [], series.change !== null && series.change >= 0 ? '#4caf50' : '#f44336', 120, 28, 'display:block;margin:2px 0')}
             </div>
-          `;
-    }).join('')}
-      </div>
-    `;
-  }
-
-  private renderOil(): string {
-    if (!this.oilData) {
-      return `<div class="economic-empty">${t('components.economic.noOilDataRetry')}</div>`;
-    }
-
-    const metrics = [
-      this.oilData.wtiPrice,
-      this.oilData.brentPrice,
-      this.oilData.usProduction,
-      this.oilData.usInventory,
-    ].filter(Boolean);
-
-    if (metrics.length === 0) {
-      return `<div class="economic-empty">${t('components.economic.noOilMetrics')}</div>`;
-    }
-
-    return `
-      <div class="economic-indicators oil-metrics">
-        ${metrics.map(metric => {
-      if (!metric) return '';
-      const trendIcon = getTrendIndicator(metric.trend);
-      const trendColor = getTrendColor(metric.trend, metric.name.includes('Production'));
-
-      return `
-            <div class="economic-indicator oil-metric">
-              <div class="indicator-header">
-                <span class="indicator-name">${escapeHtml(metric.name)}</span>
-              </div>
-              <div class="indicator-value">
-                <span class="value">${escapeHtml(formatOilValue(metric.current, metric.unit))} ${escapeHtml(metric.unit)}</span>
-                <span class="change" style="color: ${escapeHtml(trendColor)}">
-                  ${escapeHtml(trendIcon)} ${escapeHtml(String(metric.changePct > 0 ? '+' : ''))}${escapeHtml(String(metric.changePct))}%
-                </span>
-              </div>
-              <div class="indicator-date">${t('components.economic.vsPreviousWeek')}</div>
-            </div>
-          `;
-    }).join('')}
+          `).join('')}
+        </div>
       </div>
     `;
   }
@@ -380,7 +366,7 @@ export class EconomicPanel extends Panel {
       <div class="spending-summary">
         <div class="spending-total">
           ${escapeHtml(formatAwardAmount(totalAmount))} ${t('components.economic.in')} ${escapeHtml(String(awards.length))} ${t('components.economic.awards')}
-          <span class="spending-period">${escapeHtml(periodStart)} – ${escapeHtml(periodEnd)}</span>
+          <span class="spending-period">${escapeHtml(periodStart)} / ${escapeHtml(periodEnd)}</span>
         </div>
       </div>
       <div class="spending-list">
@@ -408,7 +394,6 @@ export class EconomicPanel extends Panel {
     const redColor = getCSSColor('--semantic-critical');
     const neutralColor = getCSSColor('--text-dim');
 
-    // Policy Rates — sorted by rate descending
     const sortedRates = [...this.bisData.policyRates].sort((a, b) => b.rate - a.rate);
     const policyHtml = `
       <div class="bis-section">
@@ -436,7 +421,6 @@ export class EconomicPanel extends Panel {
       </div>
     `;
 
-    // Exchange Rates
     let eerHtml = '';
     if (this.bisData.exchangeRates?.length > 0) {
       eerHtml = `
@@ -464,7 +448,6 @@ export class EconomicPanel extends Panel {
       `;
     }
 
-    // Credit-to-GDP
     let creditHtml = '';
     if (this.bisData.creditToGdp?.length > 0) {
       const sortedCredit = [...this.bisData.creditToGdp].sort((a, b) => b.creditGdpRatio - a.creditGdpRatio);
@@ -547,20 +530,20 @@ export class EconomicPanel extends Panel {
     const needlePct = Math.min(100, Math.max(0, d.compositeScore)).toFixed(1);
     const cards = d.components.map((c) => stressComponentCard(c)).join('');
     const updatedNote = d.seededAt
-      ? `<div style="font-size:9px;color:var(--text-dim);text-align:right;margin-top:8px">Updated ${new Date(d.seededAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>`
+      ? `<div style="font-size:calc(9px * var(--wm-panel-effective-scale, 1));color:var(--text-dim);text-align:right;margin-top:8px">Updated ${new Date(d.seededAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>`
       : '';
 
     return `<div style="padding:12px 14px">
       <div style="text-align:center;margin-bottom:12px">
-        <div style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Composite Score</div>
-        <div style="font-size:38px;font-weight:700;color:${color};line-height:1">${d.compositeScore.toFixed(1)}</div>
-        <div style="display:inline-block;margin-top:6px;padding:3px 10px;border-radius:12px;background:${color}22;border:1px solid ${color}66;font-size:12px;font-weight:600;color:${color}">${escapeHtml(d.label)}</div>
+        <div style="font-size:calc(11px * var(--wm-panel-effective-scale, 1));color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Composite Score</div>
+        <div style="font-size:calc(38px * var(--wm-panel-effective-scale, 1));font-weight:700;color:${color};line-height:1">${d.compositeScore.toFixed(1)}</div>
+        <div style="display:inline-block;margin-top:6px;padding:3px 10px;border-radius:12px;background:${color}22;border:1px solid ${color}66;font-size:calc(12px * var(--wm-panel-effective-scale, 1));font-weight:600;color:${color}">${escapeHtml(d.label)}</div>
       </div>
       <div style="margin-bottom:16px">
         <div style="position:relative;height:12px;border-radius:6px;overflow:visible;background:linear-gradient(to right,#27ae60 0%,#f1c40f 20%,#e67e22 40%,#e74c3c 60%,#8e44ad 80%,#8e44ad 100%);margin-bottom:4px">
           <div style="position:absolute;top:-4px;left:calc(${needlePct}% - 2px);width:4px;height:20px;background:#fff;border-radius:2px;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-dim)">
+        <div style="display:flex;justify-content:space-between;font-size:calc(9px * var(--wm-panel-effective-scale, 1));color:var(--text-dim)">
           <span>Low</span><span>Moderate</span><span>Elevated</span><span>Severe</span><span>Critical</span>
         </div>
       </div>

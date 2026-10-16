@@ -13,33 +13,12 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { loadEnvFile } from './_seed-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 
-// ---------------------------------------------------------------------------
-// .env.local loader (manual dotenv for ESM)
-// ---------------------------------------------------------------------------
-function loadEnvLocal() {
-  const envPath = path.join(projectRoot, '.env.local');
-  if (!existsSync(envPath)) return;
-  const lines = readFileSync(envPath, 'utf-8').split('\n');
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eqIdx = line.indexOf('=');
-    if (eqIdx === -1) continue;
-    const key = line.slice(0, eqIdx).trim();
-    let val = line.slice(eqIdx + 1).trim();
-    // Strip surrounding quotes
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
-    }
-    if (!process.env[key]) process.env[key] = val;
-  }
-}
-
-loadEnvLocal();
+loadEnvFile(import.meta.url);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -125,7 +104,7 @@ async function fetchPage(pageIndex) {
       const data = await res.json();
       return { data, contentRange };
     } catch (err) {
-      const backoff = Math.pow(2, attempt - 1) * 1000;
+      const backoff = 2 ** (attempt - 1) * 1000;
       console.warn(`  Page ${pageIndex} attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
       if (attempt === MAX_RETRIES) throw err;
       console.warn(`  Retrying in ${backoff}ms...`);
